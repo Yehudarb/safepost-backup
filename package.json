@@ -1,0 +1,41 @@
+{
+    "name": "fb-auto-suite",
+    "version": "2.1.1",
+    "type": "module",
+    "scripts": {
+        "start-all": "concurrently \"node server/index.cjs\" \"npm run dev\"",
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "@radix-ui/react-slot": "^1.2.4",
+        "@supabase/supabase-js": "^2.95.2",
+        "body-parser": "^2.2.2",
+        "class-variance-authority": "^0.7.1",
+        "clsx": "^2.0.0",
+        "cors": "^2.8.6",
+        "dotenv": "^17.2.4",
+        "express": "^5.2.1",
+        "framer-motion": "^12.33.0",
+        "lucide-react": "^0.263.1",
+        "multer": "^2.0.2",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "socket.io": "^4.8.3",
+        "socket.io-client": "^4.8.3",
+        "sqlite3": "^5.1.7",
+        "tailwind-merge": "^1.14.0"
+    },
+    "devDependencies": {
+        "@types/chrome": "^0.0.268",
+        "@types/react": "^18.2.15",
+        "@types/react-dom": "^18.2.7",
+        "@vitejs/plugin-react": "^4.0.3",
+        "autoprefixer": "^10.4.23",
+        "concurrently": "^9.2.1",
+        "postcss": "^8.5.6",
+        "tailwindcss": "^3.4.19",
+        "vite": "^4.4.5"
+    }
+}
