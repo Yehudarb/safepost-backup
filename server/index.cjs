@@ -541,8 +541,10 @@ app.post('/api/posts', async (req, res) => {
 
     const tasks = [];
     group_ids.forEach((gid, index) => {
-        // Base delay of 10s for the first one of the NEW batch, then 2-3 mins between each
-        const jitter = index === 0 ? 10000 : Math.floor(Math.random() * (180000 - 120000 + 1)) + 120000;
+        // First post: within 30s. Subsequent posts: 150–210s (2.5–3.5 min) jitter
+        const jitter = index === 0
+            ? Math.floor(Math.random() * 20000) + 10000          // 10–30 seconds
+            : Math.floor(Math.random() * (210000 - 150000 + 1)) + 150000; // 150–210 seconds
         nextScheduleTime = new Date(nextScheduleTime.getTime() + jitter);
         
         const finalContent = ai_spin ? spinText(content) : content;
