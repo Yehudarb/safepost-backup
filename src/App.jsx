@@ -971,7 +971,7 @@ export default function App() {
             const data = await ApiService.createPosts({
                 group_ids: selectedGroups,
                 content: postContent,
-                schedule: scheduleTime,
+                schedule: scheduleTime ? new Date(scheduleTime).toISOString() : undefined,
                 media_url: mediaUrl,
                 ai_spin: useAiSpin
             });
@@ -1746,7 +1746,7 @@ export default function App() {
                                 <div className="bg-white dark:bg-white border border-gray-300 rounded-lg px-3 py-2 flex items-center">
                                     <CalendarIcon size={16} className="text-gray-800 mr-2" />
                                     <input type="datetime-local" className="bg-transparent text-black text-xs w-full outline-none font-medium"
-                                        defaultValue={new Date(editingTask.scheduled_time).toISOString().slice(0, 16)} id="edit-time" style={{ colorScheme: 'light' }} />
+                                        defaultValue={(() => { const d = new Date(editingTask.scheduled_time); const pad = n => String(n).padStart(2, "0"); return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes()); })()} id="edit-time" style={{ colorScheme: 'light' }} />
                                 </div>
                             </div>
                         </div>
@@ -1755,7 +1755,7 @@ export default function App() {
                             <button onClick={() => {
                                 const content = document.getElementById('edit-content').value;
                                 const time    = document.getElementById('edit-time').value;
-                                handleUpdate(editingTask.id, { content, scheduled_time: time });
+                                handleUpdate(editingTask.id, { content, scheduled_time: new Date(time).toISOString() });
                             }} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold uppercase tracking-widest transition flex items-center gap-2">
                                 <Save size={14} /> Update Protocol
                             </button>
