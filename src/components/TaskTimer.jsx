@@ -47,7 +47,8 @@ const TaskTimer = ({ targetTime, status, onComplete }) => {
         };
 
         const timerId = setInterval(() => {
-            calculateTimeLeft(false);
+            const shouldContinue = calculateTimeLeft(false);
+            if (!shouldContinue) clearInterval(timerId);
         }, 1000);
 
         return () => clearInterval(timerId);

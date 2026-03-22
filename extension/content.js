@@ -505,12 +505,80 @@ async function findElementInModal(phrases) {
     return null;
 }
 
-async function typeHumanLike(el, text) {
-    el.focus();
-    await sleep(200);
-    const success = document.execCommand('insertText', false, text);
-    if (!success) el.innerText = text;
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+async function typeHumanLike(element, text) {
+    const errorInjectionRate = 0.03; 
+    const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1) + min);
+    
+    const keyboardLayout = {
+        'א': 'ב', 'ב': 'ג', 'ש': 'ד', 'ד': 'ג', 'ק': 'ר', 'ר': 'א',
+        'a': 's', 's': 'd', 'd': 'f', 'e': 'r', 'r': 't'
+    };
+    const getAdjacentKey = (c) => keyboardLayout[c.toLowerCase()] || 'x';
+
+    element.focus();
+
+    const dispatchSimulatedChar = async (char) => {
+        element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: char }));
+        element.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, key: char }));
+
+        if (element.isContentEditable) {
+            document.execCommand('insertText', false, char);
+        } else {
+            const prototype = Object.getPrototypeOf(element);
+            const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+            if (setter) {
+                setter.call(element, element.value + char);
+            } else {
+                element.value += char;
+            }
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: char }));
+    };
+
+    const dispatchSimulatedBackspace = async () => {
+        element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Backspace', keyCode: 8 }));
+        
+        if (element.isContentEditable) {
+            document.execCommand('delete', false, null);
+        } else {
+            const prototype = Object.getPrototypeOf(element);
+            const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+            if (setter) {
+                setter.call(element, element.value.slice(0, -1));
+            } else {
+                element.value = element.value.slice(0, -1);
+            }
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Backspace', keyCode: 8 }));
+    };
+
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        
+        if (Math.random() < errorInjectionRate && char.match(/[a-zA-Zא-ת]/)) {
+            const wrongChar = getAdjacentKey(char);
+            
+            await dispatchSimulatedChar(wrongChar); 
+            await sleep(randomBetween(150, 300)); 
+            await dispatchSimulatedBackspace(); 
+            await sleep(randomBetween(50, 150)); 
+        }
+
+        await dispatchSimulatedChar(char);
+
+        let delayInterval = randomBetween(30, 80); 
+        if (char === ' ') {
+            delayInterval = randomBetween(100, 200); 
+        } else if (char === '.' || char === ',' || char === '\n') {
+            delayInterval = randomBetween(500, 1000); 
+        }
+        
+        await sleep(delayInterval);
+    }
 }
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }

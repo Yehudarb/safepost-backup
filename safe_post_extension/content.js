@@ -138,10 +138,10 @@ async function performPost(job) {
     if (!trigger) {
         logRemote("❌ Trigger not found");
         window.hud.updateText("שגיאה", "לא נמצא כפתור יצירת פוסט");
-        chrome.runtime.sendMessage({ action: "REPORT_STATUS", payload: { taskId: job.id, status: 'FAILED', failure_reason: "Trigger button not found" } });
+        safeSendMessage({ action: "REPORT_STATUS", payload: { taskId: job.id, status: 'FAILED', failure_reason: "Trigger button not found" } });
         await sleep(3000);
         window.hud.destroy();
-        chrome.runtime.sendMessage({ action: 'CLOSE_TAB' });
+        safeSendMessage({ action: 'CLOSE_TAB' });
         return;
     }
 
@@ -156,10 +156,10 @@ async function performPost(job) {
     if (!inputBox) {
         logRemote("❌ Input box not found");
         window.hud.updateText("שגיאה קריטית", "לא נמצאה תיבת טקסט.");
-        chrome.runtime.sendMessage({ action: "REPORT_STATUS", payload: { taskId: job.id, status: 'FAILED', failure_reason: "Input box not found" } });
+        safeSendMessage({ action: "REPORT_STATUS", payload: { taskId: job.id, status: 'FAILED', failure_reason: "Input box not found" } });
         await sleep(3000);
         window.hud.destroy();
-        chrome.runtime.sendMessage({ action: 'CLOSE_TAB' });
+        safeSendMessage({ action: 'CLOSE_TAB' });
         return;
     }
 
@@ -202,16 +202,21 @@ async function performPost(job) {
         // 5. Verify
         const verifySuccess = await waitForModalClosure();
         if (verifySuccess) {
-            logRemote("🎯 Post Success Verified");
+            logRemote("🎯 Post Success Verified. Capturing permalink...");
+            window.hud.updateText("מזהה לינק...", "מחפש כתובת פוסט...");
+            const proofUrl = await findPostPermalink();
+            
+            logRemote("🎯 Final Post Result", { proofUrl });
             window.hud.updateText("הצלחה! 🏆", "הפוסט פורסם.");
-            chrome.runtime.sendMessage({
+            
+            safeSendMessage({
                 action: "REPORT_STATUS",
-                payload: { taskId: job.id, status: 'SUCCESS' }
+                payload: { taskId: job.id, status: 'SUCCESS', proof_url: proofUrl }
             });
         } else {
             logRemote("❓ Closure check timed out");
             window.hud.updateText("בדיקת סיום", "ממתין לאימות פייסבוק...");
-            chrome.runtime.sendMessage({
+            safeSendMessage({
                 action: "REPORT_STATUS",
                 payload: { taskId: job.id, status: 'SUCCESS', metadata: { notice: 'No modal closure confirmation' } }
             });
@@ -219,7 +224,7 @@ async function performPost(job) {
     } else {
         logRemote("❌ Failed to find or click Post button");
         window.hud.updateText("שגיאה", "כפתור פרסום לא נמצא");
-        chrome.runtime.sendMessage({
+        safeSendMessage({
             action: "REPORT_STATUS",
             payload: { taskId: job.id, status: 'FAILED', failure_reason: "Post button not found (Color + Text strategies failed)" }
         });
@@ -228,8 +233,8 @@ async function performPost(job) {
     await sleep(3000);
     window.hud.destroy();
 
-    // Close the Facebook tab — background.js handles the actual removal
-    chrome.runtime.sendMessage({ action: 'CLOSE_TAB' });
+    // Close the Facebook tab
+    safeSendMessage({ action: 'CLOSE_TAB' });
 }
 
 async function waitForInputBox() {
@@ -478,11 +483,42 @@ async function clickPostButton() {
 
 // Helpers
 async function waitForModalClosure() {
-    for (let i = 0; i < 20; i++) {
-        if (!document.querySelector('div[role="dialog"]')) return true;
+    logRemote("⏳ Monitoring modal closure...");
+    for (let i = 0; i < 30; i++) {
+        const dialog = document.querySelector('div[role="dialog"]');
+        
+        // If no dialog or dialog contains "Post successful" or similar (Hebrew/English)
+        if (!dialog) return true;
+        
+        const dialogText = dialog.innerText || "";
+        if (dialogText.includes("Post successful") || dialogText.includes("הפוסט פורסם")) return true;
+
         await sleep(500);
     }
     return false;
+}
+
+async function findPostPermalink() {
+    logRemote("🔍 Searching for new post permalink...");
+    await sleep(2000); // Wait for feed to update
+
+    const timePhrases = ["Just now", "אף לא רגע", "עכשיו", "1 min", "1 דק"];
+    
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const links = Array.from(document.querySelectorAll('a[href*="/groups/"][href*="/permalink/"]'));
+        for (const link of links) {
+            const text = link.innerText || "";
+            if (timePhrases.some(p => text.includes(p))) {
+                const url = link.href.split('?')[0];
+                logRemote("✅ Permalink found via timestamp link", { url });
+                return url;
+            }
+        }
+        await sleep(2000);
+    }
+
+    logRemote("⚠️ Specific permalink not found, using group URL as fallback");
+    return window.location.href.split('?')[0];
 }
 
 function isElementVisibleAndEnabled(el) {
@@ -517,12 +553,80 @@ async function findElementInModal(phrases) {
     return null;
 }
 
-async function typeHumanLike(el, text) {
-    el.focus();
-    await sleep(200);
-    const success = document.execCommand('insertText', false, text);
-    if (!success) el.innerText = text;
-    el.dispatchEvent(new Event('input', { bubbles: true }));
+async function typeHumanLike(element, text) {
+    const errorInjectionRate = 0.03; 
+    const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1) + min);
+    
+    const keyboardLayout = {
+        'א': 'ב', 'ב': 'ג', 'ש': 'ד', 'ד': 'ג', 'ק': 'ר', 'ר': 'א',
+        'a': 's', 's': 'd', 'd': 'f', 'e': 'r', 'r': 't'
+    };
+    const getAdjacentKey = (c) => keyboardLayout[c.toLowerCase()] || 'x';
+
+    element.focus();
+
+    const dispatchSimulatedChar = async (char) => {
+        element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: char }));
+        element.dispatchEvent(new KeyboardEvent('keypress', { bubbles: true, key: char }));
+
+        if (element.isContentEditable) {
+            document.execCommand('insertText', false, char);
+        } else {
+            const prototype = Object.getPrototypeOf(element);
+            const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+            if (setter) {
+                setter.call(element, element.value + char);
+            } else {
+                element.value += char;
+            }
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: char }));
+    };
+
+    const dispatchSimulatedBackspace = async () => {
+        element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Backspace', keyCode: 8 }));
+        
+        if (element.isContentEditable) {
+            document.execCommand('delete', false, null);
+        } else {
+            const prototype = Object.getPrototypeOf(element);
+            const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+            if (setter) {
+                setter.call(element, element.value.slice(0, -1));
+            } else {
+                element.value = element.value.slice(0, -1);
+            }
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Backspace', keyCode: 8 }));
+    };
+
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        
+        if (Math.random() < errorInjectionRate && char.match(/[a-zA-Zא-ת]/)) {
+            const wrongChar = getAdjacentKey(char);
+            
+            await dispatchSimulatedChar(wrongChar); 
+            await sleep(randomBetween(150, 300)); 
+            await dispatchSimulatedBackspace(); 
+            await sleep(randomBetween(50, 150)); 
+        }
+
+        await dispatchSimulatedChar(char);
+
+        let delayInterval = randomBetween(30, 80); 
+        if (char === ' ') {
+            delayInterval = randomBetween(100, 200); 
+        } else if (char === '.' || char === ',' || char === '\n') {
+            delayInterval = randomBetween(500, 1000); 
+        }
+        
+        await sleep(delayInterval);
+    }
 }
 
 async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }

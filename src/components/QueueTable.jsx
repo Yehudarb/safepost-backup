@@ -1,6 +1,6 @@
 import React from 'react';
 import TaskTimer from './TaskTimer';
-import { Trash2, RefreshCw, Clock, CheckCircle, XCircle, AlertCircle, Share2 } from 'lucide-react';
+import { Trash2, RefreshCw, Clock, CheckCircle, XCircle, AlertCircle, Share2, ExternalLink } from 'lucide-react';
 
 const StatusBadge = ({ status }) => {
     const styles = {
@@ -129,10 +129,23 @@ const QueueTable = ({ jobs, onDelete, onBulkDelete, selectedIds, setSelectedIds,
                                         </span>
                                     </td>
                                     <td className="px-6 py-4">
-                                        <div className="flex flex-col">
-                                            <span className="text-sm font-bold text-[var(--text-primary)] group-hover:accent-color-[var(--accent-color)] transition-colors">
-                                                {job.group_name || 'Generic Group'}
-                                            </span>
+                                         <div className="flex flex-col">
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-sm font-bold text-[var(--text-primary)] group-hover:accent-color-[var(--accent-color)] transition-colors">
+                                                    {job.group_name || 'Generic Group'}
+                                                </span>
+                                                {job.proof_url && (
+                                                    <a 
+                                                        href={job.proof_url} 
+                                                        target="_blank" 
+                                                        rel="noopener noreferrer"
+                                                        className="p-1 rounded-full bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500 hover:text-white transition-all duration-300 transform hover:scale-110"
+                                                        title="צפה בפוסט שפורסם"
+                                                    >
+                                                        <ExternalLink className="w-3 h-3" />
+                                                    </a>
+                                                )}
+                                            </div>
                                             <span className="text-[10px] text-[var(--text-secondary)] truncate max-w-[120px]">
                                                 {job.group_id}
                                             </span>

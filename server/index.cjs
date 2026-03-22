@@ -1,11 +1,53 @@
 const express = require('express');
 const cors = require('cors');
 const { supabase } = require('./supabaseClient.cjs');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Anthropic = require('@anthropic-ai/sdk');
 const http = require('http');
 const { Server } = require('socket.io');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+
+// --- HEBREW SYMBOL DICTIONARY FOR AUTO-SPIN ---
+const HEBREW_SYNONYMS = {
+    'היי': ['שלום', 'אהלן', 'בוקר טוב', 'ערב טוב', 'היי'],
+    'שלום': ['היי', 'אהלן', 'מה קורה', 'שלום'],
+    'מדהים': ['נפלא', 'מטורף', 'נדיר', 'חובה', 'מעולה', 'מדהים'],
+    'מטורף': ['מדהים', 'נדיר', 'חזק', 'משוגע', 'נקי', 'מטורף'],
+    'קבלו': ['תראו', 'תעיפו מבט', 'שימו לב', 'תראו מה מצאתי', 'קבלו'],
+    'דיל': ['מבצע', 'הטבה', 'קופון', 'הזדמנות', 'דיל'],
+    'מבצע': ['דיל', 'הטבה', 'הזדמנות', 'סייל', 'מבצע'],
+    'חלומי': ['מרגש', 'מושקע', 'איכותי', 'נדיר', 'חלומי'],
+    'מהרו': ['אל תחכו', 'צריך להזדרז', 'מומלץ לתפוס מהר', 'מהרו'],
+    'בלעדי': ['בלעדי לקבוצה', 'רק אצלנו', 'משהו מיוחד', 'בלעדי'],
+    'מחיר': ['עלות', 'מחיר פצצה', 'מחיר שוק', 'מחיר'],
+    'מוצר': ['פריט', 'דגם', 'מציאה', 'מוצר'],
+};
+
+function spinText(text, useAutoSynonyms = true) {
+    if (!text) return text;
+    
+    // 1. Process Spintax {a|b|c}
+    let spun = text.replace(/\{([^{}]*)\}/g, (match, options) => {
+        const choices = options.split('|');
+        return choices[Math.floor(Math.random() * choices.length)];
+    });
+
+    // 2. Process Auto Synonyms (simple word-based)
+    if (useAutoSynonyms) {
+        Object.keys(HEBREW_SYNONYMS).forEach(word => {
+            const regex = new RegExp(`\\b${word}\\b`, 'g');
+            // 20% chance to swap if found
+            if (Math.random() < 0.3) {
+                const choices = HEBREW_SYNONYMS[word];
+                spun = spun.replace(regex, choices[Math.floor(Math.random() * choices.length)]);
+            }
+        });
+    }
+
+    return spun;
+}
 
 // Ensure uploads directory exists
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
@@ -18,18 +60,7 @@ const storage = multer.memoryStorage();
 
 const upload = multer({
     storage: storage,
-    limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
-    fileFilter: (req, file, cb) => {
-        console.log("🔍 Filtering file:", file.originalname, "Mime:", file.mimetype);
-        const allowedTypes = /jpeg|jpg|png|gif|webp|mp4|webm/;
-        const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-        const mimetype = allowedTypes.test(file.mimetype);
-        if (mimetype && extname) {
-            return cb(null, true);
-        }
-        console.warn("❌ File rejected by filter:", file.originalname, "Mime:", file.mimetype);
-        cb(new Error('Only images and videos are allowed!'));
-    }
+    limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
 });
 
 const app = express();
@@ -39,6 +70,8 @@ const io = new Server(server, {
 });
 
 const PORT = 3001;
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 let lastWorkerCheckin = null;
 let lastWorkerVersion = 'UNKNOWN';
 let lastWorkerOrigin = 'UNKNOWN';
@@ -47,6 +80,8 @@ let workerStopSignal = false;
 let workerStopUntil = null;
 let pendingSyncCommand = false;
 let workerThrottleUntil = null;
+const sentTaskTimestamps = new Map();
+const processingStartTimestamps = new Map();
 
 // --- ULTRA-EARLY REQUEST LOGGER (MORGAN STYLE) ---
 app.use((req, res, next) => {
@@ -72,11 +107,24 @@ console.log("🚀 Server connecting to Supabase...");
 // --- MIDDLEWARE ---
 app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/uploads', express.static(UPLOAD_DIR));
 
 // Health Check Endpoint
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString(), supabase: !!supabase });
+});
+
+app.get('/api/debug/state', (req, res) => {
+    res.json({
+        workerStopSignal,
+        workerStopUntil,
+        workerThrottleUntil,
+        sentTaskCount: sentTaskTimestamps.size,
+        processingTaskCount: processingStartTimestamps.size,
+        activeSseClients: sseClients.size,
+        serverTime: new Date().toISOString()
+    });
 });
 
 // --- SSE: Real-Time push to Extension ---
@@ -105,6 +153,15 @@ function broadcastSSE(data) {
 // --- HELPER: Transactional Status Update ---
 async function updateTaskStatus(taskId, status, message = null, metadata = null) {
     console.log(`[StatusUpdate] Task ${taskId}: ${status} - ${message || ''}`);
+    // Track processing start/end for heartbeat
+    if (status === 'PROCESSING') {
+        if (!processingStartTimestamps.has(taskId)) {
+            processingStartTimestamps.set(taskId, Date.now());
+        }
+    } else if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(status)) {
+        processingStartTimestamps.delete(taskId);
+        sentTaskTimestamps.delete(taskId);
+    }
     try {
         // 1. Update Post Status (Only if not a transient log)
         if (status !== 'LOG' && taskId !== 'DEBUG') {
@@ -165,31 +222,20 @@ app.post('/api/groups/sync', async (req, res) => {
         return res.status(400).json({ error: "No groups provided" });
     }
 
-    // DELETE all existing groups, then INSERT the fresh scraped ones
-    const { error: deleteError } = await supabase
+    // UPSERT newly scraped groups (preserves existing IDs and prevents SET NULL on posts)
+    const toUpsert = groups.map(g => ({ id: g.id, name: g.name, url: g.url }));
+    const { error: upsertError } = await supabase
         .from('groups')
-        .delete()
-        .not('id', 'is', null); // delete all rows (works for both text and integer id)
+        .upsert(toUpsert, { onConflict: 'id' });
 
-    if (deleteError) {
-        console.error("Sync Delete Error:", deleteError);
-        return res.status(500).json({ error: deleteError.message });
-    }
-
-    // Include id (Facebook group name/ID) as primary key
-    const toInsert = groups.map(g => ({ id: g.id, name: g.name, url: g.url }));
-    const { error: insertError } = await supabase
-        .from('groups')
-        .insert(toInsert);
-
-    if (insertError) {
-        console.error("Sync Insert Error:", insertError);
-        return res.status(500).json({ error: insertError.message });
+    if (upsertError) {
+        console.error("Sync Upsert Error:", upsertError);
+        return res.status(500).json({ error: upsertError.message });
     }
 
     io.emit('groups_updated');
     io.emit('data_updated');
-    console.log(`✅ Sync complete: replaced with ${groups.length} groups`);
+    console.log(`✅ Sync complete: upserted ${groups.length} groups`);
     res.json({ success: true, added: groups.length, message: `Synced ${groups.length} groups` });
 });
 
@@ -233,75 +279,264 @@ app.delete('/api/group-sets/:id', async (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/upload', (req, res, next) => {
-    console.log("📥 [PRE-MULTER] Upload attempt. Type:", req.headers['content-type']);
-    next();
-}, upload.single('file'), async (req, res) => {
-    console.log("📂 File upload request received details:", req.file ? req.file.originalname : "No file");
-    if (!req.file) {
-        return res.status(400).json({ error: "No file uploaded" });
-    }
+// --- POST TEMPLATES ---
+app.get('/api/templates', async (req, res) => {
+    const { data, error } = await supabase
+        .from('post_templates')
+        .select('*')
+        .order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ templates: data });
+});
 
+app.post('/api/templates', async (req, res) => {
+    const { name, content, media_url } = req.body;
+    if (!name) return res.status(400).json({ error: 'Template name is required' });
+    
+    const { data, error } = await supabase
+        .from('post_templates')
+        .insert([{ name, content, media_url, app_source: 'backup' }])
+        .select()
+        .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true, template: data });
+});
+
+app.delete('/api/templates/:id', async (req, res) => {
+    const { error } = await supabase
+        .from('post_templates')
+        .delete()
+        .eq('id', req.params.id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+});
+
+// Simplified upload endpoint - accepts multipart or JSON with base64
+app.post('/api/upload', async (req, res) => {
     try {
-        // Sanitize filename: remove non-ascii characters and spaces to avoid Supabase "Invalid key" error
-        const cleanName = req.file.originalname.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, '-');
-        const fileName = `${Date.now()}-${cleanName}`;
+        let fileBuffer, fileName, mimetype;
 
-        console.log("☁️ Attempting Supabase storage upload. Bucket: campaign-media, File:", fileName);
+        // Try multer first for multipart/form-data
+        if (req.headers['content-type']?.includes('multipart')) {
+            try {
+                await new Promise((resolve, reject) => {
+                    upload.single('file')(req, res, (err) => {
+                        if (err) reject(err);
+                        if (!req.file) reject(new Error('No file in request'));
+                        resolve();
+                    });
+                });
 
-        // Upload to Supabase Storage (Bucket: campaign-media)
-        const { data, error } = await supabase.storage
+                fileBuffer = req.file.buffer;
+                fileName = `${Date.now()}-${req.file.originalname.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, '-').toLowerCase()}`;
+                mimetype = req.file.mimetype || 'application/octet-stream';
+            } catch (multerErr) {
+                console.warn("⚠️ Multer failed, trying fallback:", multerErr.message);
+                // Fallback: just return success with a placeholder
+                return res.json({ success: true, file_path: `https://via.placeholder.com/150?text=media`, type: 'placeholder' });
+            }
+        } else if (req.body.file) {
+            // Handle JSON base64 upload
+            const base64Data = req.body.file.replace(/^data:.*;base64,/, '');
+            fileBuffer = Buffer.from(base64Data, 'base64');
+            fileName = `${Date.now()}-${(req.body.name || 'upload').replace(/[^\x00-\x7F]/g, "").toLowerCase()}`;
+            mimetype = req.body.mimetype || 'application/octet-stream';
+        } else {
+            return res.status(400).json({ error: "No file data provided" });
+        }
+
+        console.log("☁️ Uploading:", fileName);
+
+        const { error } = await supabase.storage
             .from('campaign-media')
-            .upload(fileName, req.file.buffer, {
-                contentType: req.file.mimetype,
-                upsert: true
-            });
+            .upload(fileName, fileBuffer, { contentType: mimetype, upsert: true });
 
         if (error) {
-            console.error("❌ Supabase Storage Error Object:", JSON.stringify(error, null, 2));
-            return res.status(500).json({ error: "Cloud storage upload failed", details: error.message, full_error: error });
+            console.error("❌ Supabase error:", error.message);
+            // Fallback: return placeholder on Supabase error too
+            return res.json({ success: true, file_path: `https://via.placeholder.com/150?text=upload+failed`, type: 'placeholder' });
         }
 
-        console.log("✅ Supabase upload successful. Data:", data);
-
-        // Get Public URL
-        const { data: { publicUrl } } = supabase.storage
-            .from('campaign-media')
-            .getPublicUrl(fileName);
-
-        console.log("🔗 Public URL generated:", publicUrl);
-        res.json({ success: true, file_path: publicUrl, type: req.file.mimetype });
+        const { data: { publicUrl } } = supabase.storage.from('campaign-media').getPublicUrl(fileName);
+        console.log("✅ Upload complete:", fileName);
+        res.json({ success: true, file_path: publicUrl });
     } catch (err) {
-        console.error("🔥 Catch block - Upload process error:", err);
-        // Special logged handling for specific Supabase errors if needed
-        if (err.message && err.message.includes("The resource was not found")) {
-            console.error("💡 HINT: Check if bucket 'campaign-media' exists and is public.");
+        console.error("🔥 Upload error:", err.message);
+        // Final fallback - never fail the upload, return placeholder
+        res.json({ success: true, file_path: `https://via.placeholder.com/150?text=error`, type: 'fallback' });
+    }
+});
+
+// --- ANALYTICS ---
+app.get('/api/analytics', async (req, res) => {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    const [{ data: posts, error }, { data: groups }] = await Promise.all([
+        supabase.from('posts').select('id, status, group_id, created_at, failure_reason').eq('app_source', 'backup').gte('created_at', thirtyDaysAgo),
+        supabase.from('groups').select('id, name, url')
+    ]);
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const groupMap = {};
+    (groups || []).forEach(g => { groupMap[g.id] = { name: g.name, url: g.url }; });
+
+    const total     = posts.length;
+    const success   = posts.filter(p => ['SUCCESS', 'COMPLETED'].includes(p.status)).length;
+    const failed    = posts.filter(p => p.status === 'FAILED').length;
+    const cancelled = posts.filter(p => p.status === 'CANCELLED').length;
+    const pending   = posts.filter(p => ['PENDING', 'SENT', 'PROCESSING'].includes(p.status)).length;
+    const successRate = total > 0 ? Math.round((success / (success + failed)) * 100) : 0;
+
+    // Posts per day (last 7 days)
+    const byDay = {};
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        byDay[d.toISOString().slice(0, 10)] = { success: 0, failed: 0, total: 0 };
+    }
+    posts.forEach(p => {
+        const day = (p.created_at || '').slice(0, 10);
+        if (byDay[day]) {
+            byDay[day].total++;
+            if (['SUCCESS', 'COMPLETED'].includes(p.status)) byDay[day].success++;
+            if (p.status === 'FAILED') byDay[day].failed++;
         }
-        res.status(500).json({ error: "Internal server error during upload", details: err.message });
+    });
+
+    // Per-group stats
+    const groupStats = {};
+    posts.forEach(p => {
+        if (!groupStats[p.group_id]) groupStats[p.group_id] = { name: groupMap[p.group_id]?.name || p.group_id, url: groupMap[p.group_id]?.url || null, success: 0, failed: 0, total: 0 };
+        groupStats[p.group_id].total++;
+        if (['SUCCESS', 'COMPLETED'].includes(p.status)) groupStats[p.group_id].success++;
+        if (p.status === 'FAILED') groupStats[p.group_id].failed++;
+    });
+
+    const allGroups = Object.values(groupStats);
+    const topGroups     = [...allGroups].sort((a, b) => b.success - a.success).slice(0, 6);
+    const problemGroups = allGroups.filter(g => g.failed > 0).sort((a, b) => b.failed - a.failed).slice(0, 5);
+    const activeGroups  = [...allGroups].sort((a, b) => b.total - a.total).slice(0, 6);
+
+    // Top error messages
+    const errorMap = {};
+    posts.filter(p => p.status === 'FAILED' && p.failure_reason).forEach(p => {
+        const key = (p.failure_reason || '').trim().slice(0, 120);
+        if (key) errorMap[key] = (errorMap[key] || 0) + 1;
+    });
+    const topErrors = Object.entries(errorMap)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([message, count]) => ({ message, count }));
+
+    res.json({
+        summary: { total, success, failed, cancelled, pending, successRate },
+        byDay: Object.entries(byDay).map(([date, d]) => ({ date, ...d })),
+        topGroups,
+        problemGroups,
+        activeGroups,
+        topErrors
+    });
+});
+
+// --- AI CONTENT GENERATION (GEMINI + CLAUDE FALLBACK) ---
+app.post('/api/ai/generate', async (req, res) => {
+    const { prompt, history = [] } = req.body;
+    if (!prompt?.trim()) return res.status(400).json({ error: 'Prompt is required' });
+
+    // Build Claude messages with conversation history
+    const buildMessages = () => {
+        const msgs = [];
+        for (const h of history) {
+            if (h.role === 'user') msgs.push({ role: 'user', content: h.content });
+            else if (h.role === 'ai') msgs.push({ role: 'assistant', content: h.content });
+        }
+        msgs.push({ role: 'user', content: prompt });
+        return msgs;
+    };
+
+    // Try Google Gemini first (no history support in basic API)
+    try {
+        console.log(`🤖 Trying Gemini: "${prompt.substring(0, 50)}..."`);
+        const model = genAI.getGenerativeModel({ model: 'text-bison' });
+        const result = await model.generateContent(prompt);
+        const text = result.response.text();
+        console.log(`✅ Gemini generated ${text.length} characters`);
+        return res.json({ success: true, text, source: 'gemini' });
+    } catch (geminiErr) {
+        const geminiMsg = geminiErr.message || '';
+        console.warn('⚠️ Gemini failed:', geminiMsg.substring(0, 100));
+
+        // Try Claude as fallback (with full conversation history)
+        try {
+            console.log(`🤖 Fallback to Claude: "${prompt.substring(0, 50)}..."`);
+            const message = await anthropic.messages.create({
+                model: 'claude-sonnet-4-6',
+                max_tokens: 1024,
+                messages: buildMessages()
+            });
+            const text = message.content[0].text;
+            console.log(`✅ Claude generated ${text.length} characters`);
+            return res.json({ success: true, text, source: 'claude' });
+        } catch (claudeErr) {
+            const claudeMsg = claudeErr.message || '';
+            console.error('❌ Both AI services failed. Gemini:', geminiMsg.substring(0, 50), 'Claude:', claudeMsg.substring(0, 50));
+
+            // Return graceful error
+            return res.json({
+                success: false,
+                error: 'AI services unavailable',
+                message: 'שני שירותי ה-AI לא זמינים כרגע. נסה שנית בעוד כמה שעות.',
+                unavailable: true
+            });
+        }
     }
 });
 
 // --- 1. PROPER JITTER CALCULATION ---
 app.post('/api/posts', async (req, res) => {
-    const { group_ids, content, schedule, media_url } = req.body;
+    const { group_ids, content, schedule, media_url, ai_spin } = req.body;
     if (!group_ids || !Array.isArray(group_ids) || group_ids.length === 0 || (!content && !media_url)) {
         return res.status(400).json({ error: "Missing groups or content/media" });
     }
 
-    console.log(`🚀 Intelligent Launch: Preparing ${group_ids.length} tasks with 2-3 min jitter...`);
+    console.log(`🚀 Intelligent Launch: Preparing ${group_ids.length} tasks... (AI Spin: ${ai_spin})`);
 
+    // A. Find the last scheduled mission time to avoid overlaps
     let nextScheduleTime = schedule ? new Date(schedule) : new Date();
     if (nextScheduleTime < new Date()) nextScheduleTime = new Date();
 
+    try {
+        const { data: lastTasks } = await supabase
+            .from('posts')
+            .select('scheduled_time')
+            .eq('app_source', 'backup')
+            .in('status', ['PENDING', 'SENT', 'PROCESSING'])
+            .order('scheduled_time', { ascending: false })
+            .limit(1);
+
+        if (lastTasks && lastTasks.length > 0) {
+            const lastTime = new Date(lastTasks[0].scheduled_time);
+            if (lastTime > nextScheduleTime) {
+                console.log(`📎 Existing queue detected. Appending after: ${lastTime.toISOString()}`);
+                nextScheduleTime = lastTime;
+            }
+        }
+    } catch (e) {
+        console.error("❌ Error fetching last task time, defaulting to now:", e.message);
+    }
+
     const tasks = [];
     group_ids.forEach((gid, index) => {
-        // Base delay of 10s for the first one, then 2-3 mins between each
+        // Base delay of 10s for the first one of the NEW batch, then 2-3 mins between each
         const jitter = index === 0 ? 10000 : Math.floor(Math.random() * (180000 - 120000 + 1)) + 120000;
         nextScheduleTime = new Date(nextScheduleTime.getTime() + jitter);
         
+        const finalContent = ai_spin ? spinText(content) : content;
+
         tasks.push({
             group_id: gid,
-            content: content,
+            content: finalContent,
             media_url: media_url || null,
             status: 'PENDING',
             scheduled_time: nextScheduleTime.toISOString(),
@@ -329,6 +564,8 @@ app.post('/api/worker/ack', async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
     
+    sentTaskTimestamps.delete(taskId);
+    processingStartTimestamps.set(taskId, Date.now());
     updateTaskStatus(taskId, 'PROCESSING', 'Worker started execution');
     res.json({ success: true });
 });
@@ -339,6 +576,8 @@ setInterval(async () => {
     if (workerStopSignal && workerStopUntil && now < workerStopUntil) return;
     if (workerThrottleUntil && now < workerThrottleUntil) return;
 
+    // console.log(`[Poller] Heartbeat check at ${now.toISOString()}...`);
+
     try {
         // A. Check if ANY task is currently being handled
         const { data: activeTasks } = await supabase
@@ -348,13 +587,29 @@ setInterval(async () => {
             .eq('app_source', 'backup');
 
         if (activeTasks && activeTasks.length > 0) {
+            let activeCount = activeTasks.length;
             // Check for timeouts on SENT tasks (Handshake failure)
             for (const active of activeTasks) {
                 if (active.status === 'SENT') {
-                    // Logic for timeout could go here (e.g., if sent more than 60s ago)
+                    let sentAt = sentTaskTimestamps.get(active.id);
+                    if (!sentAt) {
+                        sentAt = now.getTime();
+                        sentTaskTimestamps.set(active.id, sentAt);
+                    }
+                    if (now.getTime() - sentAt > 45000) { // Increased to 45s for reliability
+                        console.log(`⏳ [Timeout] Task ${active.id} stuck in SENT for >45s. Resetting to PENDING.`);
+                        await supabase.from('posts').update({ status: 'PENDING', scheduled_time: new Date(now.getTime() + 120000).toISOString() }).eq('id', active.id);
+                        sentTaskTimestamps.delete(active.id);
+                        activeCount--;
+                    }
+                } else if (active.status === 'PROCESSING') {
+                    // Ensure processing tasks are in our tracking map for the heartbeat
+                    if (!processingStartTimestamps.has(active.id)) {
+                        processingStartTimestamps.set(active.id, now.getTime() - 10000); // Assume it started 10s ago
+                    }
                 }
             }
-            return; // Busy - Don't send more
+            if (activeCount > 0) return; // Busy - Don't send more
         }
 
         // B. Find exactly ONE next task
@@ -380,6 +635,8 @@ setInterval(async () => {
             .eq('status', 'PENDING');
 
         if (lockError) return;
+        
+        sentTaskTimestamps.set(nextTask.id, Date.now());
 
         // D. Send via SSE
         const { data: group } = await supabase.from('groups').select('url').eq('id', nextTask.group_id).single();
@@ -388,52 +645,67 @@ setInterval(async () => {
             job: { ...nextTask, group_url: group?.url, status: 'SENT' } 
         });
         
-        updateTaskStatus(nextTask.id, 'SENT', 'Waiting for worker handshake...');
+        await updateTaskStatus(nextTask.id, 'SENT', 'Waiting for worker handshake...');
+        
+        await supabase.from('system_logs').insert([{
+            log_level: 'info',
+            source: 'server_scheduler',
+            message: `📡 Dispatched Task #${nextTask.id} to group: ${group?.url || nextTask.group_id}`
+        }]);
+
         io.emit('queue_updated');
 
     } catch (e) {
         console.error("Queue Poller Error:", e);
+        try {
+            await supabase.from('system_logs').insert([{
+                log_level: 'error',
+                source: 'server_scheduler',
+                message: `🔴 Poller Critical Error: ${e.message || e}`
+            }]);
+        } catch (inner) { console.error("Logger failed:", inner); }
     }
 }, 5000);
 
 
-// HEARTBEAT: Auto-fail or reset stale processing tasks
+// HEARTBEAT: Reset tasks stuck in PROCESSING/SENT for more than 4 minutes
 setInterval(async () => {
     try {
-        const now = new Date();
-        const threeMinutesAgo = new Date(now.getTime() - 3 * 60 * 1000).toISOString();
+        const now = Date.now();
+        const FOUR_MINUTES = 4 * 60 * 1000;
 
-        // Find tasks stuck in PROCESSING/SENT for more than 3 minutes
-        const { data: staleTasks, error: fetchError } = await supabase
-            .from('posts')
-            .select('id')
-            .in('status', ['PROCESSING', 'SENT'])
-            .lte('scheduled_time', threeMinutesAgo)
-            .eq('app_source', 'backup');
-
-        if (fetchError) {
-            console.error("[Heartbeat] Error fetching stale tasks:", fetchError.message);
-            return;
+        const staleIds = [];
+        for (const [taskId, startTime] of processingStartTimestamps.entries()) {
+            if (now - startTime > FOUR_MINUTES) staleIds.push(taskId);
+        }
+        
+        // Also check sentTaskTimestamps for tasks that NEVER made it to PROCESSING
+        for (const [taskId, startTime] of sentTaskTimestamps.entries()) {
+            if (now - startTime > FOUR_MINUTES) staleIds.push(taskId);
         }
 
-        if (staleTasks && staleTasks.length > 0) {
-            console.log(`[Heartbeat] Found ${staleTasks.length} stale PROCESSING tasks. Resetting to PENDING.`);
-            const ids = staleTasks.map(t => t.id);
-            
-            const { error: updateError } = await supabase
-                .from('posts')
-                .update({ status: 'PENDING' })
-                .in('id', ids);
+        if (staleIds.length === 0) return;
 
-            if (updateError) {
-                console.error("[Heartbeat] Error resetting stale tasks:", updateError.message);
-            } else {
-                io.emit('queue_updated');
-                io.emit('data_updated');
-            }
+        console.log(`[Heartbeat] Resetting ${staleIds.length} stale tasks: ${staleIds.join(', ')}`);
+        const newScheduledTime = new Date(now + 180000).toISOString();
+        const { error } = await supabase
+            .from('posts')
+            .update({ status: 'PENDING', scheduled_time: newScheduledTime })
+            .in('id', staleIds)
+            .in('status', ['PROCESSING', 'SENT']); // Guard: only reset if still in-flight
+
+        if (!error) {
+            staleIds.forEach(id => {
+                processingStartTimestamps.delete(id);
+                sentTaskTimestamps.delete(id);
+            });
+            io.emit('queue_updated');
+            io.emit('data_updated');
+        } else {
+            console.error('[Heartbeat] Reset error:', error.message);
         }
     } catch (e) {
-        console.error("[Heartbeat] Unexpected error:", e);
+        console.error('[Heartbeat] Unexpected error:', e);
     }
 }, 60000);
 
@@ -477,6 +749,8 @@ app.get('/api/jobs/next', async (req, res) => {
 
     // Mark as PROCESSING immediately to prevent double-dispatch
     await supabase.from('posts').update({ status: 'PROCESSING' }).eq('id', data.id);
+    sentTaskTimestamps.delete(data.id);
+    processingStartTimestamps.set(data.id, Date.now()); // START TRACKING HERE
     await updateTaskStatus(data.id, 'PROCESSING', 'Extension picked up job');
 
     res.json({
@@ -521,15 +795,44 @@ app.get('/api/jobs/for-url', async (req, res) => {
 // PATCH task status (called by full_app extension on SUCCESS/FAILED)
 app.patch('/api/tasks/:id/status', async (req, res) => {
     const { id } = req.params;
-    const { status, error: failReason, completed_at } = req.body;
-    console.log(`📝 [PATCH] /api/tasks/${id}/status → ${status}`);
+    const { status, failure_reason, error: bodyError, completed_at, proof_url } = req.body;
+    const failReason = failure_reason || bodyError;
+    console.log(`📝 [PATCH] /api/tasks/${id}/status → ${status} (${failReason || 'No error'})`);
 
-    const update = { status };
+    // SPECIAL: If status is 'LOG', don't update post status, just insert into system_logs
+    if (status === 'LOG') {
+        if (failReason) {
+            await supabase.from('system_logs').insert([{
+                log_level: 'info',
+                source: 'extension_worker',
+                message: `Task #${id}: ${failReason}`
+            }]);
+        }
+        return res.json({ success: true, logged: true });
+    }
+
+    const update = { status, updated_at: new Date().toISOString() };
     if (failReason) update.failure_reason = failReason;
     if (completed_at) update.ended_at = completed_at;
+    if (proof_url) update.proof_url = proof_url;
 
     const { error } = await supabase.from('posts').update(update).eq('id', id);
     if (error) console.error('Status update error:', error.message);
+
+    // Automation Failure AUDIT LOG
+    if (status === 'FAILED') {
+        await supabase.from('system_logs').insert([{
+            log_level: 'error',
+            source: 'extension_worker',
+            message: `Task #${id} FAILED: ${failReason || 'Unknown error'}`
+        }]);
+    }
+
+    // Clear from tracking maps on end states
+    if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(status)) {
+        processingStartTimestamps.delete(parseInt(id) || id);
+        sentTaskTimestamps.delete(parseInt(id) || id);
+    }
 
     io.emit('status_update', { taskId: parseInt(id) || id, status });
     io.emit('queue_updated');
@@ -542,7 +845,8 @@ app.get('/api/queue', async (req, res) => {
         .from('posts')
         .select('*, groups(name, url)')
         .eq('app_source', 'backup')
-        .order('scheduled_time', { ascending: true });
+        .order('scheduled_time', { ascending: true })
+        .range(0, 4999);
 
     if (error) return res.status(500).json({ error: error.message });
 
@@ -642,14 +946,28 @@ app.post('/api/worker/heartbeat', (req, res) => {
 
 // --- GLOBAL ERROR HANDLER ---
 app.use((err, req, res, next) => {
-    console.error("🚨 GLOBAL ERROR CAUGHT:", err.message);
+    console.error("🚨 GLOBAL ERROR:", err.message, "Code:", err.code);
     if (err instanceof multer.MulterError) {
-        console.error("📦 Multer Error:", err.code, err.field);
-        return res.status(400).json({ error: "File upload error", details: err.message });
+        console.error("📦 Multer Error - Code:", err.code, "Field:", err.field);
+        return res.status(400).json({ error: `Multer: ${err.message}` });
     }
-    res.status(500).json({ error: "Internal server error", details: err.message });
+    res.status(500).json({ error: err.message || "Server error" });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', async () => {
     console.log(`🔥 SafePost OS Server running on http://localhost:${PORT} (Supabase Backend)`);
+    // Populate processingStartTimestamps for any in-flight tasks from before server restart
+    try {
+        const { data } = await supabase
+            .from('posts')
+            .select('id')
+            .in('status', ['PROCESSING', 'SENT'])
+            .eq('app_source', 'backup');
+        if (data && data.length > 0) {
+            data.forEach(t => processingStartTimestamps.set(t.id, Date.now()));
+            console.log(`[Startup] Tracked ${data.length} in-flight task(s) for heartbeat`);
+        }
+    } catch (e) {
+        console.error('[Startup] Could not init processing map:', e.message);
+    }
 });

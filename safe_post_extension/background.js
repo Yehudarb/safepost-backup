@@ -104,36 +104,60 @@ async function checkJobs() {
 
         const job = data.job;
         const memory = await chrome.storage.local.get(['lastJobId']);
-        if (memory.lastJobId === job.id) return;
+        if (memory.lastJobId === job.id) {
+            // If we've seen this job before but it's STILL being returned as 'SENT',
+            // it means we picked it up but couldn't move it to 'PROCESSING' or it's stuck.
+            // We'll clear the lastJobId to allow one retry, or let the server heartbeat handle it.
+            console.warn("[Background] Job already seen but still SENT. Clearing lastJobId to allow retry/bypass:", job.id);
+            await chrome.storage.local.remove('lastJobId');
+            return;
+        }
 
         console.log("[Background] New Job:", job.id);
         await chrome.storage.local.set({ lastJobId: job.id });
 
-        const tab = await chrome.tabs.create({ url: job.group_url, active: true });
-
-        chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-            if (tabId === tab.id && info.status === 'complete') {
+        try {
+            const tab = await chrome.tabs.create({ url: job.group_url, active: true });
+            
+            // Safety: If tab doesn't finish loading in 60s, cleanup
+            const loadTimeout = setTimeout(() => {
                 chrome.tabs.onUpdated.removeListener(listener);
-                setTimeout(() => {
-                    try {
-                        chrome.tabs.sendMessage(tabId, { action: 'EXECUTE_POST', job: job }, (response) => {
-                            if (chrome.runtime.lastError) {
-                                console.warn("[Background] Msg Error (Ignored):", chrome.runtime.lastError.message);
-                            }
-                        });
-                    } catch (e) {
-                        console.error("[Background] SendMessage Exception:", e);
-                    }
+                console.error("[Background] Tab load TIMEOUT for job:", job.id);
+                chrome.storage.local.remove('lastJobId'); // Allow retry since we failed
+            }, 60000);
 
-                    const cooldownSeconds = Math.floor(Math.random() * (720 - 180 + 1)) + 180;
-                    chrome.storage.local.set({
-                        last_post_timestamp: Date.now(),
-                        cooldown_until: Date.now() + (cooldownSeconds * 1000)
-                    });
-                    console.log(`[SAFETY] Cooldown active for ${cooldownSeconds}s`);
-                }, 5000);
+            function listener(tabId, info) {
+                if (tabId === tab.id && info.status === 'complete') {
+                    clearTimeout(loadTimeout);
+                    chrome.tabs.onUpdated.removeListener(listener);
+                    
+                    setTimeout(() => {
+                        try {
+                            chrome.tabs.sendMessage(tabId, { action: 'EXECUTE_POST', job: job }, (response) => {
+                                if (chrome.runtime.lastError) {
+                                    console.warn("[Background] Msg Error (Ignored):", chrome.runtime.lastError.message);
+                                }
+                            });
+                        } catch (e) {
+                            console.error("[Background] SendMessage Exception:", e);
+                        }
+
+                        const cooldownSeconds = Math.floor(Math.random() * (720 - 180 + 1)) + 180;
+                        chrome.storage.local.set({
+                            last_post_timestamp: Date.now(),
+                            cooldown_until: Date.now() + (cooldownSeconds * 1000)
+                        });
+                        console.log(`[SAFETY] Cooldown active for ${cooldownSeconds}s`);
+                    }, 5000);
+                }
             }
-        });
+            chrome.tabs.onUpdated.addListener(listener);
+
+        } catch (tabErr) {
+            console.error("[Background] Tab Creation Failed:", tabErr);
+            await chrome.storage.local.remove('lastJobId'); // Allow retry
+        }
+
     } catch (err) {
         console.error("Poll Error:", err);
     } finally {
@@ -162,14 +186,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'JOB_COMPLETE' || request.action === 'CLOSE_TAB') {
         const missionId = request.missionId || "Unknown";
         (async () => {
-            try {
-                const res = await fetch(`${BASE_URL}/api/tasks/${missionId}/status`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ status: 'SUCCESS', completed_at: new Date().toISOString() })
-                });
-                if (!res.ok) console.error('[BG] DB Update Failed:', res.status);
-            } catch (err) { console.error("[BG] Sync Network Error:", err); }
+            if (request.action === 'JOB_COMPLETE') {
+                try {
+                    const res = await fetch(`${BASE_URL}/api/tasks/${missionId}/status`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ status: 'SUCCESS', completed_at: new Date().toISOString() })
+                    });
+                    if (!res.ok) console.error('[BG] DB Update Failed:', res.status);
+                } catch (err) { console.error("[BG] Sync Network Error:", err); }
+            }
             if (sender.tab && sender.tab.id) {
                 setTimeout(() => chrome.tabs.remove(sender.tab.id).catch(() => {}), 1000);
             }
@@ -217,8 +243,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === "REPORT_STATUS") {
-        fetch(`${BASE_URL}/api/tasks/update-status`, {
-            method: 'POST',
+        fetch(`${BASE_URL}/api/tasks/${request.payload.taskId}/status`, {
+            method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(request.payload)
         }).catch(err => console.error("Status Network Error:", err));
