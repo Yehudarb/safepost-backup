@@ -1,6 +1,8 @@
 console.log("%c 🟢 SAFEEPOST v7.0 - ENGINE STABLE " + new Date().toLocaleTimeString(), "background: green; color: white; font-size: 20px; padding: 10px; border-radius: 5px;");
 console.log("[SafePost] Content Script v7.0 LOADED - Supabase Storage Sync");
 
+const BASE_URL = "https://safepost-backup.onrender.com";
+
 // 0. Remote Logging Helper
 async function logRemote(message, metadata = {}) {
     console.log(`[SafePost-Remote] ${message}`, metadata);
@@ -115,7 +117,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         window.currentTaskId = request.job.id;
         
         // --- HANDSHAKE: Notify server that we are starting ---
-        fetch(`http://localhost:3001/api/worker/ack`, {
+        fetch(`${BASE_URL}/api/worker/ack`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ taskId: request.job.id })
@@ -277,7 +279,7 @@ async function uploadMedia(mediaPath) {
 
     let fullUrl = mediaPath;
     if (!mediaPath.startsWith('http')) {
-        fullUrl = `http://localhost:3001${mediaPath}`;
+        fullUrl = `${BASE_URL}${mediaPath}`;
     }
 
     window.hud.updateText("מוריד תמונה", "טוען מהענן...");
