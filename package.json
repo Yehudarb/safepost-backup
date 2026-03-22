@@ -24,8 +24,11 @@
         "react-dom": "^18.2.0",
         "socket.io": "^4.8.3",
         "socket.io-client": "^4.8.3",
-        "sqlite3": "^5.1.7",
-        "tailwind-merge": "^1.14.0"
+       "sqlite3": "^5.1.7",
+    "tailwind-merge": "^1.14.0",
+    "lucide-react": "^0.468.0",
+    "@google/generative-ai": "^0.21.0",
+    "@anthropic-ai/sdk": "^0.32.0"
     },
     "devDependencies": {
         "@types/chrome": "^0.0.268",
