@@ -105,7 +105,13 @@ process.on('uncaughtException', (err) => {
 
 console.log("🚀 Server connecting to Supabase...");
 // --- MIDDLEWARE ---
-app.use(cors({ origin: '*' }));
+const corsOptions = {
+    origin: '*',
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with'],
+};
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Handle preflight for all routes
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/uploads', express.static(UPLOAD_DIR));
