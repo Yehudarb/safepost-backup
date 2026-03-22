@@ -239,6 +239,14 @@ app.post('/api/groups/sync', async (req, res) => {
     res.json({ success: true, added: groups.length, message: `Synced ${groups.length} groups` });
 });
 
+// Dashboard requests extension to sync groups via SSE
+app.post('/api/groups/request-sync', (req, res) => {
+    console.log("📡 Dashboard requested group sync from extension");
+    pendingSyncCommand = true;
+    broadcastSSE({ type: 'sync_groups' });
+    res.json({ success: true });
+});
+
 // Sync failed — tell dashboard to stop spinner
 app.post('/api/groups/sync-failed', (req, res) => {
     const { error } = req.body;

@@ -15,8 +15,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
 });
 
-const API_PORT = 3001;
-const BASE_URL = `http://localhost:${API_PORT}`;
+const BASE_URL = "https://safepost-backup.onrender.com";
 
 // 3. SSE Connection for Real-Time Dispatch
 let sseConnection = null;
