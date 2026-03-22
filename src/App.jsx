@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import {
     Layers, Calendar as CalendarIcon, Shield, CheckCircle,
     AlertTriangle, RefreshCw, Send, CheckSquare, Square, XCircle,
@@ -11,8 +11,11 @@ import { Calendar } from '@/components/ui/calendar-bento';
 import { io } from 'socket.io-client';
 import TaskTimer from '@/components/TaskTimer';
 
-const API_BASE = "http://localhost:3001/api";
-const socket = io("http://localhost:3001");
+const BACKEND_URL = import.meta.env.DEV
+    ? "http://localhost:3001"
+    : "https://safepost-backup.onrender.com";
+const API_BASE = `${BACKEND_URL}/api`;
+const socket = io(BACKEND_URL);
 
 // --- API SERVICE LAYER ---
 class ApiService {

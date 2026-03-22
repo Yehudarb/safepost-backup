@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Read(//c/Users/yehud/.gemini/antigravity/scratch/backups//**)"
+      "Read(//c/Users/yehud/.gemini/antigravity/scratch/backups//**)",
+      "Bash(powershell -ExecutionPolicy Bypass -File \"c:\\\\tmp\\\\fix_api.ps1\")",
+      "Bash(powershell -ExecutionPolicy Bypass -File \"c:\\\\tmp\\\\fix_api2.ps1\")"
     ]
   }
 }
