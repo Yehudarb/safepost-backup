@@ -415,9 +415,15 @@ app.post('/api/upload', strictLimiter, async (req, res) => {
             return res.json({ success: true, file_path: `https://via.placeholder.com/150?text=upload+failed`, type: 'placeholder' });
         }
 
+        // Try public URL first; fall back to 1-year signed URL if bucket is private
         const { data: { publicUrl } } = supabase.storage.from('campaign-media').getPublicUrl(fileName);
+        let fileUrl = publicUrl;
+        if (!fileUrl || fileUrl.includes('undefined')) {
+            const { data: signed } = await supabase.storage.from('campaign-media').createSignedUrl(fileName, 31536000);
+            fileUrl = signed?.signedUrl || publicUrl;
+        }
         console.log("✅ Upload complete:", fileName);
-        res.json({ success: true, file_path: publicUrl });
+        res.json({ success: true, file_path: fileUrl });
     } catch (err) {
         console.error("🔥 Upload error:", err.message);
         // Final fallback - never fail the upload, return placeholder
