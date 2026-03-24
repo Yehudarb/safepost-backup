@@ -218,6 +218,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         return true;
     }
+    if (request.action === 'CLOSE_TAB') {
+        if (sender.tab && sender.tab.id) {
+            setTimeout(() => chrome.tabs.remove(sender.tab.id).catch(() => {}), 1000);
+        }
+        sendResponse({ success: true });
+        return true;
+    }
+
     return true; // Keep channel open for other messages
 });
 
