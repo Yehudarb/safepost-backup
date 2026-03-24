@@ -100,9 +100,6 @@ const strictLimiter = rateLimit({
     message: { error: 'Too many requests to this endpoint. Please slow down.' }
 });
 
-// Apply standard rate limiting to all /api routes
-app.use('/api/', apiLimiter);
-
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: { origin: ALLOWED_ORIGINS, methods: ["GET", "POST", "PATCH", "DELETE"] }
@@ -144,12 +141,16 @@ process.on('uncaughtException', (err) => {
 
 console.log("🚀 Server connecting to Supabase...");
 
+// CORS must come before rate limiter so preflight OPTIONS requests get CORS headers
 app.use(cors({
     origin: ALLOWED_ORIGINS,
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with'],
 }));
+
+// Rate limiting — applied after CORS so preflight responses include CORS headers
+app.use('/api/', apiLimiter);
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
