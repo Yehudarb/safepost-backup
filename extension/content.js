@@ -1,7 +1,28 @@
-console.log("%c 🟢 SAFEEPOST v7.0 - ENGINE STABLE " + new Date().toLocaleTimeString(), "background: green; color: white; font-size: 20px; padding: 10px; border-radius: 5px;");
-console.log("[SafePost] Content Script v7.0 LOADED - Supabase Storage Sync");
+console.log("%c 🟢 SAFEEPOST v7.2 - ENGINE STABLE " + new Date().toLocaleTimeString(), "background: green; color: white; font-size: 20px; padding: 10px; border-radius: 5px;");
+console.log("[SafePost] Content Script v7.2 LOADED - Production Build");
 
 const BASE_URL = "https://safepost-backup.onrender.com";
+
+// Helper: Safe Message Sending (prevents "Extension context invalidated" crashes)
+function safeSendMessage(payload, callback = null) {
+    try {
+        if (!chrome.runtime || !chrome.runtime.id) {
+            throw new Error("Extension context invalidated");
+        }
+        if (callback) {
+            chrome.runtime.sendMessage(payload, callback);
+        } else {
+            const p = chrome.runtime.sendMessage(payload);
+            if (p && typeof p.catch === 'function') p.catch(() => {});
+        }
+    } catch (error) {
+        if (error.message.includes("Extension context invalidated")) {
+            console.log("[SafePost] Extension Updated/Reloaded. Please refresh the page.");
+        } else {
+            console.warn("[SafePost] Message failed:", error);
+        }
+    }
+}
 
 // 0. Remote Logging Helper
 async function logRemote(message, metadata = {}) {
@@ -16,18 +37,15 @@ async function logRemote(message, metadata = {}) {
                     failure_reason: message,
                     metadata: { ...metadata, timestamp: new Date().toISOString() }
                 }
-            }).catch(e => console.warn("[SafePost] Remote log promise rejected:", e.message));
+            }).catch(e => console.warn("[SafePost] Remote log rejected:", e.message));
         } catch (e) {
-            console.warn("[SafePost] Failed to send log to background (context invalidated or disconnected):", e);
+            console.warn("[SafePost] Failed to send log:", e);
         }
-    } else {
-        console.warn("[SafePost] Cannot log remote: chrome.runtime.id is missing (context invalidated).");
     }
 }
 
 // 1. Inject Manual Sync Button
 function injectButton() {
-    // Remove existing if any
     const existing = document.getElementById('safepost-sync-btn');
     if (existing) existing.remove();
 
@@ -35,35 +53,34 @@ function injectButton() {
     btn.id = 'safepost-sync-btn';
     btn.innerText = "🔄 SAFEPOST: SYNC GROUPS";
     btn.style = `
-        position: fixed; 
-        bottom: 20px; 
-        right: 20px; 
-        z-index: 9999; 
-        padding: 15px 25px; 
-        background-color: #007bff; 
-        color: white; 
-        font-weight: bold; 
-        border: none; 
-        border-radius: 50px; 
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1); 
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 9999;
+        padding: 15px 25px;
+        background-color: #007bff;
+        color: white;
+        font-weight: bold;
+        border: none;
+        border-radius: 50px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         cursor: pointer;
         font-family: sans-serif;
     `;
 
     btn.onclick = async () => {
         btn.innerText = "⏳ Scanning...";
-        btn.style.backgroundColor = "#e0a800"; // Orange
+        btn.style.backgroundColor = "#e0a800";
         await scrapeAndSyncGroups();
         setTimeout(() => {
             btn.innerText = "🔄 SAFEPOST: SYNC GROUPS";
-            btn.style.backgroundColor = "#007bff"; // Back to Blue
+            btn.style.backgroundColor = "#007bff";
         }, 3000);
     };
 
     document.body.appendChild(btn);
 }
 
-// Run injection immediately and periodically
 injectButton();
 setInterval(injectButton, 5000);
 
@@ -87,25 +104,14 @@ async function scrapeAndSyncGroups() {
     logRemote(`Scrape complete. Found ${groups.length} groups.`);
 
     if (groups.length > 0) {
-        if (!chrome.runtime?.id) {
-            console.error("[SafePost] Extension context invalidated. Cannot sync groups.");
-            alert("⚠️ התוסף התנתק (Context Invalidated). רענן את העמוד ונסה שוב.");
-            return;
-        }
-
-        try {
-            chrome.runtime.sendMessage({ action: "SYNC_GROUPS", groups: groups }, (response) => {
-                if (chrome.runtime.lastError) {
-                    console.error("BG Error:", chrome.runtime.lastError);
-                    alert("שגיאה: וודא שרעננת את התוסף או העמוד!");
-                } else {
-                    alert(`✅ הצלחה! נשלחו ${groups.length} קבוצות לשרת.`);
-                }
-            });
-        } catch (e) {
-            console.error("BG SendMessage Error:", e);
-            alert("שגיאה קריטית: התוסף נותק מהדפדפן. רענן את העמוד ונסה שוב.");
-        }
+        safeSendMessage({ action: "SYNC_GROUPS", groups: groups }, (response) => {
+            if (chrome.runtime?.lastError) {
+                console.error("BG Error:", chrome.runtime.lastError);
+                alert("שגיאה: וודא שרעננת את התוסף!");
+            } else {
+                alert(`✅ הצלחה! נשלחו ${groups.length} קבוצות לשרת.`);
+            }
+        });
     } else {
         alert("⚠️ לא נמצאו קבוצות בדף. גלול למטה ונסה שוב.");
     }
@@ -115,13 +121,13 @@ async function scrapeAndSyncGroups() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'EXECUTE_POST') {
         window.currentTaskId = request.job.id;
-        
-        // --- HANDSHAKE: Notify server that we are starting ---
+
+        // Notify server that we are starting
         fetch(`${BASE_URL}/api/worker/ack`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ taskId: request.job.id })
-        }).catch(err => console.warn("[SafePost] Ack failed, but proceeding anyway...", err));
+        }).catch(err => console.warn("[SafePost] Ack failed, proceeding anyway...", err));
 
         performPost(request.job).then(sendResponse);
         return true;
@@ -140,6 +146,10 @@ async function performPost(job) {
     if (!trigger) {
         logRemote("❌ Trigger not found");
         window.hud.updateText("שגיאה", "לא נמצא כפתור יצירת פוסט");
+        safeSendMessage({ action: "REPORT_STATUS", payload: { taskId: job.id, status: 'FAILED', failure_reason: "Trigger button not found" } });
+        await sleep(3000);
+        window.hud.destroy();
+        safeSendMessage({ action: 'CLOSE_TAB' });
         return;
     }
 
@@ -154,6 +164,10 @@ async function performPost(job) {
     if (!inputBox) {
         logRemote("❌ Input box not found");
         window.hud.updateText("שגיאה קריטית", "לא נמצאה תיבת טקסט.");
+        safeSendMessage({ action: "REPORT_STATUS", payload: { taskId: job.id, status: 'FAILED', failure_reason: "Input box not found" } });
+        await sleep(3000);
+        window.hud.destroy();
+        safeSendMessage({ action: 'CLOSE_TAB' });
         return;
     }
 
@@ -191,71 +205,44 @@ async function performPost(job) {
     }
 
     if (clicked) {
-        logRemote("🚀 Post button clicked (Signal Sent)");
+        logRemote("🚀 Post button clicked");
 
         // 5. Verify
         const verifySuccess = await waitForModalClosure();
         if (verifySuccess) {
-            logRemote("🎯 Post Success Verified");
+            logRemote("🎯 Post Success Verified. Capturing permalink...");
+            window.hud.updateText("מזהה לינק...", "מחפש כתובת פוסט...");
+            const proofUrl = await findPostPermalink();
+
+            logRemote("🎯 Final Post Result", { proofUrl });
             window.hud.updateText("הצלחה! 🏆", "הפוסט פורסם.");
-            
-            if (chrome.runtime?.id) {
-                try {
-                    const delayStr = Math.floor(Math.random() * (180 - 120 + 1)) + 120;
-                    window.hud.updateText("ממתין", `המתנה חכמה: ${delayStr} שניות`);
-                    
-                    chrome.runtime.sendMessage({
-                        action: "REPORT_STATUS",
-                        payload: { taskId: job.id, status: 'SUCCESS' }
-                    }).catch(e => console.warn("[SafePost] SUCCESS status promise rejected:", e.message));
-                } catch(e) {
-                    console.error("[SafePost] Failed to send SUCCESS status:", e);
-                }
-            } else {
-                 console.warn("[SafePost] Cannot send SUCCESS status: Extension context invalidated.");
-            }
+
+            safeSendMessage({
+                action: "REPORT_STATUS",
+                payload: { taskId: job.id, status: 'SUCCESS', proof_url: proofUrl }
+            });
         } else {
-            logRemote("❓ Closure check timed out");
+            logRemote("❓ Modal closure timed out");
             window.hud.updateText("בדיקת סיום", "ממתין לאימות פייסבוק...");
-            
-            if (chrome.runtime?.id) {
-                try {
-                    const delayStr = Math.floor(Math.random() * (180 - 120 + 1)) + 120;
-                    window.hud.updateText("ממתין", `המתנה חכמה: ${delayStr} שניות (חלקי)`);
-                    
-                    chrome.runtime.sendMessage({
-                        action: "REPORT_STATUS",
-                        payload: { taskId: job.id, status: 'SUCCESS', metadata: { notice: 'No modal closure confirmation' } }
-                    }).catch(e => console.warn("[SafePost] Partial SUCCESS status promise rejected:", e.message));
-                } catch (e) {
-                    console.error("[SafePost] Failed to send SUCCESS status:", e);
-                }
-            }
+            safeSendMessage({
+                action: "REPORT_STATUS",
+                payload: { taskId: job.id, status: 'SUCCESS', metadata: { notice: 'No modal closure confirmation' } }
+            });
         }
     } else {
         logRemote("❌ Failed to find or click Post button");
         window.hud.updateText("שגיאה", "כפתור פרסום לא נמצא");
-        
-        if (chrome.runtime?.id) {
-            try {
-                chrome.runtime.sendMessage({
-                    action: "REPORT_STATUS",
-                    payload: { taskId: job.id, status: 'FAILED', failure_reason: "Post button not found (Color + Text strategies failed)" }
-                }).catch(e => console.warn("[SafePost] FAILED status promise rejected:", e.message));
-            } catch (e) {
-                console.error("[SafePost] Failed to send FAILED status:", e);
-            }
-        }
+        safeSendMessage({
+            action: "REPORT_STATUS",
+            payload: { taskId: job.id, status: 'FAILED', failure_reason: "Post button not found" }
+        });
     }
 
     await sleep(3000);
-    // Remove hud immediately if task failed so user sees normal fb
-    // If SUCCESS, it will show "Smart wait: 120 secs" to indicate throttling
-    if (clicked && verifySuccess) {
-       // Optional: delay destruction to let user read the throttling message
-       await sleep(3000); 
-    }
     window.hud.destroy();
+
+    // Close the Facebook tab when done
+    safeSendMessage({ action: 'CLOSE_TAB' });
 }
 
 async function waitForInputBox() {
@@ -274,205 +261,230 @@ async function waitForInputBox() {
     return null;
 }
 
+// --- Media Type Helpers ---
+function getMediaType(pathOrUrl) {
+    const clean = (pathOrUrl || '').split('?')[0].toLowerCase();
+    if (/\.(mp4|webm|mov|avi|mkv)/.test(clean)) return 'video';
+    return 'image';
+}
+function resolveMime(blobType, pathOrUrl) {
+    if (blobType && (blobType.startsWith('video/') || blobType.startsWith('image/'))) return blobType;
+    return getMediaType(pathOrUrl) === 'video' ? 'video/mp4' : 'image/jpeg';
+}
+
 async function uploadMedia(mediaPath) {
-    logRemote("📸 Starting Media Flow", { path: mediaPath });
+    const mediaType = getMediaType(mediaPath);
+    logRemote(`🎬 Starting Media Flow [${mediaType.toUpperCase()}]`, { path: mediaPath });
 
     let fullUrl = mediaPath;
     if (!mediaPath.startsWith('http')) {
         fullUrl = `${BASE_URL}${mediaPath}`;
     }
 
-    window.hud.updateText("מוריד תמונה", "טוען מהענן...");
+    window.hud.updateText(mediaType === 'video' ? "טוען סרטון" : "מוריד תמונה", "טוען מהענן...");
     const res = await fetch(fullUrl);
     if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
     const blob = await res.blob();
-    const file = new File([blob], "upload.jpg", { type: blob.type });
+
+    const mimeType = resolveMime(blob.type, mediaPath);
+    const fileName = mediaType === 'video' ? 'upload.mp4' : 'upload.jpg';
+    const file = new File([blob], fileName, { type: mimeType });
+    logRemote(`📦 File ready: ${fileName} | ${mimeType} | ${(blob.size / 1024).toFixed(1)}KB`);
 
     window.hud.updateText("מצרף קובץ", "מחפש לחצן העלאה...");
-    const photoVideoTriggers = ["Photo/Video", "צילום/סרטון", "תמונה/סרטון", "הוסף תמונות", "Add Photos", "תמונות/סרטונים", "מדיה"];
-    let mediaTrigger = await findElementInModal(photoVideoTriggers);
 
+    const triggers = mediaType === 'video'
+        ? ["Video", "סרטון", "Photo/Video", "תמונה/סרטון", "צילום/סרטון"]
+        : ["Photo/Video", "תמונה/סרטון", "צילום/סרטון", "Add Photos", "הוסף תמונות", "תמונות/סרטונים"];
+
+    let mediaTrigger = await findElementInModal(triggers);
     if (!mediaTrigger) {
-        mediaTrigger = document.querySelector('div[role="dialog"] [aria-label*="Photo"], div[role="dialog"] [aria-label*="תמונה"], div[role="dialog"] [aria-label*="מדיה"]');
+        const query = mediaType === 'video'
+            ? 'div[role="dialog"] [aria-label*="Video"], div[role="dialog"] [aria-label*="Photo"]'
+            : 'div[role="dialog"] [aria-label*="Photo"], div[role="dialog"] [aria-label*="תמונה"]';
+        mediaTrigger = document.querySelector(query);
     }
 
     if (mediaTrigger) {
-        logRemote("Clicking media trigger");
+        logRemote("✅ Media trigger found, clicking");
         mediaTrigger.click();
         await sleep(2000);
     }
 
     const fileInput = document.querySelector('div[role="dialog"] input[type="file"]');
     if (fileInput) {
-        logRemote("Found file input, injecting file");
+        logRemote("✅ File input found, injecting file");
         const dt = new DataTransfer();
         dt.items.add(file);
         fileInput.files = dt.files;
         fileInput.dispatchEvent(new Event('change', { bubbles: true }));
 
-        // Wait for it to stabilize
-        await sleep(3000);
+        const waitMs = mediaType === 'video' ? 8000 : 3000;
+        window.hud.updateText(
+            mediaType === 'video' ? "מעלה סרטון" : "מעלה תמונה",
+            mediaType === 'video' ? "ממתין לעיבוד (עד 8 שניות)..." : "מסיים העלאה..."
+        );
+        await sleep(waitMs);
     } else {
-        logRemote("No file input found, trying Drag & Drop");
+        logRemote("↩️ No file input, falling back to Drag & Drop");
         const dropZone = document.querySelector('div[role="dialog"]');
-        const dt = new DataTransfer(); dt.items.add(file);
-        ['dragenter', 'dragover', 'drop'].forEach(type => {
-            dropZone.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
-        });
-        await sleep(3000);
+        if (dropZone) {
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            ['dragenter', 'dragover', 'drop'].forEach(type => {
+                dropZone.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
+            });
+        }
+        await sleep(mediaType === 'video' ? 8000 : 3000);
     }
 }
 
 // --- Human-Like Click Helper ---
 async function humanClick(el) {
     if (!el) return;
-
     console.log("🖱️ Triggering Human-Like Click on:", el);
-
-    // 1. Focus
     el.focus();
-
-    // 2. MouseDown
     el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, composed: true, view: window }));
     await sleep(50);
-
-    // 3. MouseUp
     el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, composed: true, view: window }));
     await sleep(50);
-
-    // 4. Click
     el.click();
 }
 
+// V7.2 Post Button Strategy: Semantic text search first, color heuristic as fallback
 async function clickPostButton() {
-    console.group("⚓ [SafePost] V7.0 Bottom-Right Anchor Strategy");
-    console.log("Searching for Blue Button in Bottom-Right Zone...");
+    console.group("⚓ [SafePost] V7.2 Deep-Search Strategy");
 
-    // 1. Target the Dialog
-    const dialog = document.querySelector('div[role="dialog"]');
-    if (!dialog) {
-        console.error("❌ No dialog found!");
-        console.groupEnd();
-        return false;
-    }
-
-    // 2. Collect Candidates (Recursive Scan)
-    // Strategy: Find all elements, filter for interactive ones
-    const allElements = Array.from(dialog.querySelectorAll('*'));
-    const candidates = allElements.filter(el => {
-        const style = window.getComputedStyle(el);
-        const isVisible = style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
-        const isInteractive = (el.tagName === 'BUTTON' || el.getAttribute('role') === 'button' || style.cursor === 'pointer');
-        return isVisible && isInteractive && el.offsetParent !== null;
-    });
-
-    console.log(`🔎 Scan: Found ${candidates.length} interactive candidates.`);
-
-    const blueCandidates = [];
-
-    // 3. Filter for Blue Range (Relaxed V7.0 Algorithm)
-    for (const el of candidates) {
-        const style = window.getComputedStyle(el);
-        const bg = style.backgroundColor;
-        const color = style.color;
-
-        // Parse RGB
-        const rgbMatch = bg.match(/\d+/g);
-        if (!rgbMatch || rgbMatch.length < 3) continue;
-
-        const r = parseInt(rgbMatch[0]);
-        const g = parseInt(rgbMatch[1]);
-        const b = parseInt(rgbMatch[2]);
-
-        console.log(`🎨 Candidate: "${el.innerText.substring(0, 15)}..." [${r}, ${g}, ${b}]`);
-
-        // Logic: B > R + 30 && B > G + 30 (Facebook Blue)
-        if (b > r + 30 && b > g + 30) {
-            console.log(`🔵 Blue Candidate Found: "${el.innerText}" (R:${r} G:${g} B:${b})`);
-            blueCandidates.push(el);
-        }
-    }
-
-    console.log(`🎯 Filter: ${blueCandidates.length} Blue Candidates remain.`);
-
-    let bestCandidate = null;
-    let maxAnchorScore = -Infinity;
-
-    // 4. Position Scoring: Maximize (Bottom + Right)
-    const dialogRect = dialog.getBoundingClientRect();
-    const dialogBottom = dialogRect.bottom;
-    const dialogRight = dialogRect.right;
-
-    for (const el of blueCandidates) {
-        const rect = el.getBoundingClientRect();
-
-        // Anchor Score = rect.bottom + rect.right (Higher is further down-right)
-        const anchorScore = rect.bottom + rect.right;
-
-        console.log(`📐 Cand "${el.innerText.substring(0, 15)}...": Score=${Math.round(anchorScore)} (Bottom:${Math.round(rect.bottom)}, Right:${Math.round(rect.right)})`);
-
-        if (anchorScore > maxAnchorScore) {
-            maxAnchorScore = anchorScore;
-            bestCandidate = el;
-        }
-    }
-
-    if (bestCandidate) {
-        console.log("✅ WINNER:", bestCandidate.innerText);
-
-        // 5. Visual Confirmation
-        bestCandidate.style.border = "6px solid #00FF00"; // LIME GREEN
-        bestCandidate.style.boxShadow = "0 0 20px #00FF00";
-        bestCandidate.scrollIntoView({ block: "center", behavior: "smooth" });
-
-        // 6. Human Sequence Interaction
-        console.log("⚡ Dispatching Human Sequence...");
-        await sleep(1000); // Wait for visual
-
-        await humanClick(bestCandidate);
-
-        // Verification: Check if dialog closes
-        await sleep(3000);
-        if (document.querySelector('div[role="dialog"]')) {
-            console.warn("⚠️ Dialog still open. Trying text fallback...");
-            // Fallback: aria-label="פרסום"
-            const fallback = document.querySelector('[aria-label="פרסום"], [aria-label="Post"], [aria-label="Publish"]');
-            if (fallback) {
-                console.log("🔄 Fallback triggered on aria-label='Post/פרסום'");
-                await humanClick(fallback);
+    const findByText = (root, strings) => {
+        const results = [];
+        for (const s of strings) {
+            const xpath = `.//*[self::div or self::span or self::button or self::a][text()="${s}" or @aria-label="${s}"]`;
+            const iterator = document.evaluate(xpath, root, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+            for (let i = 0; i < iterator.snapshotLength; i++) {
+                results.push(iterator.snapshotItem(i));
             }
         }
+        return results;
+    };
 
-        console.groupEnd();
-        return true;
+    let scopes = Array.from(document.querySelectorAll('div[role="dialog"]'));
+    if (scopes.length === 0) {
+        console.warn("⚠️ No dialogs found. Scanning body...");
+        scopes = [document.body];
+    } else {
+        console.log(`🔍 Found ${scopes.length} active dialogs.`);
     }
 
-    console.warn("❌ No blue buttons found. Trying Text Fallback...");
+    const keywords = ["Post", "פרסום", "Publish", "פרסם"];
+    const antiKeywords = ["boost", "כדאי לנסות", "schedule", "תזמון", "ערוך", "edit"];
 
-    // Last Resort Text Fallback
-    const postKeywords = ["Post", "פרסום", "פרסם", "Submit", "Publish"];
-    for (const kw of postKeywords) {
-        const found = candidates.find(el => (el.innerText || "").includes(kw));
-        if (found) {
-            console.log(`🏳️ Text Fallback match: ${kw}`);
-            await humanClick(found);
+    // 1. Semantic Search — find by exact text/aria-label
+    console.log("SEARCH: Deep Semantic Text Scan...");
+    for (const scope of scopes) {
+        const candidates = findByText(scope, keywords);
+        const valid = candidates.find(el => {
+            if (!isElementVisibleAndEnabled(el)) return false;
+            const txt = (el.innerText || "").toLowerCase();
+            if (antiKeywords.some(bad => txt.includes(bad))) return false;
+            const style = window.getComputedStyle(el);
+            const isClickable = el.tagName === 'BUTTON' || el.tagName === 'A'
+                || el.getAttribute('role') === 'button' || style.cursor === 'pointer';
+            return isClickable;
+        });
+
+        if (valid) {
+            console.log("✅ SEMANTIC WINNER FOUND:", valid.innerText);
+            valid.style.border = "5px solid #FF00FF";
+            valid.style.boxShadow = "0 0 20px #FF00FF";
+            valid.scrollIntoView({ block: "center", behavior: "smooth" });
+            await sleep(500);
+            await humanClick(valid);
             console.groupEnd();
             return true;
         }
     }
 
-    console.error("❌ STUCK: No candidates found.");
+    // 2. Heuristic Fallback — bottom-most blue button
+    console.log("SEARCH: Heuristic Fallback (Blue Button)...");
+    let allCandidates = [];
+    scopes.forEach(s => {
+        allCandidates = allCandidates.concat(
+            Array.from(s.querySelectorAll('div[role="button"], button, div[class*="Button"]'))
+        );
+    });
+
+    const blueCandidates = [];
+    for (const el of allCandidates) {
+        if (!isElementVisibleAndEnabled(el)) continue;
+        const txt = (el.innerText || "").toLowerCase();
+        if (antiKeywords.some(bad => txt.includes(bad))) continue;
+        const style = window.getComputedStyle(el);
+        const bg = style.backgroundColor;
+        const rgbMatch = bg.match(/\d+/g);
+        if (!rgbMatch || rgbMatch.length < 3) continue;
+        const r = parseInt(rgbMatch[0]);
+        const g = parseInt(rgbMatch[1]);
+        const b = parseInt(rgbMatch[2]);
+        if (b > r + 10 && b > g + 10) {
+            blueCandidates.push(el);
+        }
+    }
+
+    if (blueCandidates.length > 0) {
+        blueCandidates.sort((a, b) => {
+            const rectA = a.getBoundingClientRect();
+            const rectB = b.getBoundingClientRect();
+            return rectB.bottom - rectA.bottom;
+        });
+        const best = blueCandidates[0];
+        console.log("✅ HEURISTIC WINNER:", best.innerText);
+        best.style.border = "5px solid #00FFFF";
+        best.scrollIntoView({ block: "center", behavior: "smooth" });
+        await sleep(500);
+        await humanClick(best);
+        console.groupEnd();
+        return true;
+    }
+
+    console.error("❌ FAILED: No candidates found.");
     console.groupEnd();
     return false;
 }
 
 // Helpers
 async function waitForModalClosure() {
-    for (let i = 0; i < 20; i++) {
-        if (!document.querySelector('div[role="dialog"]')) return true;
+    logRemote("⏳ Monitoring modal closure...");
+    for (let i = 0; i < 30; i++) {
+        const dialog = document.querySelector('div[role="dialog"]');
+        if (!dialog) return true;
+        const dialogText = dialog.innerText || "";
+        if (dialogText.includes("Post successful") || dialogText.includes("הפוסט פורסם")) return true;
         await sleep(500);
     }
     return false;
+}
+
+async function findPostPermalink() {
+    logRemote("🔍 Searching for new post permalink...");
+    await sleep(2000);
+
+    const timePhrases = ["Just now", "אף לא רגע", "עכשיו", "1 min", "1 דק"];
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const links = Array.from(document.querySelectorAll('a[href*="/groups/"][href*="/permalink/"]'));
+        for (const link of links) {
+            const text = link.innerText || "";
+            if (timePhrases.some(p => text.includes(p))) {
+                const url = link.href.split('?')[0];
+                logRemote("✅ Permalink found", { url });
+                return url;
+            }
+        }
+        await sleep(2000);
+    }
+
+    logRemote("⚠️ Permalink not found, using group URL as fallback");
+    return window.location.href.split('?')[0];
 }
 
 function isElementVisibleAndEnabled(el) {
@@ -483,7 +495,6 @@ function isElementVisibleAndEnabled(el) {
 async function findElementRobust(phrases) {
     for (let i = 0; i < 15; i++) {
         for (let phrase of phrases) {
-            // Stronger XPath that looks for text inside ANY descendant
             const xpath = `//div[@role="button"][contains(., "${phrase}")] | //button[contains(., "${phrase}")] | //div[@aria-label="${phrase}"] | //span[contains(text(), "${phrase}")]`;
             const res = document.evaluate(xpath, document, null, 9, null).singleNodeValue;
             if (res) {
@@ -508,9 +519,9 @@ async function findElementInModal(phrases) {
 }
 
 async function typeHumanLike(element, text) {
-    const errorInjectionRate = 0.03; 
+    const errorInjectionRate = 0.03;
     const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1) + min);
-    
+
     const keyboardLayout = {
         'א': 'ב', 'ב': 'ג', 'ש': 'ד', 'ד': 'ג', 'ק': 'ר', 'ר': 'א',
         'a': 's', 's': 'd', 'd': 'f', 'e': 'r', 'r': 't'
@@ -541,7 +552,7 @@ async function typeHumanLike(element, text) {
 
     const dispatchSimulatedBackspace = async () => {
         element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Backspace', keyCode: 8 }));
-        
+
         if (element.isContentEditable) {
             document.execCommand('delete', false, null);
         } else {
@@ -560,25 +571,24 @@ async function typeHumanLike(element, text) {
 
     for (let i = 0; i < text.length; i++) {
         const char = text[i];
-        
+
         if (Math.random() < errorInjectionRate && char.match(/[a-zA-Zא-ת]/)) {
             const wrongChar = getAdjacentKey(char);
-            
-            await dispatchSimulatedChar(wrongChar); 
-            await sleep(randomBetween(150, 300)); 
-            await dispatchSimulatedBackspace(); 
-            await sleep(randomBetween(50, 150)); 
+            await dispatchSimulatedChar(wrongChar);
+            await sleep(randomBetween(150, 300));
+            await dispatchSimulatedBackspace();
+            await sleep(randomBetween(50, 150));
         }
 
         await dispatchSimulatedChar(char);
 
-        let delayInterval = randomBetween(30, 80); 
+        let delayInterval = randomBetween(30, 80);
         if (char === ' ') {
-            delayInterval = randomBetween(100, 200); 
+            delayInterval = randomBetween(100, 200);
         } else if (char === '.' || char === ',' || char === '\n') {
-            delayInterval = randomBetween(500, 1000); 
+            delayInterval = randomBetween(500, 1000);
         }
-        
+
         await sleep(delayInterval);
     }
 }
@@ -596,7 +606,7 @@ window.hud = {
             <div id="hud-timer">--s</div>
             <div id="hud-title">מערכת אופטימיזציה</div>
             <div id="hud-status">מוכן לעבודה</div>
-            <div id="hud-version">v6.2</div>
+            <div id="hud-version">v7.2</div>
         `;
         document.body.appendChild(div);
     },
