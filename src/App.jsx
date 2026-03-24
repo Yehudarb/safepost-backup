@@ -17,12 +17,32 @@ const BACKEND_URL = import.meta.env.DEV
 const API_BASE = `${BACKEND_URL}/api`;
 const socket = io(BACKEND_URL);
 
+// --- SSRF GUARD ---
+const PRIVATE_IP_PATTERNS = [
+    /^127\./,
+    /^10\./,
+    /^172\.(1[6-9]|2\d|3[01])\./,
+    /^192\.168\./,
+    /^169\.254\./,         // cloud metadata (AWS/GCP/Azure)
+    /^::1$/,               // IPv6 loopback
+    /^fd[0-9a-f]{2}:/i,    // IPv6 private (fd00::/8)
+];
+function isSafeUrl(urlStr) {
+    try {
+        const { hostname, protocol } = new URL(urlStr);
+        if (!['http:', 'https:'].includes(protocol)) return false;
+        if (hostname === 'localhost' || hostname === '0.0.0.0') return false;
+        if (PRIVATE_IP_PATTERNS.some(p => p.test(hostname))) return false;
+        return true;
+    } catch { return false; }
+}
+
 // --- API SERVICE LAYER ---
 class ApiService {
     static async request(endpoint, options = {}) {
         const url = `${API_BASE}${endpoint}`;
-        // SSRF guard: only allow requests to the configured backend
-        if (!url.startsWith(API_BASE)) throw new Error('Blocked: request URL outside allowed backend');
+        if (!url.startsWith(API_BASE) || !isSafeUrl(url))
+            throw new Error('Blocked: request URL is not allowed');
         const headers = { 'Content-Type': 'application/json', ...options.headers };
         try {
             const res = await fetch(url, { ...options, headers });

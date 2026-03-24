@@ -82,16 +82,25 @@ app.use(helmet({
     contentSecurityPolicy: false
 }));
 
-// Rate limiter — 100 requests per minute per IP
+// Standard limiter — 100 requests per 15 minutes per IP
 const apiLimiter = rateLimit({
-    windowMs: 60 * 1000,
+    windowMs: 15 * 60 * 1000,
     max: 100,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { error: 'Too many requests. Please slow down.' }
+    message: { error: 'Too many requests. Please try again later.' }
 });
 
-// Apply rate limiting to all /api routes
+// Strict limiter — 5 requests per 15 minutes (for expensive/sensitive endpoints)
+const strictLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests to this endpoint. Please slow down.' }
+});
+
+// Apply standard rate limiting to all /api routes
 app.use('/api/', apiLimiter);
 
 const server = http.createServer(app);
@@ -360,7 +369,7 @@ app.delete('/api/templates/:id', async (req, res) => {
 });
 
 // Simplified upload endpoint - accepts multipart or JSON with base64
-app.post('/api/upload', async (req, res) => {
+app.post('/api/upload', strictLimiter, async (req, res) => {
     try {
         let fileBuffer, fileName, mimetype;
 
@@ -488,7 +497,7 @@ app.get('/api/analytics', async (req, res) => {
 });
 
 // --- AI CONTENT GENERATION (GEMINI + CLAUDE FALLBACK) ---
-app.post('/api/ai/generate', async (req, res) => {
+app.post('/api/ai/generate', strictLimiter, async (req, res) => {
     const { prompt, history = [] } = req.body;
     if (!prompt?.trim()) return res.status(400).json({ error: 'Prompt is required' });
 
