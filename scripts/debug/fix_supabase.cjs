@@ -17,7 +17,7 @@ async function fixSupabase() {
         if (!bucketExists) {
             console.log(`⚠️ Bucket '${bucketName}' not found. Creating...`);
             const { data, error } = await supabase.storage.createBucket(bucketName, {
-                public: true
+                public: false // Private — use signed URLs for file access
             });
 
             if (error) {
