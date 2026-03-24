@@ -75,7 +75,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         })
         .then(async (res) => {
             const body = await res.json();
-            sendResponse(body.success ? { success: true, ...body } : { success: false, error: body.error });
+            // Avoid prototype pollution by not spreading user-provided objects
+            sendResponse(body.success ? { success: true } : { success: false, error: String(body.error || 'Server error') });
         })
         .catch(err => sendResponse({ success: false, error: err.toString() }));
         return true; // Keep channel open for async response

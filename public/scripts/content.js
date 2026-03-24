@@ -464,12 +464,16 @@ window.hud = {
         if (document.getElementById('safepost-hud')) return;
         const div = document.createElement('div');
         div.id = 'safepost-hud';
-        div.innerHTML = `
-            <div id="hud-timer">--s</div>
-            <div id="hud-title">מערכת אופטימיזציה</div>
-            <div id="hud-status">מוכן לעבודה</div>
-            <div id="hud-version">v6.2</div>
-        `;
+        const hudTimer = document.createElement('div');
+        hudTimer.id = 'hud-timer'; hudTimer.textContent = '--s';
+        const hudTitle = document.createElement('div');
+        hudTitle.id = 'hud-title'; hudTitle.textContent = 'מערכת אופטימיזציה';
+        const hudStatus = document.createElement('div');
+        hudStatus.id = 'hud-status'; hudStatus.textContent = 'מוכן לעבודה';
+        const hudVersion = document.createElement('div');
+        hudVersion.id = 'hud-version'; hudVersion.textContent = 'v6.2';
+        div.appendChild(hudTimer); div.appendChild(hudTitle);
+        div.appendChild(hudStatus); div.appendChild(hudVersion);
         document.body.appendChild(div);
     },
     updateText: (t, s) => {
@@ -496,7 +500,7 @@ function injectStyles() {
     if (document.getElementById('hud-css')) return;
     const s = document.createElement('style');
     s.id = 'hud-css';
-    s.innerHTML = `
+    s.textContent = `
         #safepost-hud { position: fixed; bottom: 20px; right: 20px; width: 280px; background: #1a1a1a; border: 3px solid #28a745; color: white; padding: 15px; border-radius: 10px; z-index: 1000000; direction: rtl; font-family: sans-serif; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
         #hud-timer { position: absolute; top: 15px; left: 15px; background: #007bff; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 14px; }
         #hud-title { font-weight: bold; margin-bottom: 5px; color: #007bff; font-size: 16px; margin-left: 50px; }

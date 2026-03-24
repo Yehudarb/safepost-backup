@@ -1,5 +1,7 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { supabase } = require('./supabaseClient.cjs');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Anthropic = require('@anthropic-ai/sdk');
@@ -63,10 +65,26 @@ const upload = multer({
     limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
 });
 
+const ALLOWED_ORIGINS = [
+    'http://localhost:5173',
+    'http://localhost:3001',
+    'https://safepost-backup.vercel.app',
+    'https://safepost-backup.onrender.com'
+];
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST", "PATCH", "DELETE"] }
+    cors: { origin: ALLOWED_ORIGINS, methods: ["GET", "POST", "PATCH", "DELETE"] }
+});
+
+// Rate limiter — 100 requests per minute per IP
+const apiLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please slow down.' }
 });
 
 const PORT = 3001;
@@ -105,12 +123,22 @@ process.on('uncaughtException', (err) => {
 
 console.log("🚀 Server connecting to Supabase...");
 // --- MIDDLEWARE ---
+
+// Security headers
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' }, // Allow extension to fetch media
+    contentSecurityPolicy: false // Disabled — managed per-route if needed
+}));
+
 app.use(cors({
-    origin: true,
+    origin: ALLOWED_ORIGINS,
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with'],
 }));
+
+// Apply rate limiting to all /api routes
+app.use('/api/', apiLimiter);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/uploads', express.static(UPLOAD_DIR));
@@ -284,10 +312,12 @@ app.post('/api/group-sets', async (req, res) => {
 });
 
 app.delete('/api/group-sets/:id', async (req, res) => {
+    const id = req.params.id;
+    if (!/^[0-9a-f-]{8,}$/i.test(id)) return res.status(400).json({ error: 'Invalid ID format' });
     const { error } = await supabase
         .from('group_sets')
         .delete()
-        .eq('id', req.params.id);
+        .eq('id', id);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
 });
@@ -316,10 +346,12 @@ app.post('/api/templates', async (req, res) => {
 });
 
 app.delete('/api/templates/:id', async (req, res) => {
+    const id = req.params.id;
+    if (!/^[0-9a-f-]{8,}$/i.test(id)) return res.status(400).json({ error: 'Invalid ID format' });
     const { error } = await supabase
         .from('post_templates')
         .delete()
-        .eq('id', req.params.id);
+        .eq('id', id);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
 });
@@ -768,9 +800,17 @@ app.get('/api/jobs/next', async (req, res) => {
     processingStartTimestamps.set(data.id, Date.now()); // START TRACKING HERE
     await updateTaskStatus(data.id, 'PROCESSING', 'Extension picked up job');
 
+    // Explicitly list safe fields — avoid spreading database objects to prevent prototype pollution
     res.json({
         job: {
-            ...data,
+            id: data.id,
+            content: data.content,
+            group_id: data.group_id,
+            media_url: data.media_url || null,
+            image_url: data.image_url || null,
+            status: data.status,
+            scheduled_time: data.scheduled_time,
+            created_at: data.created_at,
             group_url: group?.url || data.group_url || null,
             group_name: group?.name || data.group_id
         }

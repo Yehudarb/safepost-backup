@@ -28,7 +28,9 @@
     "tailwind-merge": "^1.14.0",
     "lucide-react": "^0.468.0",
     "@google/generative-ai": "^0.21.0",
-    "@anthropic-ai/sdk": "^0.32.0"
+    "@anthropic-ai/sdk": "^0.32.0",
+    "helmet": "^8.0.0",
+    "express-rate-limit": "^7.5.0"
     },
     "devDependencies": {
         "@types/chrome": "^0.0.268",
