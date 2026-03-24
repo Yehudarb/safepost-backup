@@ -69,7 +69,9 @@ const ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://localhost:3001',
     'https://safepost-backup.vercel.app',
-    'https://safepost-backup.onrender.com'
+    'https://safepost-backup.onrender.com',
+    'https://www.facebook.com',
+    'https://web.facebook.com'
 ];
 
 const app = express();
