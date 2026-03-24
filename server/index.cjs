@@ -82,19 +82,19 @@ app.use(helmet({
     contentSecurityPolicy: false
 }));
 
-// Standard limiter — 100 requests per 15 minutes per IP
+// Standard limiter — 100 requests per minute per IP (dashboard polls frequently)
 const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
+    windowMs: 60 * 1000,
     max: 100,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests. Please try again later.' }
 });
 
-// Strict limiter — 5 requests per 15 minutes (for expensive/sensitive endpoints)
+// Strict limiter — 20 requests per 15 minutes (upload/AI — expensive endpoints)
 const strictLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 5,
+    max: 20,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests to this endpoint. Please slow down.' }
