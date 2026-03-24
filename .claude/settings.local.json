@@ -3,7 +3,9 @@
     "allow": [
       "Read(//c/Users/yehud/.gemini/antigravity/scratch/backups//**)",
       "Bash(powershell -ExecutionPolicy Bypass -File \"c:\\\\tmp\\\\fix_api.ps1\")",
-      "Bash(powershell -ExecutionPolicy Bypass -File \"c:\\\\tmp\\\\fix_api2.ps1\")"
+      "Bash(powershell -ExecutionPolicy Bypass -File \"c:\\\\tmp\\\\fix_api2.ps1\")",
+      "Bash(powershell -Command \"$dirs = Get-ChildItem ''c:\\\\Users\\\\yehud\\\\.gemini\\\\antigravity\\\\scratch\\\\backups\\\\'' -Directory; foreach \\($d in $dirs\\) { Write-Host $d.FullName; if \\(Test-Path \\(Join-Path $d.FullName ''src\\\\App.jsx''\\)\\) { Write-Host ''FOUND App.jsx here'' } }\")",
+      "Bash(powershell -ExecutionPolicy Bypass -File \"c:\\\\tmp\\\\git_status.ps1\")"
     ]
   }
 }
