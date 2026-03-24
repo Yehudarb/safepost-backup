@@ -75,10 +75,12 @@ const ALLOWED_ORIGINS = [
 ];
 
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: ALLOWED_ORIGINS, methods: ["GET", "POST", "PATCH", "DELETE"] }
-});
+
+// Security headers — applied immediately after app creation
+app.use(helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    contentSecurityPolicy: false
+}));
 
 // Rate limiter — 100 requests per minute per IP
 const apiLimiter = rateLimit({
@@ -87,6 +89,14 @@ const apiLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests. Please slow down.' }
+});
+
+// Apply rate limiting to all /api routes
+app.use('/api/', apiLimiter);
+
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: { origin: ALLOWED_ORIGINS, methods: ["GET", "POST", "PATCH", "DELETE"] }
 });
 
 const PORT = 3001;
@@ -124,13 +134,6 @@ process.on('uncaughtException', (err) => {
 });
 
 console.log("🚀 Server connecting to Supabase...");
-// --- MIDDLEWARE ---
-
-// Security headers
-app.use(helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' }, // Allow extension to fetch media
-    contentSecurityPolicy: false // Disabled — managed per-route if needed
-}));
 
 app.use(cors({
     origin: ALLOWED_ORIGINS,
@@ -139,8 +142,6 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with'],
 }));
 
-// Apply rate limiting to all /api routes
-app.use('/api/', apiLimiter);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/uploads', express.static(UPLOAD_DIR));

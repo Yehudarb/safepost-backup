@@ -21,6 +21,8 @@ const socket = io(BACKEND_URL);
 class ApiService {
     static async request(endpoint, options = {}) {
         const url = `${API_BASE}${endpoint}`;
+        // SSRF guard: only allow requests to the configured backend
+        if (!url.startsWith(API_BASE)) throw new Error('Blocked: request URL outside allowed backend');
         const headers = { 'Content-Type': 'application/json', ...options.headers };
         try {
             const res = await fetch(url, { ...options, headers });
