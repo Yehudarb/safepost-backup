@@ -10,6 +10,7 @@ const { Server } = require('socket.io');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const cron = require('node-cron');
 
 // --- HEBREW SYMBOL DICTIONARY FOR AUTO-SPIN ---
 const HEBREW_SYNONYMS = {
@@ -741,16 +742,24 @@ app.post('/api/worker/ack', async (req, res) => {
     res.json({ success: true });
 });
 
-// --- 3. REFACTORED STRICT QUEUE POLLER ---
-setInterval(async () => {
+// --- DISPATCH FUNCTION: Extract next PENDING task and dispatch via SSE ---
+async function dispatchNextPendingTask(triggeredBy = 'unknown') {
     const now = new Date();
-    if (workerStopSignal && workerStopUntil && now < workerStopUntil) return;
-    if (workerThrottleUntil && now < workerThrottleUntil) return;
 
-    // console.log(`[Poller] Heartbeat check at ${now.toISOString()}...`);
+    // Guard 1: Stop signal check
+    if (workerStopSignal && workerStopUntil && now < workerStopUntil) {
+        console.log(`⏸️ [DISPATCH] Worker stop signal active (until ${workerStopUntil.toISOString()}). Skipping.`);
+        return;
+    }
+
+    // Guard 2: Throttle check
+    if (workerThrottleUntil && now < workerThrottleUntil) {
+        console.log(`⏱️ [DISPATCH] Worker throttled (until ${workerThrottleUntil.toISOString()}). Skipping.`);
+        return;
+    }
 
     try {
-        // A. Check if ANY task is currently being handled
+        // Phase A: Check if ANY task is currently being handled
         const { data: activeTasks } = await supabase
             .from('posts')
             .select('id, status')
@@ -780,10 +789,13 @@ setInterval(async () => {
                     }
                 }
             }
-            if (activeCount > 0) return; // Busy - Don't send more
+            if (activeCount > 0) {
+                console.log(`👷 [DISPATCH] ${activeCount} task(s) in-flight. Skipping dispatch.`);
+                return; // Busy - Don't send more
+            }
         }
 
-        // B. Find exactly ONE next task
+        // Phase B: Find exactly ONE next task
         const { data: nextTask, error: fetchError } = await supabase
             .from('posts')
             .select('*')
@@ -794,49 +806,103 @@ setInterval(async () => {
             .limit(1)
             .single();
 
-        if (fetchError || !nextTask) return;
+        if (fetchError || !nextTask) {
+            console.log(`🔍 [DISPATCH] No due PENDING tasks found.`);
+            return;
+        }
 
-        console.log(`📡 Dispatching Task ${nextTask.id} to worker...`);
-        
-        // C. Mark as SENT (Pre-lock)
+        console.log(`⚡ [DISPATCH] Found task ${nextTask.id} triggered by: ${triggeredBy}`);
+
+        // Phase C: Mark as SENT (Pre-lock)
         const { error: lockError } = await supabase
             .from('posts')
             .update({ status: 'SENT' })
             .eq('id', nextTask.id)
             .eq('status', 'PENDING');
 
-        if (lockError) return;
-        
+        if (lockError) {
+            console.log(`🔒 [DISPATCH] Lock failed for task ${nextTask.id} (already locked). Skipping.`);
+            return;
+        }
+
         sentTaskTimestamps.set(nextTask.id, Date.now());
 
-        // D. Send via SSE
+        // Phase D: Send via SSE
         const { data: group } = await supabase.from('groups').select('url').eq('id', nextTask.group_id).single();
-        broadcastSSE({ 
-            type: 'new_job', 
-            job: { ...nextTask, group_url: group?.url, status: 'SENT' } 
+        broadcastSSE({
+            type: 'new_job',
+            job: { ...nextTask, group_url: group?.url, status: 'SENT' }
         });
-        
+
         await updateTaskStatus(nextTask.id, 'SENT', 'Waiting for worker handshake...');
-        
+
         await supabase.from('system_logs').insert([{
             log_level: 'info',
             source: 'server_scheduler',
-            message: `📡 Dispatched Task #${nextTask.id} to group: ${group?.url || nextTask.group_id}`
+            message: `📡 [${triggeredBy.toUpperCase()}] Dispatched Task #${nextTask.id} to group: ${group?.url || nextTask.group_id}`
         }]);
 
         io.emit('queue_updated');
 
     } catch (e) {
-        console.error("Queue Poller Error:", e);
+        console.error("❌ [DISPATCH] Error:", e);
         try {
             await supabase.from('system_logs').insert([{
                 log_level: 'error',
                 source: 'server_scheduler',
-                message: `🔴 Poller Critical Error: ${e.message || e}`
+                message: `🔴 [DISPATCH] Critical Error (${triggeredBy}): ${e.message || e}`
             }]);
         } catch (inner) { console.error("Logger failed:", inner); }
     }
-}, 5000);
+}
+
+// --- 3. SUPABASE REALTIME LISTENER (Zero-latency dispatch) ---
+console.log('📡 [REALTIME] Initializing Supabase Realtime listener for PENDING posts...');
+
+const postsChannel = supabase
+    .channel('posts-pending-watch')
+    .on(
+        'postgres_changes',
+        {
+            event: '*',  // Listen to INSERT and UPDATE
+            schema: 'public',
+            table: 'posts',
+            filter: 'status=eq.PENDING'
+        },
+        async (payload) => {
+            const post = payload.new;
+            const scheduledTime = new Date(post.scheduled_time);
+            const now = new Date();
+
+            console.log(`⚡ [REALTIME] Change detected for post ${post.id} (scheduled: ${scheduledTime.toISOString()})`);
+
+            if (scheduledTime <= now) {
+                // Post is due now — dispatch immediately (zero latency)
+                console.log(`⚡ [REALTIME] Post ${post.id} is due NOW. Dispatching immediately...`);
+                await dispatchNextPendingTask('realtime');
+            } else {
+                // Post is scheduled for future — cron will handle it
+                const delayMs = scheduledTime.getTime() - now.getTime();
+                const delaySec = Math.round(delayMs / 1000);
+                console.log(`⏳ [REALTIME] Post ${post.id} scheduled for future (+${delaySec}s). Cron will handle.`);
+            }
+        }
+    )
+    .subscribe((status) => {
+        console.log(`📡 [REALTIME] Channel status: ${status}`);
+        if (status === 'SUBSCRIBED') {
+            console.log('✅ [REALTIME] Successfully subscribed to posts-pending-watch channel');
+        }
+    });
+
+// --- 4. NODE-CRON JOB (Every 1 minute — safety net for scheduled posts) ---
+console.log('🕰️ [CRON] Initializing cron job to check scheduled posts every 1 minute...');
+
+cron.schedule('* * * * *', async () => {
+    const now = new Date();
+    console.log(`🕰️ [CRON] Checking scheduled posts at ${now.toISOString()}...`);
+    await dispatchNextPendingTask('cron');
+});
 
 
 // HEARTBEAT: Reset tasks stuck in PROCESSING/SENT for more than 4 minutes
