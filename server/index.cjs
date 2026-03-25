@@ -82,10 +82,10 @@ app.use(helmet({
     contentSecurityPolicy: false
 }));
 
-// Standard limiter — 100 requests per minute per IP (dashboard polls frequently)
+// Standard limiter — 500 requests per minute per IP (dashboard + polling)
 const apiLimiter = rateLimit({
     windowMs: 60 * 1000,
-    max: 100,
+    max: 500,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests. Please try again later.' }
