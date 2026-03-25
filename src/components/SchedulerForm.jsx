@@ -1,10 +1,34 @@
 import React, { useState } from 'react';
-import { Calendar, Send, Users, Zap } from 'lucide-react';
+import { Calendar, Send, Users, Zap, Paperclip, X, AlertCircle, CheckCircle2, Upload } from 'lucide-react';
+import { useMediaUpload } from '@/hooks/useMediaUpload';
 
 const SchedulerForm = ({ groups, onSubmit, disabled }) => {
     const [content, setContent] = useState('');
     const [selectedGroup, setSelectedGroup] = useState('');
     const [scheduledAt, setScheduledAt] = useState('');
+    const [mediaFiles, setMediaFiles] = useState([]);
+    const { uploadFile, uploading, progress, error: uploadError, uploadedFile } = useMediaUpload();
+
+    const handleFileSelect = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        try {
+            console.log('📎 [FORM] File selected:', file.name);
+            const result = await uploadFile(file);
+            setMediaFiles(prev => [...prev, result]);
+            console.log('✅ [FORM] File added to form:', result.filePath);
+
+            // Reset input
+            e.target.value = '';
+        } catch (err) {
+            console.error('❌ [FORM] File upload failed:', err.message);
+        }
+    };
+
+    const removeMediaFile = (index) => {
+        setMediaFiles(prev => prev.filter((_, i) => i !== index));
+    };
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -24,12 +48,14 @@ const SchedulerForm = ({ groups, onSubmit, disabled }) => {
             content,
             group_id: selectedGroup,
             group_name: group ? group.name : 'Unknown Group',
-            schedule: isoScheduledAt // Using 'schedule' to match server/index.cjs expectations
+            schedule: isoScheduledAt, // Using 'schedule' to match server/index.cjs expectations
+            media_files: mediaFiles.length > 0 ? mediaFiles : null // Include uploaded media files
         });
 
-        // Reset form (optional, maybe keep content for multiple posts)
+        // Reset form
         setContent('');
         setScheduledAt('');
+        setMediaFiles([]);
     };
 
     return (
@@ -86,6 +112,88 @@ const SchedulerForm = ({ groups, onSubmit, disabled }) => {
                             value={scheduledAt}
                             onChange={(e) => setScheduledAt(e.target.value)}
                         />
+                    </div>
+                </div>
+
+                {/* Media Upload Section */}
+                <div className="border-t border-[var(--panel-border)] pt-5">
+                    <div>
+                        <label className="text-[var(--text-secondary)] text-[10px] font-black uppercase tracking-[0.2em] mb-3 px-1 flex items-center gap-2">
+                            <Paperclip className="w-3.5 h-3.5" />
+                            Media Attachment (Optional)
+                        </label>
+
+                        {/* Upload Input */}
+                        <div className="relative">
+                            <input
+                                type="file"
+                                id="media-upload"
+                                accept="image/*,video/*"
+                                onChange={handleFileSelect}
+                                disabled={uploading || disabled}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                            />
+                            <label
+                                htmlFor="media-upload"
+                                className={`flex items-center justify-center gap-2 w-full py-3 px-4 rounded-xl border-2 border-dashed transition-all ${
+                                    uploading
+                                        ? 'border-blue-500/50 bg-blue-500/5'
+                                        : uploadError
+                                        ? 'border-red-500/50 bg-red-500/5'
+                                        : 'border-[var(--panel-border)] hover:border-indigo-500/50 hover:bg-indigo-500/5 cursor-pointer'
+                                }`}
+                            >
+                                {uploading ? (
+                                    <>
+                                        <Upload className="w-4 h-4 text-blue-400 animate-pulse" />
+                                        <span className="text-[10px] font-semibold text-blue-400">
+                                            Uploading ({progress}%)
+                                        </span>
+                                    </>
+                                ) : uploadError ? (
+                                    <>
+                                        <AlertCircle className="w-4 h-4 text-red-400" />
+                                        <span className="text-[10px] font-semibold text-red-400">{uploadError}</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Paperclip className="w-4 h-4 text-[var(--text-secondary)]" />
+                                        <span className="text-[10px] font-semibold text-[var(--text-secondary)]">
+                                            Click to upload media (JPG, PNG, MP4, etc.)
+                                        </span>
+                                    </>
+                                )}
+                            </label>
+                        </div>
+
+                        {/* Uploaded Files List */}
+                        {mediaFiles.length > 0 && (
+                            <div className="mt-3 space-y-2">
+                                {mediaFiles.map((file, idx) => (
+                                    <div
+                                        key={idx}
+                                        className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg"
+                                    >
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                                            <span className="text-[10px] font-semibold text-emerald-400 truncate">
+                                                {file.filePath.split('/').pop()}
+                                            </span>
+                                            <span className="text-[10px] text-emerald-400/60 flex-shrink-0">
+                                                ({(file.size / 1024 / 1024).toFixed(2)}MB)
+                                            </span>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => removeMediaFile(idx)}
+                                            className="text-emerald-400 hover:text-red-400 transition-colors flex-shrink-0"
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </div>
 

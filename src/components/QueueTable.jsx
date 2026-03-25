@@ -1,6 +1,133 @@
-import React from 'react';
+import React, { useState } from 'react';
 import TaskTimer from './TaskTimer';
-import { Trash2, RefreshCw, Clock, CheckCircle, XCircle, AlertCircle, Share2, ExternalLink } from 'lucide-react';
+import { Trash2, RefreshCw, Clock, CheckCircle, XCircle, AlertCircle, Share2, ExternalLink, Image, Download, X } from 'lucide-react';
+
+// Media Preview Modal
+const MediaPreviewModal = ({ file, onClose }) => {
+    if (!file) return null;
+
+    const isImage = file.type?.startsWith('image/') || file.filePath?.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+    const isVideo = file.type?.startsWith('video/') || file.filePath?.match(/\.(mp4|webm|mov|avi)$/i);
+
+    return (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-[var(--panel-bg)] rounded-2xl border border-[var(--panel-border)] shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+                {/* Header */}
+                <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--panel-border)]">
+                    <div>
+                        <h3 className="text-lg font-bold text-[var(--text-primary)]">Media Preview</h3>
+                        <p className="text-xs text-[var(--text-secondary)] mt-1">{file.filePath?.split('/').pop()}</p>
+                    </div>
+                    <button
+                        onClick={onClose}
+                        className="p-2 hover:bg-red-500/10 text-red-400 rounded-lg transition-all"
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 overflow-auto flex items-center justify-center p-6 bg-black/30">
+                    {isImage && (
+                        <img
+                            src={file.filePath}
+                            alt="Preview"
+                            className="max-w-full max-h-[70vh] rounded-xl object-contain"
+                        />
+                    )}
+                    {isVideo && (
+                        <video
+                            src={file.filePath}
+                            controls
+                            className="max-w-full max-h-[70vh] rounded-xl"
+                        />
+                    )}
+                    {!isImage && !isVideo && (
+                        <div className="flex flex-col items-center gap-4 text-[var(--text-secondary)]">
+                            <Image className="w-16 h-16 opacity-30" />
+                            <p className="text-sm">Preview not available for this file type</p>
+                            <a
+                                href={file.filePath}
+                                download
+                                className="px-4 py-2 bg-indigo-500 text-white rounded-lg text-xs font-bold hover:bg-indigo-600 transition-all flex items-center gap-2"
+                            >
+                                <Download className="w-3.5 h-3.5" />
+                                Download File
+                            </a>
+                        </div>
+                    )}
+                </div>
+
+                {/* Footer */}
+                <div className="px-6 py-4 border-t border-[var(--panel-border)] flex items-center justify-between bg-[var(--panel-bg)]">
+                    <p className="text-xs text-[var(--text-secondary)]">
+                        {file.size ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : 'Size unknown'}
+                    </p>
+                    {isImage || isVideo ? (
+                        <a
+                            href={file.filePath}
+                            download
+                            className="px-4 py-2 bg-indigo-500 text-white rounded-lg text-xs font-bold hover:bg-indigo-600 transition-all flex items-center gap-2"
+                        >
+                            <Download className="w-3.5 h-3.5" />
+                            Download
+                        </a>
+                    ) : null}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Media Badge Component
+const MediaBadge = ({ mediaPaths, onPreview }) => {
+    if (!mediaPaths || mediaPaths.length === 0) {
+        return <span className="text-xs text-[var(--text-secondary)] opacity-40">No media</span>;
+    }
+
+    return (
+        <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+                {mediaPaths.slice(0, 3).map((path, idx) => {
+                    const fileName = path.split('/').pop();
+                    const isImage = path.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+                    const isVideo = path.match(/\.(mp4|webm|mov|avi)$/i);
+
+                    return (
+                        <button
+                            key={idx}
+                            onClick={() => onPreview({ filePath: path, type: isImage ? 'image' : isVideo ? 'video' : 'unknown' })}
+                            className="group relative w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/40 hover:border-indigo-500 transition-all overflow-hidden flex items-center justify-center"
+                            title={fileName}
+                        >
+                            {isImage && (
+                                <img
+                                    src={path}
+                                    alt="Thumbnail"
+                                    className="w-full h-full object-cover opacity-70 group-hover:opacity-100"
+                                />
+                            )}
+                            {isVideo && (
+                                <div className="w-full h-full bg-purple-500/30 flex items-center justify-center">
+                                    <div className="w-0 h-0 border-l-2 border-t-1 border-b-1 border-l-white border-t-transparent border-b-transparent ml-0.5"></div>
+                                </div>
+                            )}
+                            {!isImage && !isVideo && (
+                                <Image className="w-3 h-3 text-indigo-400" />
+                            )}
+                        </button>
+                    );
+                })}
+            </div>
+
+            {mediaPaths.length > 0 && (
+                <span className="text-xs font-bold bg-indigo-500/20 text-indigo-400 px-2 py-1 rounded-full border border-indigo-500/40">
+                    {mediaPaths.length}
+                </span>
+            )}
+        </div>
+    );
+};
 
 const StatusBadge = ({ status }) => {
     const styles = {
@@ -31,6 +158,7 @@ const StatusBadge = ({ status }) => {
 };
 
 const QueueTable = ({ jobs, onDelete, onBulkDelete, selectedIds, setSelectedIds, onRefresh }) => {
+    const [previewFile, setPreviewFile] = useState(null);
     const isAllSelected = jobs.length > 0 && selectedIds.length === jobs.length;
 
     const handleSelectAll = () => {
@@ -97,6 +225,7 @@ const QueueTable = ({ jobs, onDelete, onBulkDelete, selectedIds, setSelectedIds,
                             <th className="px-6 py-4 font-black">ID</th>
                             <th className="px-6 py-4 font-black">Group Destination</th>
                             <th className="px-6 py-4 font-black w-1/3">Content Snippet</th>
+                            <th className="px-6 py-4 font-black">Media</th>
                             <th className="px-6 py-4 font-black">Scheduled</th>
                             <th className="px-6 py-4 font-black">Status</th>
                             <th className="px-6 py-4 font-black text-right">Action</th>
@@ -105,7 +234,7 @@ const QueueTable = ({ jobs, onDelete, onBulkDelete, selectedIds, setSelectedIds,
                     <tbody className="divide-y divide-var(--panel-border)">
                         {jobs.length === 0 ? (
                             <tr>
-                                <td colSpan="7" className="px-6 py-12 text-center">
+                                <td colSpan="8" className="px-6 py-12 text-center">
                                     <div className="flex flex-col items-center gap-3 opacity-40">
                                         <Clock className="w-10 h-10 text-[var(--text-secondary)]" />
                                         <p className="text-sm font-medium text-[var(--text-secondary)]">No active tasks found in the queue</p>
@@ -157,6 +286,12 @@ const QueueTable = ({ jobs, onDelete, onBulkDelete, selectedIds, setSelectedIds,
                                         </p>
                                     </td>
                                     <td className="px-6 py-4">
+                                        <MediaBadge
+                                            mediaPaths={job.media_paths}
+                                            onPreview={setPreviewFile}
+                                        />
+                                    </td>
+                                    <td className="px-6 py-4">
                                         <div className="flex flex-col gap-0.5">
                                             <TaskTimer 
                                                 targetTime={job.scheduled_time} 
@@ -204,6 +339,9 @@ const QueueTable = ({ jobs, onDelete, onBulkDelete, selectedIds, setSelectedIds,
                     Live Sync Active
                 </span>
             </div>
+
+            {/* Media Preview Modal */}
+            <MediaPreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
         </div>
     );
 };

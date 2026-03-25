@@ -431,6 +431,75 @@ app.post('/api/upload', strictLimiter, async (req, res) => {
     }
 });
 
+// --- PRE-SIGNED URL ENDPOINT FOR DIRECT CLIENT-SIDE UPLOADS ---
+app.post('/api/upload/presigned', strictLimiter, async (req, res) => {
+    try {
+        console.log('🔗 [PRESIGNED] Request received');
+        console.log('   Payload:', JSON.stringify(req.body, null, 2));
+
+        const { fileName, fileSize, mimeType } = req.body;
+
+        // Validation
+        if (!fileName) {
+            console.error('❌ [PRESIGNED] Missing fileName');
+            return res.status(400).json({ error: 'fileName is required' });
+        }
+        if (!mimeType) {
+            console.error('❌ [PRESIGNED] Missing mimeType');
+            return res.status(400).json({ error: 'mimeType is required' });
+        }
+        if (fileSize && fileSize > 50 * 1024 * 1024) {
+            console.error('❌ [PRESIGNED] File too large:', fileSize);
+            return res.status(400).json({ error: 'File size exceeds 50MB limit' });
+        }
+
+        // Sanitize filename
+        const sanitized = `${Date.now()}-${fileName
+            .replace(/[^\x00-\x7F]/g, '') // Remove non-ASCII
+            .replace(/\s+/g, '-')           // Replace spaces with hyphens
+            .toLowerCase()}`;
+
+        console.log('   Sanitized filename:', sanitized);
+        console.log('   MIME type:', mimeType);
+        console.log('   File size:', fileSize || 'unknown');
+
+        // Generate pre-signed PUT URL (valid for 1 hour)
+        console.log('   Calling Supabase createSignedUrl...');
+        const { data, error } = await supabase.storage
+            .from('campaign-media')
+            .createSignedUrl(sanitized, 3600); // 1 hour expiry
+
+        if (error) {
+            console.error('❌ [PRESIGNED] Supabase error:', error.message);
+            return res.status(500).json({ error: 'Failed to generate pre-signed URL', details: error.message });
+        }
+
+        if (!data || !data.signedUrl) {
+            console.error('❌ [PRESIGNED] No signedUrl in response');
+            return res.status(500).json({ error: 'Failed to generate pre-signed URL: empty response' });
+        }
+
+        console.log('✅ [PRESIGNED] URL generated successfully');
+        console.log('   Signed URL:', data.signedUrl.substring(0, 80) + '...');
+        console.log('   Path:', sanitized);
+        console.log('   Expiry:', new Date(Date.now() + 3600 * 1000).toISOString());
+
+        res.json({
+            success: true,
+            signedUrl: data.signedUrl,
+            filePath: `campaign-media/${sanitized}`,
+            fileName: sanitized,
+            expiresIn: 3600,
+            expiresAt: new Date(Date.now() + 3600 * 1000).toISOString()
+        });
+
+    } catch (err) {
+        console.error('🔥 [PRESIGNED] Unexpected error:', err.message);
+        console.error('   Stack:', err.stack);
+        res.status(500).json({ error: 'Internal server error', details: err.message });
+    }
+});
+
 // --- ANALYTICS ---
 app.get('/api/analytics', async (req, res) => {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -559,12 +628,18 @@ app.post('/api/ai/generate', strictLimiter, async (req, res) => {
 
 // --- 1. PROPER JITTER CALCULATION ---
 app.post('/api/posts', async (req, res) => {
-    const { group_ids, content, schedule, media_url, ai_spin } = req.body;
-    if (!group_ids || !Array.isArray(group_ids) || group_ids.length === 0 || (!content && !media_url)) {
+    const { group_ids, content, schedule, media_url, media_files, ai_spin } = req.body;
+    if (!group_ids || !Array.isArray(group_ids) || group_ids.length === 0 || (!content && !media_url && !media_files)) {
         return res.status(400).json({ error: "Missing groups or content/media" });
     }
 
-    console.log(`🚀 Intelligent Launch: Preparing ${group_ids.length} tasks... (AI Spin: ${ai_spin})`);
+    console.log(`🚀 [POSTS] Intelligent Launch: Preparing ${group_ids.length} tasks...`);
+    console.log(`   AI Spin: ${ai_spin}`);
+    console.log(`   Content length: ${content ? content.length : 0} chars`);
+    console.log(`   Media files: ${media_files ? media_files.length : 0}`);
+    if (media_files && media_files.length > 0) {
+        console.log(`   Files: ${media_files.map(f => f.filePath || f).join(', ')}`);
+    }
 
     // A. Find the last scheduled mission time to avoid overlaps
     let nextScheduleTime = schedule ? new Date(schedule) : new Date();
@@ -582,13 +657,29 @@ app.post('/api/posts', async (req, res) => {
         if (lastTasks && lastTasks.length > 0) {
             const lastTime = new Date(lastTasks[0].scheduled_time);
             if (lastTime > nextScheduleTime) {
-                console.log(`📎 Existing queue detected. Appending after: ${lastTime.toISOString()}`);
+                console.log(`📎 [POSTS] Existing queue detected. Appending after: ${lastTime.toISOString()}`);
                 nextScheduleTime = lastTime;
             }
         }
     } catch (e) {
-        console.error("❌ Error fetching last task time, defaulting to now:", e.message);
+        console.error("❌ [POSTS] Error fetching last task time, defaulting to now:", e.message);
     }
+
+    // Extract file paths from media_files objects
+    const mediaPaths = media_files
+        ? media_files.map(f => f.filePath || f).filter(Boolean)
+        : null;
+
+    // Build media URLs from paths (Supabase public URLs)
+    const getMediaPublicUrl = (filePath) => {
+        const SUPABASE_URL = process.env.SUPABASE_URL;
+        const bucket = 'campaign-media';
+        // Encode filename safely
+        const encodedPath = filePath.split('/').pop();
+        return `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${encodedPath}`;
+    };
+
+    const mediaUrls = mediaPaths ? mediaPaths.map(getMediaPublicUrl) : null;
 
     const tasks = [];
     group_ids.forEach((gid, index) => {
@@ -597,23 +688,37 @@ app.post('/api/posts', async (req, res) => {
             ? Math.floor(Math.random() * 20000) + 10000          // 10–30 seconds
             : Math.floor(Math.random() * (210000 - 150000 + 1)) + 150000; // 150–210 seconds
         nextScheduleTime = new Date(nextScheduleTime.getTime() + jitter);
-        
-        const finalContent = ai_spin ? spinText(content) : content;
+
+        let finalContent = ai_spin ? spinText(content) : content;
+
+        // Embed media URLs in content
+        if (mediaUrls && mediaUrls.length > 0) {
+            console.log(`📸 [POSTS] Embedding ${mediaUrls.length} media URL(s) into content`);
+            const mediaLinksText = '\n\n📸 Media:\n' + mediaUrls.map(url => `🔗 ${url}`).join('\n');
+            finalContent = finalContent + mediaLinksText;
+            console.log(`   Content + media = ${finalContent.length} chars`);
+        }
 
         tasks.push({
             group_id: gid,
             content: finalContent,
-            media_url: media_url || null,
+            media_url: media_url || null,           // Legacy field
+            media_paths: mediaPaths || null,        // New field: array of Supabase Storage paths
             status: 'PENDING',
             scheduled_time: nextScheduleTime.toISOString(),
             app_source: 'backup'
         });
     });
 
+    console.log(`   Creating ${tasks.length} tasks...`);
     const { error } = await supabase.from('posts').insert(tasks);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+        console.error(`❌ [POSTS] Database error:`, error.message);
+        return res.status(500).json({ error: error.message });
+    }
 
-    res.json({ success: true, count: group_ids.length });
+    console.log(`✅ [POSTS] Successfully created ${tasks.length} tasks`);
+    res.json({ success: true, count: group_ids.length, mediaCount: mediaPaths ? mediaPaths.length : 0 });
     io.emit('queue_updated');
 });
 
@@ -915,6 +1020,8 @@ app.patch('/api/tasks/:id/status', async (req, res) => {
 
 // --- QUEUE (POSTS) ---
 app.get('/api/queue', async (req, res) => {
+    console.log('📋 [QUEUE] Fetching queue...');
+
     const { data, error } = await supabase
         .from('posts')
         .select('*, groups(name, url)')
@@ -922,7 +1029,10 @@ app.get('/api/queue', async (req, res) => {
         .order('scheduled_time', { ascending: true })
         .range(0, 4999);
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+        console.error('❌ [QUEUE] Error:', error.message);
+        return res.status(500).json({ error: error.message });
+    }
 
     // Flatten group info into each row
     const rows = (data || []).map(p => ({
@@ -931,6 +1041,13 @@ app.get('/api/queue', async (req, res) => {
         group_url:  p.groups?.url  || null,
         groups: undefined
     }));
+
+    console.log(`✅ [QUEUE] Fetched ${rows.length} tasks`);
+    if (rows.length > 0) {
+        const tasksWithMedia = rows.filter(r => r.media_paths && r.media_paths.length > 0).length;
+        console.log(`   Tasks with media: ${tasksWithMedia}`);
+    }
+
     res.json({ queue: rows });
 });
 
