@@ -4,11 +4,12 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
+// Use service_role key for server (RLS bypass); fall back to anon key for compatibility
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
     console.error("❌ CRITICAL: Missing SUPABASE_URL or SUPABASE_KEY in environment.");
-    // We don't exit here to allow for some graceful error handling or testing contexts, 
+    // We don't exit here to allow for some graceful error handling or testing contexts,
     // but standard operation requires these.
 }
 
