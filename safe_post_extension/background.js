@@ -1,7 +1,7 @@
 console.log("[Background] Service Worker v7.8 — Persistent Poll");
 
 const API_PORT = 3001;
-const BASE_URL = `http://localhost:${API_PORT}`;
+const BASE_URL = 'https://safepost-backup.onrender.com';
 
 // 1. Alarm Setup — MV3 service workers die after ~30s; alarm is the wakeup mechanism
 function setupAlarm() {
