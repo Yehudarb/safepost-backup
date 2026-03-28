@@ -611,18 +611,18 @@ async function typeHumanLike(element, text) {
             const wrongChar = getAdjacentKey(char);
             
             await dispatchSimulatedChar(wrongChar); 
-            await sleep(randomBetween(150, 300)); 
-            await dispatchSimulatedBackspace(); 
-            await sleep(randomBetween(50, 150)); 
+            await sleep(randomBetween(100, 200));
+            await dispatchSimulatedBackspace();
+            await sleep(randomBetween(30, 80)); 
         }
 
         await dispatchSimulatedChar(char);
 
-        let delayInterval = randomBetween(30, 80); 
+        let delayInterval = randomBetween(20, 50);
         if (char === ' ') {
-            delayInterval = randomBetween(100, 200); 
+            delayInterval = randomBetween(60, 150);
         } else if (char === '.' || char === ',' || char === '\n') {
-            delayInterval = randomBetween(500, 1000); 
+            delayInterval = randomBetween(200, 400);
         }
         
         await sleep(delayInterval);
