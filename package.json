@@ -3,8 +3,9 @@
     "version": "2.1.1",
     "type": "module",
     "scripts": {
-        "start-all": "concurrently \"node server/index.cjs\" \"npm run dev\"",
-        "dev": "vite",
+        "start": "NODE_ENV=production node server/index.cjs",
+        "start-all": "concurrently \"cross-env NODE_ENV=development node server/index.cjs\" \"npm run dev\"",
+        "dev": "cross-env NODE_ENV=development vite",
         "build": "vite build",
         "preview": "vite preview"
     },
@@ -38,6 +39,7 @@
         "@vitejs/plugin-react": "^4.0.3",
         "autoprefixer": "^10.4.23",
         "concurrently": "^9.2.1",
+        "cross-env": "^7.0.3",
         "postcss": "^8.5.6",
         "tailwindcss": "^3.4.19",
         "vite": "^6.3.5"

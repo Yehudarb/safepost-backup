@@ -11,9 +11,7 @@ import { Calendar } from '@/components/ui/calendar-bento';
 import { io } from 'socket.io-client';
 import TaskTimer from '@/components/TaskTimer';
 
-const BACKEND_URL = import.meta.env.DEV
-    ? "http://localhost:3001"
-    : "https://safepost-backup.onrender.com";
+const BACKEND_URL = import.meta.env.VITE_API_URL || "https://safepost-backup.onrender.com";
 const API_BASE = `${BACKEND_URL}/api`;
 const socket = io(BACKEND_URL);
 
