@@ -11,9 +11,28 @@ import { Calendar } from '@/components/ui/calendar-bento';
 import { io } from 'socket.io-client';
 import TaskTimer from '@/components/TaskTimer';
 
-const BACKEND_URL = import.meta.env.VITE_API_URL || "https://safepost-backup.onrender.com";
+// Determine backend URL - production uses Render, development uses localhost
+const BACKEND_URL = (() => {
+    // If env var is set, use it
+    if (import.meta.env.VITE_API_URL) {
+        return import.meta.env.VITE_API_URL;
+    }
+    // If on Vercel domain, use production Render backend
+    if (window.location.hostname === 'safepost-backup.vercel.app') {
+        return 'https://safepost-backup.onrender.com';
+    }
+    // Development fallback
+    return 'https://safepost-backup.onrender.com';
+})();
+
 const API_BASE = `${BACKEND_URL}/api`;
-const socket = io(BACKEND_URL);
+const socket = io(BACKEND_URL, {
+    reconnection: true,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    reconnectionAttempts: 5,
+    transports: ['websocket', 'polling']
+});
 
 // --- SSRF GUARD ---
 const PRIVATE_IP_PATTERNS = [
