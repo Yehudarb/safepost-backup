@@ -79,7 +79,13 @@ const app = express();
 // Security headers — applied immediately after app creation
 app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
-    contentSecurityPolicy: false
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'"],
+        }
+    }
 }));
 
 // Standard limiter — 500 requests per minute per IP (dashboard + polling)
@@ -143,8 +149,10 @@ app.use((req, res, next) => {
 // --- MANUAL CORS HEADERS (BEFORE ALL MIDDLEWARE) ---
 app.use((req, res, next) => {
     const origin = req.headers.origin;
-    res.setHeader('Access-Control-Allow-Origin', origin || '*');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    if (origin && ALLOWED_ORIGINS.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS,HEAD');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-requested-with');
     res.setHeader('Access-Control-Max-Age', '86400');
@@ -175,7 +183,7 @@ app.use(cors({
             callback(null, true);
         } else {
             console.log(`⚠️ CORS blocked origin: ${origin}`);
-            callback(null, true); // Allow anyway for debugging
+            callback(new Error('Not allowed by CORS'), false);
         }
     },
     credentials: true,
