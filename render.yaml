@@ -3,6 +3,6 @@ services:
     name: safepost-backup
     env: node
     plan: free
-    buildCommand: bash build.sh
+    buildCommand: node build.js
     startCommand: node server/index.cjs
     healthCheckPath: /api/health
