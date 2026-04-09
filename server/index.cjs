@@ -102,7 +102,16 @@ const strictLimiter = rateLimit({
 
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: { origin: ALLOWED_ORIGINS, methods: ["GET", "POST", "PATCH", "DELETE"] }
+    cors: {
+        origin: function(origin, callback) {
+            callback(null, true); // Allow all origins for WebSocket
+        },
+        methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        credentials: true,
+        allowEIO3: true
+    },
+    transports: ['websocket', 'polling'],
+    maxHttpBufferSize: 50 * 1024 * 1024
 });
 
 const PORT = 3001;
