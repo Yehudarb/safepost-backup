@@ -131,6 +131,23 @@ app.use((req, res, next) => {
     next();
 });
 
+// --- MANUAL CORS HEADERS (BEFORE ALL MIDDLEWARE) ---
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS,HEAD');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-requested-with');
+    res.setHeader('Access-Control-Max-Age', '86400');
+
+    if (req.method === 'OPTIONS') {
+        res.statusCode = 200;
+        res.end();
+        return;
+    }
+    next();
+});
+
 // Process Error Handlers
 process.on('unhandledRejection', (reason, promise) => {
     console.error('🔥 UNHANDLED REJECTION:', reason);
