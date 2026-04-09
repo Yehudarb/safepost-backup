@@ -76,6 +76,9 @@ const ALLOWED_ORIGINS = [
 
 const app = express();
 
+// Trust Render's reverse proxy so express-rate-limit can read real client IPs
+app.set('trust proxy', 1);
+
 // Security headers — applied immediately after app creation
 app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
@@ -149,7 +152,11 @@ app.use((req, res, next) => {
 // --- MANUAL CORS HEADERS (BEFORE ALL MIDDLEWARE) ---
 app.use((req, res, next) => {
     const origin = req.headers.origin;
-    if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    const allowed = origin && (
+        ALLOWED_ORIGINS.includes(origin) ||
+        origin.startsWith('chrome-extension://')
+    );
+    if (allowed) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
@@ -179,7 +186,7 @@ console.log("🚀 Server connecting to Supabase...");
 app.use(cors({
     origin: function (origin, callback) {
         // Allow all origins in development, whitelist in production
-        if (!origin || ALLOWED_ORIGINS.includes(origin) || process.env.NODE_ENV === 'development') {
+        if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.startsWith('chrome-extension://') || process.env.NODE_ENV === 'development') {
             callback(null, true);
         } else {
             console.log(`⚠️ CORS blocked origin: ${origin}`);
