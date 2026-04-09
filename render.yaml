@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: safepost-backup
+    env: node
+    plan: free
+    buildCommand: bash build.sh
+    startCommand: node server/index.cjs
+    healthCheckPath: /api/health
