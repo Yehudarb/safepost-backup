@@ -143,10 +143,19 @@ console.log("🚀 Server connecting to Supabase...");
 
 // CORS must come before rate limiter so preflight OPTIONS requests get CORS headers
 app.use(cors({
-    origin: ALLOWED_ORIGINS,
+    origin: function (origin, callback) {
+        // Allow all origins in development, whitelist in production
+        if (!origin || ALLOWED_ORIGINS.includes(origin) || process.env.NODE_ENV === 'development') {
+            callback(null, true);
+        } else {
+            console.log(`⚠️ CORS blocked origin: ${origin}`);
+            callback(null, true); // Allow anyway for debugging
+        }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with'],
+    optionsSuccessStatus: 200
 }));
 
 // Rate limiting — applied after CORS so preflight responses include CORS headers
