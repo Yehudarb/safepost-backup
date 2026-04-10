@@ -157,7 +157,7 @@ async function performPost(job) {
     logRemote("✅ Clicked Trigger");
 
     window.hud.updateText("פותח חלונית", "ממתין לטעינת ממשק...");
-    await window.hud.startTimer(4);
+    await window.hud.startTimer(1);
 
     // 2. Find the Input Box
     let inputBox = await waitForInputBox();
@@ -188,10 +188,10 @@ async function performPost(job) {
 
     // 3. Inject Text
     window.hud.updateText("כותב תוכן", "מזין טקסט...");
-    await typeHumanLike(inputBox, job.content);
+    await pasteText(inputBox, job.content);
     logRemote("✅ Text injected");
 
-    await window.hud.startTimer(2);
+    await sleep(300);
 
     // 4. Click Post
     logRemote("🔵 Attempting to click POST button");
@@ -238,7 +238,7 @@ async function performPost(job) {
         });
     }
 
-    await sleep(3000);
+    await sleep(500);
     window.hud.destroy();
 
     // Close the Facebook tab when done
@@ -454,23 +454,23 @@ async function clickPostButton() {
 // Helpers
 async function waitForModalClosure() {
     logRemote("⏳ Monitoring modal closure...");
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 12; i++) {
         const dialog = document.querySelector('div[role="dialog"]');
         if (!dialog) return true;
         const dialogText = dialog.innerText || "";
         if (dialogText.includes("Post successful") || dialogText.includes("הפוסט פורסם")) return true;
-        await sleep(500);
+        await sleep(400);
     }
     return false;
 }
 
 async function findPostPermalink() {
     logRemote("🔍 Searching for new post permalink...");
-    await sleep(2000);
+    await sleep(500);
 
     const timePhrases = ["Just now", "אף לא רגע", "עכשיו", "1 min", "1 דק"];
 
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
         const links = Array.from(document.querySelectorAll('a[href*="/groups/"][href*="/permalink/"]'));
         for (const link of links) {
             const text = link.innerText || "";
@@ -480,7 +480,7 @@ async function findPostPermalink() {
                 return url;
             }
         }
-        await sleep(2000);
+        await sleep(800);
     }
 
     logRemote("⚠️ Permalink not found, using group URL as fallback");
@@ -502,7 +502,7 @@ async function findElementRobust(phrases) {
                 if (isElementVisibleAndEnabled(btn)) return btn;
             }
         }
-        await sleep(500);
+        await sleep(200);
     }
     return null;
 }
@@ -516,6 +516,25 @@ async function findElementInModal(phrases) {
         if (found) return found.closest('[role="button"]') || found;
     }
     return null;
+}
+
+async function pasteText(element, text) {
+    element.focus();
+    // Use execCommand insertText — works with React/contenteditable without char-by-char delay
+    const success = document.execCommand('insertText', false, text);
+    if (!success) {
+        // Fallback: dispatch input event with full text for contenteditable
+        if (element.isContentEditable) {
+            element.innerText = text;
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+        } else {
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+                || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+            if (nativeInputValueSetter) nativeInputValueSetter.call(element, text);
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+    }
+    await sleep(100);
 }
 
 async function typeHumanLike(element, text) {
