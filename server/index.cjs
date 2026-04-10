@@ -598,7 +598,7 @@ app.get('/api/analytics', async (req, res) => {
     const failed    = posts.filter(p => p.status === 'FAILED').length;
     const cancelled = posts.filter(p => p.status === 'CANCELLED').length;
     const pending   = posts.filter(p => ['PENDING', 'SENT', 'PROCESSING'].includes(p.status)).length;
-    const successRate = total > 0 ? Math.round((success / (success + failed)) * 100) : 0;
+    const successRate = (success + failed) > 0 ? Math.round((success / (success + failed)) * 100) : 0;
 
     // Posts per day (last 7 days)
     const byDay = {};
@@ -1048,6 +1048,40 @@ app.get('/api/jobs/for-url', async (req, res) => {
         .maybeSingle();
 
     res.json({ job: task ? { ...task, group_url: normalizedUrl, group_name: group.name || task.group_id } : null });
+});
+
+// POST task status update (called by backup extension background.js REPORT_STATUS)
+app.post('/api/tasks/update-status', async (req, res) => {
+    const { taskId, status, failure_reason, proof_url } = req.body;
+    if (!taskId || !status) return res.status(400).json({ error: 'taskId and status required' });
+    console.log(`📝 [POST] /api/tasks/update-status → Task ${taskId}: ${status}`);
+
+    if (status === 'LOG') {
+        if (failure_reason) {
+            await supabase.from('system_logs').insert([{ log_level: 'info', source: 'extension_worker', message: `Task #${taskId}: ${failure_reason}` }]);
+        }
+        return res.json({ success: true, logged: true });
+    }
+
+    const update = { status, updated_at: new Date().toISOString() };
+    if (failure_reason) update.failure_reason = failure_reason;
+    if (proof_url) update.proof_url = proof_url;
+
+    const { error } = await supabase.from('posts').update(update).eq('id', taskId);
+    if (error) console.error('Status update error:', error.message);
+
+    if (status === 'FAILED') {
+        await supabase.from('system_logs').insert([{ log_level: 'error', source: 'extension_worker', message: `Task #${taskId} FAILED: ${failure_reason || 'Unknown error'}` }]);
+    }
+
+    if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(status)) {
+        processingStartTimestamps.delete(parseInt(taskId) || taskId);
+        sentTaskTimestamps.delete(parseInt(taskId) || taskId);
+    }
+
+    io.emit('status_update', { taskId: parseInt(taskId) || taskId, status });
+    io.emit('queue_updated');
+    res.json({ success: true });
 });
 
 // PATCH task status (called by full_app extension on SUCCESS/FAILED)
