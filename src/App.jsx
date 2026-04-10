@@ -28,9 +28,9 @@ const BACKEND_URL = (() => {
 const API_BASE = `${BACKEND_URL}/api`;
 const socket = io(BACKEND_URL, {
     reconnection: true,
-    reconnectionDelay: 1000,
-    reconnectionDelayMax: 5000,
-    reconnectionAttempts: 5,
+    reconnectionDelay: 2000,
+    reconnectionDelayMax: 30000,
+    reconnectionAttempts: Infinity,
     transports: ['websocket', 'polling']
 });
 
@@ -718,6 +718,7 @@ export default function App() {
     const [groups, setGroups]           = useState([]);
     const [queue, setQueue]             = useState([]);
     const [serverStatus, setServerStatus] = useState(false);
+    const consecutiveFailures = React.useRef(0);
     const [workerStatus, setWorkerStatus] = useState({ status: 'OFFLINE', message: 'Initializing...' });
     const [integrity, setIntegrity]     = useState({ version: 'UNKNOWN', status: 'UNKNOWN' });
     const [loading, setLoading]         = useState(false);
@@ -824,6 +825,7 @@ export default function App() {
                 });
                 return updated;
             });
+            consecutiveFailures.current = 0;
             setServerStatus(true);
             setGroupSets(gsData.sets || []);
             setWorkerStatus({
@@ -840,7 +842,8 @@ export default function App() {
             setPostTemplates(tData.templates || []);
         } catch (e) {
             console.error("Data fetch error:", e);
-            setServerStatus(false);
+            consecutiveFailures.current += 1;
+            if (consecutiveFailures.current >= 3) setServerStatus(false);
         } finally {
             if (!silent) setLoading(false);
         }
