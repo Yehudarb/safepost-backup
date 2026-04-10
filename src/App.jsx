@@ -210,7 +210,7 @@ function SaveFolderModal({ selectedGroups, groups, onSave, onClose }) {
                     <div>
                         <label className="text-xs font-bold text-gray-500 uppercase tracking-widest block mb-1.5">Folder Name</label>
                         <input autoFocus
-                            className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 outline-none"
+                            className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 outline-none"
                             placeholder='e.g. "Real Estate Groups"'
                             value={name} onChange={e => setName(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && submit()} />
@@ -317,7 +317,7 @@ function SavePostTemplateModal({ content, mediaUrl, onSave, onClose }) {
                     <div>
                         <label className="text-xs font-bold text-gray-500 uppercase tracking-widest block mb-1.5">Template Name</label>
                         <input autoFocus
-                            className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:ring-offset-1 outline-none"
+                            className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:ring-offset-0 outline-none"
                             placeholder='e.g. "Apartment for Rent"'
                             value={name} onChange={e => setName(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && submit()} />
@@ -378,7 +378,7 @@ function AiPostAssistantModal({ onInsert, onClose }) {
 
     return (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-            <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] w-full max-w-xl rounded-xl shadow-2xl flex flex-col" style={{ height: '600px' }}>
+            <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] w-full max-w-xl rounded-xl shadow-2xl flex flex-col max-h-[90vh] h-[600px]">
 
                 {/* Header */}
                 <div className="p-4 border-b border-gray-200 dark:border-[#30363d] flex justify-between items-center bg-gray-50 dark:bg-[#1c2128] shrink-0">
@@ -433,7 +433,7 @@ function AiPostAssistantModal({ onInsert, onClose }) {
                 <div className="p-3 border-t border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117] shrink-0">
                     <div className="flex gap-2 items-end">
                         <textarea ref={inputRef} autoFocus rows={2}
-                            className="flex-1 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:ring-offset-1 outline-none transition resize-none"
+                            className="flex-1 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:ring-offset-0 outline-none transition resize-none"
                             placeholder='כתוב פוסט על פיצרייה חדשה... שנה טון... הוסף אמוג׳ים...'
                             value={input} onChange={e => setInput(e.target.value)}
                             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }} />
@@ -442,7 +442,7 @@ function AiPostAssistantModal({ onInsert, onClose }) {
                             {generating ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
                         </button>
                     </div>
-                    <p className="text-[10px] text-gray-600 mt-1.5">Enter לשליחה • Shift+Enter לשורה חדשה</p>
+                    <p className="text-[10px] text-gray-600 mt-1.5" dir="rtl">Enter לשליחה &bull; Shift+Enter לשורה חדשה</p>
                 </div>
             </div>
         </div>
@@ -537,7 +537,7 @@ function AnalyticsPanel({ data, onClose }) {
             <div className="p-4 space-y-3">
 
                 {/* ROW 1: KPI 2×2 grid + 7-day bar chart */}
-                <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 2fr' }}>
+                <div className="grid gap-3 grid-cols-1 md:grid-cols-[1fr_2fr]">
 
                     {/* KPI cards */}
                     <div className="grid grid-cols-2 gap-2">
@@ -657,8 +657,7 @@ function AnalyticsPanel({ data, onClose }) {
                                 {topErrors.slice(0, 5).map(({ message, count }, i) => (
                                     <li key={i} className="flex items-start gap-1.5 min-w-0">
                                         <span className="text-[9px] font-black bg-red-500/20 text-red-400 rounded px-1 py-0.5 shrink-0 tabular-nums">{count}×</span>
-                                        <span className="text-[10px] text-gray-400 leading-tight min-w-0"
-                                            style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                                        <span className="text-[10px] text-gray-400 leading-tight min-w-0 line-clamp-2">
                                             {message}
                                         </span>
                                     </li>
@@ -1210,7 +1209,7 @@ export default function App() {
                 <div className="flex items-center gap-3">
                     {workerStopped ? (
                         <button onClick={handleResumeWorker}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-900/20 border border-green-700/50 text-green-400 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-green-900/40 transition">
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-900/30 border border-green-600/60 text-green-300 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-green-900/50 transition">
                             <Zap size={12} /> Resume Worker
                         </button>
                     ) : (
@@ -1242,7 +1241,7 @@ export default function App() {
             <main className="flex w-full pt-16 h-full transition-colors duration-300">
 
                 {/* ── LEFT: COMMAND CENTER ── */}
-                <div className="w-[480px] flex flex-col border-r border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117] overflow-hidden transition-colors duration-300">
+                <div className="w-full md:w-[360px] lg:w-[480px] flex flex-col border-r border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117] overflow-hidden transition-colors duration-300 shrink-0">
                     <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar">
 
                         <div className="flex items-center gap-2 text-slate-800 dark:text-white font-bold pb-2 border-b border-gray-200 dark:border-[#30363d]">
@@ -1264,6 +1263,7 @@ export default function App() {
                                     </button>
                                     <button
                                         onClick={() => setShowLibraryPanel(p => !p)}
+                                        aria-label="תבניות שמורות"
                                         className={`text-[10px] font-bold uppercase flex items-center gap-1 px-2 py-0.5 rounded border transition ${showLibraryPanel ? 'bg-amber-600 text-white border-amber-600' : 'text-amber-400 border-amber-800/50 hover:bg-amber-900/20'}`}>
                                         <Layers size={11} /> Library {postTemplates.length > 0 && `(${postTemplates.length})`}
                                     </button>
@@ -1293,7 +1293,7 @@ export default function App() {
                             )}
 
                             <textarea
-                                className="w-full h-28 bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-3 text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 outline-none transition resize-none"
+                                className="w-full h-28 bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-3 text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 outline-none transition resize-none"
                                 placeholder="Construct post content..."
                                 value={postContent} onChange={e => setPostContent(e.target.value)} />
 
@@ -1333,7 +1333,7 @@ export default function App() {
                                     onClick={() => setUseAiSpin(!useAiSpin)}
                                     aria-label={useAiSpin ? 'כבה AI Smart Spin' : 'הפעל AI Smart Spin'}
                                     aria-pressed={useAiSpin}
-                                    className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-1 ${useAiSpin ? 'bg-amber-500' : 'bg-gray-300 dark:bg-gray-700'}`}
+                                    className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-0 ${useAiSpin ? 'bg-amber-500' : 'bg-gray-300 dark:bg-gray-700'}`}
                                 >
                                     <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${useAiSpin ? 'translate-x-6' : 'translate-x-1'}`} />
                                 </button>
@@ -1467,12 +1467,12 @@ export default function App() {
                             {/* Search & Smart Filters */}
                             <div className="space-y-2">
                                 <div className="relative">
-                                    <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                                    <input type="text" placeholder="Filter groups…"
+                                    <Search size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                                    <input type="text" placeholder="Filter groups…" dir="rtl"
                                         value={groupSearch} onChange={e => setGroupSearch(e.target.value)}
-                                        className="w-full pl-7 pr-7 py-2 bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg text-xs text-slate-700 dark:text-gray-300 placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 outline-none transition" />
+                                        className="w-full pr-7 pl-7 py-2 bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg text-xs text-slate-700 dark:text-gray-300 placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 outline-none transition" />
                                     {groupSearch && (
-                                        <button onClick={() => setGroupSearch('')} aria-label="נקה חיפוש" className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-300 transition">
+                                        <button onClick={() => setGroupSearch('')} aria-label="נקה חיפוש" className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-300 transition">
                                             <X size={11} />
                                         </button>
                                     )}
@@ -1573,7 +1573,7 @@ export default function App() {
                 </div>
 
                 {/* ── RIGHT: MONITOR ── */}
-                <div className="flex-1 bg-slate-50 dark:bg-[#0d1117] p-8 overflow-y-auto">
+                <div className="flex-1 bg-slate-50 dark:bg-[#0d1117] p-4 md:p-6 lg:p-8 overflow-y-auto">
 
                     {/* Worker Stop Banner */}
                     {workerStopped && (
@@ -1590,7 +1590,7 @@ export default function App() {
                     )}
 
                     {/* Stats */}
-                    <div className="grid grid-cols-5 gap-4 mb-4">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 md:gap-4 mb-4">
                         <StatBox label="Total"            value={stats.total}      icon={<Layers      className="text-blue-500" />} />
                         <StatBox label="Pending"          value={stats.pending}    icon={<Clock       className="text-yellow-500" />} />
                         <StatBox label="Processing"       value={stats.processing} icon={<Zap         className="text-blue-400" />} />
@@ -1663,17 +1663,17 @@ export default function App() {
                                 <thead className={`bg-gray-50 dark:bg-[#0d1117] text-gray-500 dark:text-gray-400 uppercase font-semibold border-b border-gray-100 dark:border-[#30363d] ${isCompact ? 'text-[9px]' : 'text-xs'}`}>
                                     <tr>
                                         <th className={`${isCompact ? 'p-2' : 'p-4'} w-10`}>
-                                            <button onClick={toggleAll} className="p-1 hover:bg-gray-200 dark:hover:bg-gray-800 rounded transition">
+                                            <button onClick={toggleAll} aria-label="בחר הכל" className="p-1 hover:bg-gray-200 dark:hover:bg-gray-800 rounded transition">
                                                 {selectedTaskIds.length > 0 && selectedTaskIds.length === filteredQueue.length
                                                     ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} />}
                                             </button>
                                         </th>
-                                        <th className={`${isCompact ? 'p-2' : 'p-4'} w-20`}>ID</th>
-                                        <th className={`${isCompact ? 'p-2' : 'p-4'} w-56`}>Destination Node</th>
+                                        <th className={`${isCompact ? 'p-2' : 'p-4'} w-16 lg:w-20`}>ID</th>
+                                        <th className={`${isCompact ? 'p-2' : 'p-4'} w-40 lg:w-56`}>Destination Node</th>
                                         <th className={`${isCompact ? 'p-2' : 'p-4'}`}>Payload Preview</th>
-                                        <th className={`${isCompact ? 'p-2' : 'p-4'} w-36`}>T-Minus / ETA</th>
-                                        <th className={`${isCompact ? 'p-2' : 'p-4'} w-28 text-center`}>Status</th>
-                                        <th className={`${isCompact ? 'p-2' : 'p-4'} w-32 text-center`}>Actions</th>
+                                        <th className={`${isCompact ? 'p-2' : 'p-4'} w-28 lg:w-36`}>T-Minus / ETA</th>
+                                        <th className={`${isCompact ? 'p-2' : 'p-4'} w-28 lg:w-32 text-center`}>Status</th>
+                                        <th className={`${isCompact ? 'p-2' : 'p-4'} w-24 lg:w-32 text-center`}>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody className={`divide-y divide-gray-100 dark:divide-[#30363d] text-xs`} onClick={handleTableClick}>
@@ -1692,7 +1692,7 @@ export default function App() {
                                                     <div className="truncate" title={row.group_name}>{row.group_name || 'Unknown'}</div>
                                                     <div className="text-[10px] text-gray-600 font-mono truncate">{row.group_id}</div>
                                                 </td>
-                                                <td className={`${isCompact ? 'p-2' : 'p-4'} text-gray-400 max-w-xs`}>
+                                                <td className={`${isCompact ? 'p-2' : 'p-4'} text-gray-400 max-w-[200px] lg:max-w-xs`}>
                                                     <div className="truncate" title={row.content}>"{row.content}"</div>
                                                 </td>
                                                 <td className={`${isCompact ? 'p-2' : 'p-4'} text-gray-500 font-mono text-[10px]`}>
@@ -1708,11 +1708,11 @@ export default function App() {
                                                     </div>
                                                 </td>
                                                 <td className={`${isCompact ? 'p-2' : 'p-4'} text-center`}>
-                                                    <span className={`px-2 py-1 rounded text-[10px] font-bold border inline-flex w-24 justify-center ${getStatusBadge(row.status)}`}>
+                                                    <span className={`px-2 py-1 rounded text-[10px] font-bold border inline-flex min-w-[5.5rem] justify-center whitespace-nowrap ${getStatusBadge(row.status)}`}>
                                                         {row.status}
                                                     </span>
                                                     {row.failure_reason && (
-                                                        <div className="mt-1 text-[9px] text-rose-400 font-medium max-w-[140px] truncate flex items-center gap-1" title={row.failure_reason}>
+                                                        <div className="mt-1 text-[10px] text-rose-300 font-medium max-w-[160px] truncate flex items-center gap-1" title={row.failure_reason}>
                                                             <AlertTriangle size={9} className="flex-shrink-0" />
                                                             {row.failure_reason}
                                                         </div>
@@ -1781,19 +1781,19 @@ export default function App() {
                         <div className="p-6 space-y-4">
                             <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-gray-500 uppercase">Payload Content</label>
-                                <textarea className="w-full h-32 bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-3 text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 transition resize-none outline-none"
+                                <textarea className="w-full h-32 bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-3 text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 transition resize-none outline-none"
                                     defaultValue={editingTask.content} id="edit-content" />
                             </div>
                             <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-gray-500 uppercase">New T-Minus Schedule</label>
-                                <div className="bg-white dark:bg-white border border-gray-300 rounded-lg px-3 py-2 flex items-center">
-                                    <CalendarIcon size={16} className="text-gray-800 mr-2" />
-                                    <input type="datetime-local" className="bg-transparent text-black text-xs w-full outline-none font-medium"
-                                        defaultValue={(() => { const d = new Date(editingTask.scheduled_time); const pad = n => String(n).padStart(2, "0"); return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes()); })()} id="edit-time" style={{ colorScheme: 'light' }} />
+                                <div className="bg-white dark:bg-[#1c2128] border border-gray-300 dark:border-[#30363d] rounded-lg px-3 py-2 flex items-center">
+                                    <CalendarIcon size={16} className="text-gray-800 dark:text-gray-300 mr-2" />
+                                    <input type="datetime-local" className="bg-transparent text-black dark:text-white text-xs w-full outline-none font-medium"
+                                        defaultValue={(() => { const d = new Date(editingTask.scheduled_time); const pad = n => String(n).padStart(2, "0"); return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes()); })()} id="edit-time" />
                                 </div>
                             </div>
                         </div>
-                        <div className="p-6 bg-gray-50 dark:bg-[#0d1117] flex justify-end gap-3 border-t border-gray-100 dark:border-transparent">
+                        <div className="p-6 bg-gray-50 dark:bg-[#0d1117] flex justify-end gap-3 border-t border-gray-100 dark:border-transparent" dir="ltr">
                             <button onClick={() => setEditingTask(null)} className="px-4 py-2 text-xs font-bold uppercase text-gray-400 hover:text-white transition">Cancel</button>
                             <button onClick={() => {
                                 const content = document.getElementById('edit-content').value;
@@ -1861,10 +1861,10 @@ export default function App() {
 
 function StatBox({ label, value, icon }) {
     return (
-        <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] p-5 rounded-lg flex items-center justify-between shadow-sm transition-colors duration-300">
+        <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] p-3 lg:p-5 rounded-lg flex items-center justify-between shadow-sm transition-colors duration-300">
             <div>
-                <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{label}</div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{value}</div>
+                <div className="text-[9px] lg:text-[10px] font-bold text-gray-500 uppercase tracking-wider">{label}</div>
+                <div className="text-xl lg:text-2xl font-bold text-slate-900 dark:text-white mt-1">{value}</div>
             </div>
             <div className="p-2 bg-gray-100 dark:bg-[#0d1117] rounded-lg border border-gray-200 dark:border-[#30363d]">{icon}</div>
         </div>
