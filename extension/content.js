@@ -134,6 +134,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
+async function reportStatus(taskId, status, extra = {}) {
+    const payload = { taskId, status, ...extra };
+    console.log(`[SafePost] Reporting status: ${status} for task ${taskId}`);
+    try {
+        const res = await fetch(`${BASE_URL}/api/tasks/update-status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        console.log(`[SafePost] ✅ Status reported: ${status}`, data);
+    } catch (err) {
+        console.error(`[SafePost] ❌ Status report failed:`, err);
+        // Fallback via background.js
+        safeSendMessage({ action: "REPORT_STATUS", payload });
+    }
+}
+
+async function closeTab() {
+    safeSendMessage({ action: 'CLOSE_TAB' });
+    setTimeout(() => { try { window.close(); } catch(e) {} }, 1500);
+}
+
 async function performPost(job) {
     logRemote("🤖 Starting Execution Sequence", { jobId: job.id });
 
@@ -146,11 +169,10 @@ async function performPost(job) {
     if (!trigger) {
         logRemote("❌ Trigger not found");
         window.hud.updateText("שגיאה", "לא נמצא כפתור יצירת פוסט");
-        safeSendMessage({ action: "REPORT_STATUS", payload: { taskId: job.id, status: 'FAILED', failure_reason: "Trigger button not found" } });
-        await sleep(1000);
+        await reportStatus(job.id, 'FAILED', { failure_reason: "Trigger button not found" });
+        await sleep(500);
         window.hud.destroy();
-        safeSendMessage({ action: 'CLOSE_TAB' });
-        setTimeout(() => { try { window.close(); } catch(e) {} }, 1500);
+        closeTab();
         return;
     }
 
@@ -165,11 +187,10 @@ async function performPost(job) {
     if (!inputBox) {
         logRemote("❌ Input box not found");
         window.hud.updateText("שגיאה קריטית", "לא נמצאה תיבת טקסט.");
-        safeSendMessage({ action: "REPORT_STATUS", payload: { taskId: job.id, status: 'FAILED', failure_reason: "Input box not found" } });
-        await sleep(1000);
+        await reportStatus(job.id, 'FAILED', { failure_reason: "Input box not found" });
+        await sleep(500);
         window.hud.destroy();
-        safeSendMessage({ action: 'CLOSE_TAB' });
-        setTimeout(() => { try { window.close(); } catch(e) {} }, 1500);
+        closeTab();
         return;
     }
 
@@ -213,40 +234,23 @@ async function performPost(job) {
         const verifySuccess = await waitForModalClosure();
         if (verifySuccess) {
             logRemote("🎯 Post Success Verified. Capturing permalink...");
-            window.hud.updateText("מזהה לינק...", "מחפש כתובת פוסט...");
-            const proofUrl = await findPostPermalink();
-
-            logRemote("🎯 Final Post Result", { proofUrl });
             window.hud.updateText("הצלחה! 🏆", "הפוסט פורסם.");
-
-            safeSendMessage({
-                action: "REPORT_STATUS",
-                payload: { taskId: job.id, status: 'SUCCESS', proof_url: proofUrl }
-            });
+            const proofUrl = await findPostPermalink();
+            await reportStatus(job.id, 'SUCCESS', { proof_url: proofUrl });
         } else {
-            logRemote("❓ Modal closure timed out");
-            window.hud.updateText("בדיקת סיום", "ממתין לאימות פייסבוק...");
-            safeSendMessage({
-                action: "REPORT_STATUS",
-                payload: { taskId: job.id, status: 'SUCCESS', metadata: { notice: 'No modal closure confirmation' } }
-            });
+            logRemote("❓ Modal closure timed out — assuming success");
+            window.hud.updateText("הצלחה! 🏆", "הפוסט פורסם.");
+            await reportStatus(job.id, 'SUCCESS', { failure_reason: 'No modal closure confirmation' });
         }
     } else {
         logRemote("❌ Failed to find or click Post button");
         window.hud.updateText("שגיאה", "כפתור פרסום לא נמצא");
-        safeSendMessage({
-            action: "REPORT_STATUS",
-            payload: { taskId: job.id, status: 'FAILED', failure_reason: "Post button not found" }
-        });
+        await reportStatus(job.id, 'FAILED', { failure_reason: "Post button not found" });
     }
 
     await sleep(500);
     window.hud.destroy();
-
-    // Close the Facebook tab when done
-    safeSendMessage({ action: 'CLOSE_TAB' });
-    // Fallback: close directly if extension message fails
-    setTimeout(() => { try { window.close(); } catch(e) {} }, 1500);
+    closeTab();
 }
 
 async function waitForInputBox() {
