@@ -520,21 +520,12 @@ async function findElementInModal(phrases) {
 
 async function pasteText(element, text) {
     element.focus();
-    // Use execCommand insertText — works with React/contenteditable without char-by-char delay
-    const success = document.execCommand('insertText', false, text);
-    if (!success) {
-        // Fallback: dispatch input event with full text for contenteditable
-        if (element.isContentEditable) {
-            element.innerText = text;
-            element.dispatchEvent(new Event('input', { bubbles: true }));
-        } else {
-            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-                || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-            if (nativeInputValueSetter) nativeInputValueSetter.call(element, text);
-            element.dispatchEvent(new Event('input', { bubbles: true }));
-        }
+    // Type fast but visibly: ~15-25ms per char → ~4s for 200 chars
+    const randomBetween = (min, max) => Math.floor(Math.random() * (max - min + 1) + min);
+    for (const char of text) {
+        document.execCommand('insertText', false, char);
+        await sleep(randomBetween(15, 25));
     }
-    await sleep(100);
 }
 
 async function typeHumanLike(element, text) {
