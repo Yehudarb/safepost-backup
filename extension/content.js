@@ -147,9 +147,10 @@ async function performPost(job) {
         logRemote("❌ Trigger not found");
         window.hud.updateText("שגיאה", "לא נמצא כפתור יצירת פוסט");
         safeSendMessage({ action: "REPORT_STATUS", payload: { taskId: job.id, status: 'FAILED', failure_reason: "Trigger button not found" } });
-        await sleep(3000);
+        await sleep(1000);
         window.hud.destroy();
         safeSendMessage({ action: 'CLOSE_TAB' });
+        setTimeout(() => { try { window.close(); } catch(e) {} }, 1500);
         return;
     }
 
@@ -165,9 +166,10 @@ async function performPost(job) {
         logRemote("❌ Input box not found");
         window.hud.updateText("שגיאה קריטית", "לא נמצאה תיבת טקסט.");
         safeSendMessage({ action: "REPORT_STATUS", payload: { taskId: job.id, status: 'FAILED', failure_reason: "Input box not found" } });
-        await sleep(3000);
+        await sleep(1000);
         window.hud.destroy();
         safeSendMessage({ action: 'CLOSE_TAB' });
+        setTimeout(() => { try { window.close(); } catch(e) {} }, 1500);
         return;
     }
 
@@ -243,6 +245,8 @@ async function performPost(job) {
 
     // Close the Facebook tab when done
     safeSendMessage({ action: 'CLOSE_TAB' });
+    // Fallback: close directly if extension message fails
+    setTimeout(() => { try { window.close(); } catch(e) {} }, 1500);
 }
 
 async function waitForInputBox() {
