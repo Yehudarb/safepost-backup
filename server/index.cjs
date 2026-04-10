@@ -1063,7 +1063,7 @@ app.post('/api/tasks/update-status', async (req, res) => {
         return res.json({ success: true, logged: true });
     }
 
-    const update = { status, updated_at: new Date().toISOString() };
+    const update = { status };
     if (failure_reason) update.failure_reason = failure_reason;
     if (proof_url) update.proof_url = proof_url;
 
@@ -1110,7 +1110,7 @@ app.patch('/api/tasks/:id/status', async (req, res) => {
         return res.json({ success: true, logged: true });
     }
 
-    const update = { status, updated_at: new Date().toISOString() };
+    const update = { status };
     if (failReason) update.failure_reason = failReason;
     if (completed_at) update.ended_at = completed_at;
     if (proof_url) update.proof_url = proof_url;
