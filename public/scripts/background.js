@@ -1,5 +1,7 @@
 console.log("[Background] Service Worker Loaded");
 
+const API_BASE = 'https://safepost-backup.onrender.com';
+
 // 1. Setup Alarm
 chrome.runtime.onInstalled.addListener(() => setupAlarm());
 chrome.runtime.onStartup.addListener(() => setupAlarm());
@@ -23,7 +25,7 @@ async function checkJobs() {
     if (isScanning) return;
     isScanning = true;
     try {
-        const res = await fetch('http://localhost:3001/api/jobs/next');
+        const res = await fetch(`${API_BASE}/api/jobs/next`);
         if (!res.ok) return;
 
         const data = await res.json();
@@ -59,7 +61,7 @@ async function checkJobs() {
 // 3. Message Listener — handles reports from content.js
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'REPORT_STATUS') {
-        fetch('http://localhost:3001/api/tasks/update-status', {
+        fetch(`${API_BASE}/api/tasks/update-status`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(request.payload)
@@ -68,7 +70,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'SYNC_GROUPS') {
-        fetch('http://localhost:3001/api/groups/sync', {
+        fetch(`${API_BASE}/api/groups/sync`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ groups: request.groups })
