@@ -15,7 +15,7 @@ const TaskTimer = ({ targetTime, status, onComplete }) => {
     const [timeLeft, setTimeLeft] = useState(() => {
         const isPending = status && status.toUpperCase() === 'PENDING';
         if (!isPending || !targetTime) return null;
-        
+
         const diff = new Date(targetTime).getTime() - new Date().getTime();
         return Math.max(0, diff);
     });
