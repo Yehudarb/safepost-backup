@@ -921,11 +921,12 @@ export default function App() {
         const refresh = () => fetchAllData(true);
         socket.on('status_update', ({ taskId, status }) => {
             const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const tid = Number(taskId);
             setStatusTimestamps(prev => ({
                 ...prev,
-                [taskId]: { ...(prev[taskId] || {}), [status]: now }
+                [tid]: { ...(prev[tid] || {}), [status]: now }
             }));
-            setQueue(prev => prev.map(q => q.id === taskId ? { ...q, status } : q));
+            setQueue(prev => prev.map(q => q.id === tid ? { ...q, status } : q));
         });
         socket.on('queue_updated', refresh);
         socket.on('data_updated', refresh);

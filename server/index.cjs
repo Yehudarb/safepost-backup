@@ -1067,20 +1067,27 @@ app.post('/api/tasks/update-status', async (req, res) => {
     if (failure_reason) update.failure_reason = failure_reason;
     if (proof_url) update.proof_url = proof_url;
 
-    const { error } = await supabase.from('posts').update(update).eq('id', taskId);
-    if (error) console.error('Status update error:', error.message);
+    const numericId = parseInt(taskId) || taskId;
+    const { error } = await supabase.from('posts').update(update).eq('id', numericId);
+    if (error) {
+        console.error('Status update error:', error.message);
+        return res.status(500).json({ error: error.message });
+    }
+
+    console.log(`✅ [POST] Task ${numericId} updated to ${status} in DB`);
 
     if (status === 'FAILED') {
-        await supabase.from('system_logs').insert([{ log_level: 'error', source: 'extension_worker', message: `Task #${taskId} FAILED: ${failure_reason || 'Unknown error'}` }]);
+        await supabase.from('system_logs').insert([{ log_level: 'error', source: 'extension_worker', message: `Task #${numericId} FAILED: ${failure_reason || 'Unknown error'}` }]);
     }
 
     if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(status)) {
-        processingStartTimestamps.delete(parseInt(taskId) || taskId);
-        sentTaskTimestamps.delete(parseInt(taskId) || taskId);
+        processingStartTimestamps.delete(numericId);
+        sentTaskTimestamps.delete(numericId);
     }
 
-    io.emit('status_update', { taskId: parseInt(taskId) || taskId, status });
-    io.emit('queue_updated');
+    io.emit('status_update', { taskId: numericId, status });
+    // Delayed queue_updated to let status_update settle in frontend first
+    setTimeout(() => io.emit('queue_updated'), 500);
     res.json({ success: true });
 });
 
