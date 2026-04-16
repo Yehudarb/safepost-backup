@@ -1,5 +1,8 @@
 console.log("[Background] Service Worker v7.8 — Persistent Poll");
 
+// Load extension storage utility
+importScripts('extensionStorage.js');
+
 const API_PORT = 3001;
 const BASE_URL = 'https://safepost-backup.onrender.com';
 
@@ -103,18 +106,18 @@ async function checkJobs() {
         if (!data || !data.job) return;
 
         const job = data.job;
-        const memory = await chrome.storage.local.get(['lastJobId']);
-        if (memory.lastJobId === job.id) {
+        const lastJobId = await ExtStorage.getLastJobId();
+        if (lastJobId === job.id) {
             // If we've seen this job before but it's STILL being returned as 'SENT',
             // it means we picked it up but couldn't move it to 'PROCESSING' or it's stuck.
             // We'll clear the lastJobId to allow one retry, or let the server heartbeat handle it.
             console.warn("[Background] Job already seen but still SENT. Clearing lastJobId to allow retry/bypass:", job.id);
-            await chrome.storage.local.remove('lastJobId');
+            await ExtStorage.clearLastJobId();
             return;
         }
 
         console.log("[Background] New Job:", job.id);
-        await chrome.storage.local.set({ lastJobId: job.id });
+        await ExtStorage.setLastJobId(job.id);
 
         try {
             const tab = await chrome.tabs.create({ url: job.group_url, active: true });
@@ -123,7 +126,7 @@ async function checkJobs() {
             const loadTimeout = setTimeout(() => {
                 chrome.tabs.onUpdated.removeListener(listener);
                 console.error("[Background] Tab load TIMEOUT for job:", job.id);
-                chrome.storage.local.remove('lastJobId'); // Allow retry since we failed
+                ExtStorage.clearLastJobId(); // Allow retry since we failed
             }, 60000);
 
             function listener(tabId, info) {
@@ -143,10 +146,7 @@ async function checkJobs() {
                         }
 
                         const cooldownSeconds = Math.floor(Math.random() * (720 - 180 + 1)) + 180;
-                        chrome.storage.local.set({
-                            last_post_timestamp: Date.now(),
-                            cooldown_until: Date.now() + (cooldownSeconds * 1000)
-                        });
+                        await ExtStorage.setCooldown(cooldownSeconds * 1000);
                         console.log(`[SAFETY] Cooldown active for ${cooldownSeconds}s`);
                     }, 5000);
                 }
@@ -155,7 +155,7 @@ async function checkJobs() {
 
         } catch (tabErr) {
             console.error("[Background] Tab Creation Failed:", tabErr);
-            await chrome.storage.local.remove('lastJobId'); // Allow retry
+            await ExtStorage.clearLastJobId(); // Allow retry
         }
 
     } catch (err) {
@@ -167,7 +167,7 @@ async function checkJobs() {
 
 // Safety Cooldown Check (3-Minute Delay)
 async function checkSafetyCooldown() {
-    const { last_post_timestamp } = await chrome.storage.local.get('last_post_timestamp');
+    const last_post_timestamp = await ExtStorage.getCooldownTimestamp();
     if (!last_post_timestamp) return false;
 
     const timeSince = Date.now() - last_post_timestamp;
