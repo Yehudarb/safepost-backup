@@ -10,6 +10,8 @@ import {
 import { Calendar } from '@/components/ui/calendar-bento';
 import { io } from 'socket.io-client';
 import TaskTimer from '@/components/TaskTimer';
+import SaveFolderModal from '@/components/modals/SaveFolderModal';
+import StopWorkerModal from '@/components/modals/StopWorkerModal';
 
 // Determine backend URL - production uses Render, development uses localhost
 const BACKEND_URL = (() => {
@@ -172,113 +174,6 @@ function CountdownTimer({ queue, fetchAllData }) {
             <Clock size={14} />
             <span className="text-[10px] opacity-70 uppercase font-black">Next Post</span>
             <span className="text-sm tracking-tighter">{mm}:{ss}</span>
-        </div>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// SAVE FOLDER MODAL
-// ---------------------------------------------------------------------------
-function SaveFolderModal({ selectedGroups, groups, onSave, onClose }) {
-    const [name, setName] = useState('');
-    const [saving, setSaving] = useState(false);
-    const [error, setError] = useState('');
-
-    const submit = async () => {
-        if (!name.trim()) return;
-        setSaving(true);
-        setError('');
-        try {
-            await onSave(name.trim());
-        } catch (e) {
-            setError(e.message || 'Save failed');
-        } finally {
-            setSaving(false);
-        }
-    };
-
-    return (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-            <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] w-full max-w-sm rounded-xl shadow-2xl overflow-hidden">
-                <div className="p-4 border-b border-gray-200 dark:border-[#30363d] flex justify-between items-center bg-gray-50 dark:bg-[#1c2128]">
-                    <h2 className="text-gray-900 dark:text-white font-bold text-sm flex items-center gap-2">
-                        <FolderPlus size={16} className="text-blue-400" /> Save as Folder
-                    </h2>
-                    <button onClick={onClose} aria-label="סגור" className="text-gray-400 hover:text-gray-900 dark:hover:text-white transition"><X size={18} /></button>
-                </div>
-                <div className="p-4 space-y-4">
-                    <div>
-                        <label className="text-xs font-bold text-gray-500 uppercase tracking-widest block mb-1.5">Folder Name</label>
-                        <input autoFocus
-                            className="w-full bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 outline-none"
-                            placeholder='e.g. "Real Estate Groups"'
-                            value={name} onChange={e => setName(e.target.value)}
-                            onKeyDown={e => e.key === 'Enter' && submit()} />
-                    </div>
-                    <div className="bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-3">
-                        <p className="text-xs text-gray-500 uppercase tracking-widest mb-2">Saving {selectedGroups.length} groups</p>
-                        <div className="space-y-1 max-h-32 overflow-y-auto">
-                            {selectedGroups.slice(0, 8).map(id => {
-                                const g = groups.find(x => x.id === id);
-                                return g ? <div key={id} className="text-xs text-gray-400 truncate" dir="rtl">{g.name}</div> : null;
-                            })}
-                            {selectedGroups.length > 8 && <div className="text-[10px] text-gray-600">+{selectedGroups.length - 8} more…</div>}
-                        </div>
-                    </div>
-                </div>
-                {error && (
-                    <div className="px-4 pb-3 text-xs text-red-400 bg-red-900/20 border-t border-red-900/40 py-2">
-                        ❌ {error}
-                    </div>
-                )}
-                <div className="p-4 bg-gray-50 dark:bg-[#0d1117] flex justify-end gap-2 border-t border-gray-200 dark:border-[#30363d]">
-                    <button onClick={onClose} className="px-4 py-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white font-semibold transition rounded-lg hover:bg-gray-100 dark:hover:bg-[#21262d]">Cancel</button>
-                    <button onClick={submit} disabled={!name.trim() || saving}
-                        className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-200 dark:disabled:bg-[#21262d] disabled:text-gray-400 dark:disabled:text-gray-600 text-white rounded-lg text-xs font-bold uppercase tracking-widest transition flex items-center gap-2">
-                        {saving ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />} Save Folder
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// STOP WORKER CONFIRMATION MODAL
-// ---------------------------------------------------------------------------
-function StopWorkerModal({ onConfirm, onClose, workerActive }) {
-    return (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
-            <div className="bg-white dark:bg-[#161b22] border border-red-900/50 w-full max-w-md rounded-xl shadow-2xl overflow-hidden">
-                <div className="p-4 border-b border-red-900/40 bg-red-900/20 flex items-center gap-3">
-                    <StopCircle size={20} className="text-red-400 shrink-0" />
-                    <div>
-                        <h2 className="text-gray-900 dark:text-white font-bold text-sm">Send Stop Signal</h2>
-                        <p className="text-[10px] text-red-400 mt-0.5">Worker will halt after current operation</p>
-                    </div>
-                </div>
-                <div className="p-5 space-y-3">
-                    <div className="bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-3 text-xs text-gray-400 space-y-2">
-                        <p>• The extension will <span className="text-gray-900 dark:text-white font-bold">not pick up new jobs</span> for 10 minutes</p>
-                        <p>• Any task <span className="text-yellow-400 font-bold">currently PROCESSING</span> will still complete</p>
-                        <p>• Use <span className="text-green-400 font-bold">"Resume Worker"</span> to restore normal operation</p>
-                        <p>• To stop immediately — also <span className="text-orange-400 font-bold">Cancel All Pending</span> tasks</p>
-                    </div>
-                    {workerActive && (
-                        <div className="flex items-center gap-2 px-3 py-2 bg-yellow-900/20 border-yellow-800/40 rounded-lg">
-                            <AlertTriangle size={12} className="text-yellow-400 shrink-0" />
-                            <span className="text-xs text-yellow-400">Worker is currently ACTIVE — a post may be mid-execution</span>
-                        </div>
-                    )}
-                </div>
-                <div className="p-4 flex justify-end gap-2 border-t border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117]">
-                    <button onClick={onClose} className="px-4 py-2 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white font-semibold transition rounded-lg hover:bg-gray-100 dark:hover:bg-[#21262d]">Cancel</button>
-                    <button onClick={onConfirm}
-                        className="px-5 py-2 bg-red-700 hover:bg-red-600 text-white rounded-lg text-xs font-bold uppercase tracking-widest transition flex items-center gap-2">
-                        <StopCircle size={12} /> Send Stop Signal
-                    </button>
-                </div>
-            </div>
         </div>
     );
 }
