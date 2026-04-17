@@ -164,8 +164,12 @@ const AnalyticsPanel = ({ data, onClose }) => {
                             <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-3">קבוצות מובילות</h3>
                             <div className="space-y-2">
                                 {topGroups.slice(0, 5).map((group, i) => (
-                                    <div key={i} className="flex justify-between items-center p-2 bg-[#1c2128] rounded-lg">
-                                        <span className="text-sm text-white" dir="rtl">{group.name}</span>
+                                    <div key={i} className="flex justify-between items-center p-2 bg-[#1c2128] rounded-lg hover:bg-[#21262d] transition">
+                                        {group.url ? (
+                                            <a href={group.url} target="_blank" rel="noreferrer" className="text-sm text-blue-400 hover:text-blue-300 hover:underline transition" dir="rtl">{group.name}</a>
+                                        ) : (
+                                            <span className="text-sm text-white" dir="rtl">{group.name}</span>
+                                        )}
                                         <span className="text-xs text-gray-500">{group.total} posts • {group.success} success</span>
                                     </div>
                                 ))}

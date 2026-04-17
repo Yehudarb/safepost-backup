@@ -1187,7 +1187,13 @@ export default function App() {
                                                 </td>
                                                 <td className={`${isCompact ? 'p-2' : 'p-4'} font-mono text-gray-500`}>#{row.id}</td>
                                                 <td className={`${isCompact ? 'p-2' : 'p-4'} font-medium text-slate-800 dark:text-white max-w-[180px]`}>
-                                                    <div className="truncate" title={row.group_name}>{row.group_name || 'Unknown'}</div>
+                                                    {row.group_url ? (
+                                                        <a href={row.group_url} target="_blank" rel="noreferrer" className="truncate hover:text-blue-400 transition text-blue-500 dark:text-blue-400 hover:underline" title={row.group_name}>
+                                                            {row.group_name || 'Unknown'}
+                                                        </a>
+                                                    ) : (
+                                                        <div className="truncate" title={row.group_name}>{row.group_name || 'Unknown'}</div>
+                                                    )}
                                                     <div className="text-[10px] text-gray-600 font-mono truncate">{row.group_id}</div>
                                                 </td>
                                                 <td className={`${isCompact ? 'p-2' : 'p-4'} text-gray-400 max-w-[200px] lg:max-w-xs`}>
