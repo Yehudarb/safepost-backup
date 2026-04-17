@@ -275,6 +275,7 @@ export default function App() {
 
     // Action loading states
     const [isCancelling, setIsCancelling]         = useState(false);
+    const [isResettingStuck, setIsResettingStuck] = useState(false);
     const [isStoppingWorker, setIsStoppingWorker] = useState(false);
     const [isSyncingGroups, setIsSyncingGroups]   = useState(false);
     const [extensionId, setExtensionId]           = useState(null);
@@ -559,6 +560,22 @@ export default function App() {
         try { await ApiService.cancelAllPending(); fetchAllData(true); }
         catch (e) { alert(`❌ ${e.message}`); }
         finally { setIsCancelling(false); }
+    };
+
+    const handleResetStuckTasks = async () => {
+        const stuckCount = queue.filter(q => q.status === 'PROCESSING' || q.status === 'SENT').length;
+        if (stuckCount === 0) return alert('No stuck tasks found (no PROCESSING/SENT tasks).');
+        if (!confirm(`Reset stuck tasks (PROCESSING/SENT >4min)?\nThey will return to PENDING with new schedule.`)) return;
+        setIsResettingStuck(true);
+        try {
+            const res = await fetch(`${API_BASE}/tasks/reset-stuck`, { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error);
+            alert(`✅ Reset ${data.reset_count} stuck task(s): ${data.task_ids.join(', ')}`);
+            fetchAllData(true);
+        }
+        catch (e) { alert(`❌ ${e.message}`); }
+        finally { setIsResettingStuck(false); }
     };
 
     const handleStopWorker = async () => {
@@ -1141,6 +1158,13 @@ export default function App() {
                                         className="flex items-center gap-1.5 bg-orange-500/10 border border-orange-500/30 text-orange-400 px-3 py-1 rounded text-[10px] font-bold hover:bg-orange-500 hover:text-white transition disabled:opacity-50">
                                         {isCancelling ? <RefreshCw size={10} className="animate-spin" /> : <Ban size={10} />}
                                         ABORT {stats.pending} PENDING
+                                    </button>
+                                )}
+                                {stats.processing > 0 && (
+                                    <button onClick={handleResetStuckTasks} disabled={isResettingStuck}
+                                        className="flex items-center gap-1.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 px-3 py-1 rounded text-[10px] font-bold hover:bg-rose-500 hover:text-white transition disabled:opacity-50">
+                                        {isResettingStuck ? <RefreshCw size={10} className="animate-spin" /> : <AlertTriangle size={10} />}
+                                        RESET {stats.processing} STUCK
                                     </button>
                                 )}
                                 <button onClick={toggleCompact}

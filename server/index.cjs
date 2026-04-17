@@ -1255,6 +1255,61 @@ app.post('/api/worker/heartbeat', (req, res) => {
     res.json({ success: true, stop_signal: workerStopSignal });
 });
 
+// --- MANUAL STUCK TASK RESET ---
+app.post('/api/tasks/reset-stuck', async (req, res) => {
+    try {
+        const now = Date.now();
+        const FOUR_MINUTES = 4 * 60 * 1000;
+
+        // Find tasks stuck in PROCESSING/SENT for >4 minutes
+        const { data: stuckTasks, error: fetchError } = await supabase
+            .from('posts')
+            .select('id, status, updated_at')
+            .in('status', ['PROCESSING', 'SENT'])
+            .eq('app_source', 'backup');
+
+        if (fetchError) throw fetchError;
+
+        const toReset = [];
+        if (stuckTasks) {
+            stuckTasks.forEach(task => {
+                const ageMs = now - new Date(task.updated_at).getTime();
+                if (ageMs > FOUR_MINUTES) {
+                    toReset.push(task.id);
+                }
+            });
+        }
+
+        if (toReset.length === 0) {
+            return res.json({ success: true, message: 'No stuck tasks found', reset_count: 0 });
+        }
+
+        // Reset stuck tasks to PENDING
+        const newScheduledTime = new Date(now + 180000).toISOString();
+        const { error: updateError } = await supabase
+            .from('posts')
+            .update({ status: 'PENDING', scheduled_time: newScheduledTime })
+            .in('id', toReset);
+
+        if (updateError) throw updateError;
+
+        // Clear from in-memory tracking
+        toReset.forEach(id => {
+            processingStartTimestamps.delete(id);
+            sentTaskTimestamps.delete(id);
+        });
+
+        io.emit('queue_updated');
+        io.emit('data_updated');
+
+        console.log(`[ManualReset] Reset ${toReset.length} stuck task(s): ${toReset.join(', ')}`);
+        res.json({ success: true, message: `Reset ${toReset.length} stuck task(s)`, reset_count: toReset.length, task_ids: toReset });
+    } catch (error) {
+        console.error('[ManualReset] Error:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // --- GLOBAL ERROR HANDLER ---
 app.use((err, req, res, next) => {
     console.error("🚨 GLOBAL ERROR:", err.message, "Code:", err.code);
