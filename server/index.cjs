@@ -967,26 +967,48 @@ setInterval(async () => {
         for (const [taskId, startTime] of processingStartTimestamps.entries()) {
             if (now - startTime > FOUR_MINUTES) staleIds.push(taskId);
         }
-        
-        // Also check sentTaskTimestamps for tasks that NEVER made it to PROCESSING
         for (const [taskId, startTime] of sentTaskTimestamps.entries()) {
             if (now - startTime > FOUR_MINUTES) staleIds.push(taskId);
         }
 
-        if (staleIds.length === 0) return;
+        // DB fallback: catch tasks that never made it into the in-memory map
+        // (e.g. server restarted while task was mid-flight and startup populate failed)
+        const { data: dbStuck } = await supabase
+            .from('posts')
+            .select('id, created_at')
+            .in('status', ['PROCESSING', 'SENT'])
+            .eq('app_source', 'backup');
+        if (dbStuck) {
+            for (const t of dbStuck) {
+                const id = t.id;
+                if (!processingStartTimestamps.has(id) && !sentTaskTimestamps.has(id)) {
+                    const ageMs = now - new Date(t.created_at).getTime();
+                    if (ageMs > FOUR_MINUTES) {
+                        staleIds.push(id);
+                    } else {
+                        // Register it so next heartbeat can track it
+                        processingStartTimestamps.set(id, new Date(t.created_at).getTime());
+                    }
+                }
+            }
+        }
 
-        console.log(`[Heartbeat] Resetting ${staleIds.length} stale tasks: ${staleIds.join(', ')}`);
+        const uniqueIds = [...new Set(staleIds)];
+        if (uniqueIds.length === 0) return;
+
+        console.log(`[Heartbeat] Resetting ${uniqueIds.length} stale task(s): ${uniqueIds.join(', ')}`);
         const newScheduledTime = new Date(now + 180000).toISOString();
         const { error } = await supabase
             .from('posts')
             .update({ status: 'PENDING', scheduled_time: newScheduledTime })
-            .in('id', staleIds)
-            .in('status', ['PROCESSING', 'SENT']); // Guard: only reset if still in-flight
+            .in('id', uniqueIds)
+            .in('status', ['PROCESSING', 'SENT']);
 
         if (!error) {
-            staleIds.forEach(id => {
+            uniqueIds.forEach(id => {
                 processingStartTimestamps.delete(id);
                 sentTaskTimestamps.delete(id);
+                logEvent(id, 'STUCK', 'Heartbeat auto-reset stuck task to PENDING', { reset_by: 'heartbeat' });
             });
             io.emit('queue_updated');
             io.emit('data_updated');
@@ -1369,7 +1391,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     try {
         const { data } = await supabase
             .from('posts')
-            .select('id, updated_at, status')
+            .select('id, created_at, status')
             .in('status', ['PROCESSING', 'SENT'])
             .eq('app_source', 'backup');
         if (data && data.length > 0) {
@@ -1378,17 +1400,17 @@ server.listen(PORT, '0.0.0.0', async () => {
             const stuckTasks = [];
 
             data.forEach(t => {
-                const updatedTime = new Date(t.updated_at).getTime();
-                const ageMs = now - updatedTime;
+                const createdTime = new Date(t.created_at).getTime();
+                const ageMs = now - createdTime;
 
-                // Use actual updated_at from DB, not current time
+                // Use actual created_at from DB, not current time
                 if (t.status === 'PROCESSING') {
-                    processingStartTimestamps.set(t.id, updatedTime);
+                    processingStartTimestamps.set(t.id, createdTime);
                 } else {
-                    sentTaskTimestamps.set(t.id, updatedTime);
+                    sentTaskTimestamps.set(t.id, createdTime);
                 }
 
-                // If already stuck >4 mins, mark for immediate reset
+                // If already stuck >4 mins (based on created_at), mark for immediate reset
                 if (ageMs > FOUR_MINUTES) {
                     stuckTasks.push({ id: t.id, age: Math.round(ageMs / 1000) });
                 }
