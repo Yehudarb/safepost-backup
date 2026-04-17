@@ -157,10 +157,33 @@ function CountdownTimer({ queue, fetchAllData }) {
     }
 
     if (activeTask.status === 'PROCESSING') {
+        const processingMs = Date.now() - new Date(activeTask.created_at).getTime();
+        const processingMins = Math.floor(processingMs / 60000);
+        const isStuck = processingMins > 4;
+        const isSlow = processingMins > 2;
+
+        if (isStuck) {
+            return (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-rose-500/20 border border-rose-500/40 text-rose-400 rounded-lg animate-pulse">
+                    <div className="w-2 h-2 bg-rose-500 rounded-full" />
+                    <span className="text-[10px] font-black uppercase tracking-widest">⚠️ STUCK {processingMins}m</span>
+                </div>
+            );
+        }
+
+        if (isSlow) {
+            return (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-500/20 border border-amber-500/40 text-amber-400 rounded-lg">
+                    <div className="w-2 h-2 bg-amber-500 rounded-full animate-pulse" />
+                    <span className="text-[10px] font-black uppercase tracking-widest">⏳ Processing {processingMins}m</span>
+                </div>
+            );
+        }
+
         return (
             <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-lg">
                 <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
-                <span className="text-[10px] font-black uppercase tracking-widest">Publishing Now</span>
+                <span className="text-[10px] font-black uppercase tracking-widest">✓ Publishing</span>
             </div>
         );
     }
