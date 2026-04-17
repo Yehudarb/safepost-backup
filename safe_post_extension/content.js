@@ -606,25 +606,26 @@ async function typeHumanLike(element, text) {
 
     for (let i = 0; i < text.length; i++) {
         const char = text[i];
-        
-        if (Math.random() < errorInjectionRate && char.match(/[a-zA-Zא-ת]/)) {
-            const wrongChar = getAdjacentKey(char);
-            
-            await dispatchSimulatedChar(wrongChar); 
-            await sleep(randomBetween(100, 200));
-            await dispatchSimulatedBackspace();
-            await sleep(randomBetween(30, 80)); 
-        }
+
+        // Skip error injection for speed (errorInjectionRate = 0 for fast mode)
+        // if (Math.random() < errorInjectionRate && char.match(/[a-zA-Zא-ת]/)) {
+        //     const wrongChar = getAdjacentKey(char);
+        //     await dispatchSimulatedChar(wrongChar);
+        //     await sleep(randomBetween(100, 200));
+        //     await dispatchSimulatedBackspace();
+        //     await sleep(randomBetween(30, 80));
+        // }
 
         await dispatchSimulatedChar(char);
 
-        let delayInterval = randomBetween(20, 50);
+        // OPTIMIZED for ~7 second typing (from 15-20s)
+        let delayInterval = randomBetween(8, 15);   // Regular char: 8-15ms (was 20-50)
         if (char === ' ') {
-            delayInterval = randomBetween(60, 150);
+            delayInterval = randomBetween(10, 20);  // Space: 10-20ms (was 60-150)
         } else if (char === '.' || char === ',' || char === '\n') {
-            delayInterval = randomBetween(200, 400);
+            delayInterval = randomBetween(15, 50);  // Punctuation: 15-50ms (was 200-400)
         }
-        
+
         await sleep(delayInterval);
     }
 }
