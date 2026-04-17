@@ -185,6 +185,8 @@ async function checkSafetyCooldown() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'JOB_COMPLETE' || request.action === 'CLOSE_TAB') {
         const missionId = request.missionId || "Unknown";
+        console.log(`[BG] Received ${request.action} for tab ${sender.tab?.id}`);
+
         (async () => {
             if (request.action === 'JOB_COMPLETE') {
                 try {
@@ -196,9 +198,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     if (!res.ok) console.error('[BG] DB Update Failed:', res.status);
                 } catch (err) { console.error("[BG] Sync Network Error:", err); }
             }
-            if (sender.tab && sender.tab.id) {
-                setTimeout(() => chrome.tabs.remove(sender.tab.id).catch(() => {}), 1000);
+
+            // Close tab with better error handling and logging
+            if (request.action === 'CLOSE_TAB' && sender.tab && sender.tab.id) {
+                try {
+                    console.log(`[BG] 🔴 Closing tab ${sender.tab.id}...`);
+                    await chrome.tabs.remove(sender.tab.id);
+                    console.log(`[BG] ✅ Tab ${sender.tab.id} closed successfully`);
+                } catch (err) {
+                    console.error(`[BG] Failed to close tab ${sender.tab.id}:`, err.message);
+                }
             }
+
             sendResponse({ success: true });
         })();
         return true;

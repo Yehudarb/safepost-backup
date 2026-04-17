@@ -234,8 +234,18 @@ async function performPost(job) {
     await sleep(3000);
     window.hud.destroy();
 
-    // Close the Facebook tab
-    safeSendMessage({ action: 'CLOSE_TAB' });
+    // Close the Facebook tab with explicit callback and logging
+    logRemote("🔄 Requesting tab close");
+    safeSendMessage({ action: 'CLOSE_TAB' }, (response) => {
+        logRemote("✅ Tab close acknowledged", response);
+    });
+
+    // Fallback: close after 2 seconds if background script doesn't respond
+    await sleep(2000);
+    if (window.location.hostname.includes('facebook')) {
+        logRemote("🔴 Fallback: forcing tab close");
+        window.close();
+    }
 }
 
 async function waitForInputBox() {
