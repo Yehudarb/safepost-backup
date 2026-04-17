@@ -361,7 +361,7 @@ export default function App() {
     };
 
     const handleToggleAnalytics = async () => {
-        if (!showAnalytics && !analyticsData) {
+        if (!showAnalytics) {
             setAnalyticsLoading(true);
             try {
                 const data = await ApiService.getAnalytics();
