@@ -1271,12 +1271,43 @@ server.listen(PORT, '0.0.0.0', async () => {
     try {
         const { data } = await supabase
             .from('posts')
-            .select('id')
+            .select('id, updated_at, status')
             .in('status', ['PROCESSING', 'SENT'])
             .eq('app_source', 'backup');
         if (data && data.length > 0) {
-            data.forEach(t => processingStartTimestamps.set(t.id, Date.now()));
+            const now = Date.now();
+            const FOUR_MINUTES = 4 * 60 * 1000;
+            const stuckTasks = [];
+
+            data.forEach(t => {
+                const updatedTime = new Date(t.updated_at).getTime();
+                const ageMs = now - updatedTime;
+
+                // Use actual updated_at from DB, not current time
+                if (t.status === 'PROCESSING') {
+                    processingStartTimestamps.set(t.id, updatedTime);
+                } else {
+                    sentTaskTimestamps.set(t.id, updatedTime);
+                }
+
+                // If already stuck >4 mins, mark for immediate reset
+                if (ageMs > FOUR_MINUTES) {
+                    stuckTasks.push({ id: t.id, age: Math.round(ageMs / 1000) });
+                }
+            });
+
             console.log(`[Startup] Tracked ${data.length} in-flight task(s) for heartbeat`);
+
+            // Immediately reset any tasks already stuck
+            if (stuckTasks.length > 0) {
+                console.log(`[Startup] Found ${stuckTasks.length} stuck task(s), resetting: ${stuckTasks.map(t => `#${t.id}(${t.age}s)`).join(', ')}`);
+                const newScheduledTime = new Date(now + 180000).toISOString();
+                await supabase
+                    .from('posts')
+                    .update({ status: 'PENDING', scheduled_time: newScheduledTime })
+                    .in('id', stuckTasks.map(t => t.id))
+                    .in('status', ['PROCESSING', 'SENT']);
+            }
         }
     } catch (e) {
         console.error('[Startup] Could not init processing map:', e.message);
