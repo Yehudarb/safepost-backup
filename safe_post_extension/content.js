@@ -130,6 +130,7 @@ async function performPost(job) {
     logRemote("🤖 Starting Execution Sequence", { jobId: job.id });
 
     window.hud.mount();
+    window.hud.startElapsedTimer();
     window.hud.updateText("מתחיל עבודה", "טוען נתוני פוסט...");
 
     // 1. Trigger "Create Post" Modal
@@ -635,11 +636,14 @@ async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // HUD Implementation
 injectStyles();
 window.hud = {
+    elapsedInterval: null,
+
     mount: () => {
         if (document.getElementById('safepost-hud')) return;
         const div = document.createElement('div');
         div.id = 'safepost-hud';
         div.innerHTML = `
+            <div id="hud-elapsed">0s</div>
             <div id="hud-timer">--s</div>
             <div id="hud-title">מערכת אופטימיזציה</div>
             <div id="hud-status">מוכן לעבודה</div>
@@ -661,7 +665,33 @@ window.hud = {
         }
         if (timer) timer.innerText = "GO!";
     },
+    startElapsedTimer: () => {
+        if (window.hud.elapsedInterval) clearInterval(window.hud.elapsedInterval);
+        let elapsed = 0;
+        const elapsed_el = document.getElementById('hud-elapsed');
+        if (elapsed_el) elapsed_el.innerText = "0s";
+
+        window.hud.elapsedInterval = setInterval(() => {
+            elapsed++;
+            if (elapsed_el) {
+                const mins = Math.floor(elapsed / 60);
+                const secs = elapsed % 60;
+                if (mins > 0) {
+                    elapsed_el.innerText = `${mins}m ${secs}s`;
+                } else {
+                    elapsed_el.innerText = `${secs}s`;
+                }
+            }
+        }, 1000);
+    },
+    stopElapsedTimer: () => {
+        if (window.hud.elapsedInterval) {
+            clearInterval(window.hud.elapsedInterval);
+            window.hud.elapsedInterval = null;
+        }
+    },
     destroy: () => {
+        window.hud.stopElapsedTimer();
         const h = document.getElementById('safepost-hud');
         if (h) h.remove();
     }
@@ -673,6 +703,7 @@ function injectStyles() {
     s.id = 'hud-css';
     s.innerHTML = `
         #safepost-hud { position: fixed; bottom: 20px; right: 20px; width: 280px; background: #1a1a1a; border: 3px solid #28a745; color: white; padding: 15px; border-radius: 10px; z-index: 1000000; direction: rtl; font-family: sans-serif; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
+        #hud-elapsed { position: absolute; top: 15px; right: 15px; background: #28a745; padding: 3px 10px; border-radius: 4px; font-weight: bold; font-size: 13px; font-family: monospace; min-width: 45px; text-align: center; }
         #hud-timer { position: absolute; top: 15px; left: 15px; background: #007bff; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 14px; }
         #hud-title { font-weight: bold; margin-bottom: 5px; color: #007bff; font-size: 16px; margin-left: 50px; }
         #hud-status { font-size: 13px; opacity: 0.8; }
