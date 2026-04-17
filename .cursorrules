@@ -1,0 +1,493 @@
+# SafePost Backup — Architectural Rules & Codebase Contract
+# Generated from deep audit on 2026-04-17. Based strictly on existing code.
+# Last updated: 2026-04-17 (post-refactor v2.2.0 — modular components + ExtensionStorage)
+# Any AI agent generating code for this project MUST follow these rules.
+
+---
+
+## 1. Project Identity & Stack
+
+- **Name:** SafePost Backup (`fb-auto-suite` in package.json, version 2.2.0)
+- **Purpose:** Automated Facebook Group posting system with scheduling, AI content generation, and analytics.
+- **Language:** Hebrew-first product (RTL UI, Hebrew synonyms for spin, Hebrew UX copy). All user-facing strings default to Hebrew unless the feature is English-only (status badges, technical labels).
+- **Architecture:** Three-tier — React SPA (Vercel) + Express/Node.js API (Render) + Chrome Extension MV3 (local install).
+
+### Tech Stack — Do NOT introduce alternatives
+
+| Layer | Technology | Notes |
+|-------|-----------|-------|
+| Frontend | React 18 + Vite 6 | JSX only, no TypeScript in production code |
+| Styling | Tailwind CSS 3 + `class-variance-authority` + `tailwind-merge` | Dark/light via `darkMode: 'class'` on `<html>` |
+| Icons | `lucide-react` | **NEVER** import from other icon libraries |
+| Animation | `framer-motion` | Available but used sparingly |
+| UI Primitives | `@radix-ui/react-slot` | Used in `Button` component only |
+| Backend | Express 5 (CommonJS `.cjs` files) | Runs on Render |
+| Database | Supabase (PostgreSQL + Storage) | Via `@supabase/supabase-js` |
+| Real-time | Socket.IO 4 (server↔dashboard) + SSE (server→extension) | Two separate channels |
+| AI | Google Gemini (`@google/generative-ai`) primary, Anthropic Claude fallback | Dual-provider with graceful degradation |
+| Extension | Chrome MV3 — `service_worker` background, content scripts on `facebook.com` | Manifest V3 only |
+
+---
+
+## 2. File Structure — Canonical Locations
+
+```
+server/
+  index.cjs              # ALL Express routes, SSE, Socket.IO, queue poller, heartbeat
+  supabaseClient.cjs     # Singleton Supabase client (server-side, service_role key)
+
+src/
+  App.jsx                # Dashboard root (~400 lines): ApiService class, main App component, state orchestration
+  main.jsx               # React entry point
+  services/
+    bridge.js            # BridgeService — extension↔web message abstraction
+  utils/
+    timeUtils.js         # formatLocalTime, formatLocalDateTime, getLocalDateTimeInput, toUTCISO
+  lib/
+    utils.js             # cn() — Tailwind class merger (clsx + twMerge)
+  components/
+    ErrorBoundary.jsx    # React error boundary — wraps AnalyticsPanel to isolate crashes
+    QueueTable.jsx       # Task queue table with selection, status badges, proof links
+    StatsBar.jsx         # KPI cards (Total, Pending, Completed, Failed)
+    SchedulerForm.jsx    # Single-group post form (legacy, secondary to App.jsx launchpad)
+    TaskTimer.jsx        # Live MM:SS countdown per task row
+    Toast.jsx            # Auto-dismissing notification (success/error/info)
+    modals/
+      SaveFolderModal.jsx        # Save selected groups as a folder
+      StopWorkerModal.jsx        # Confirm worker stop
+      SavePostTemplateModal.jsx  # Save post as template
+      AiPostAssistantModal.jsx   # AI chat interface (decoupled via onGenerate prop)
+    panels/
+      AnalyticsPanel.jsx         # 30-day analytics dashboard with Gauge + DonutChart SVGs
+    ui/
+      button.jsx         # CVA-based Button with variant/size system
+      calendar-bento.jsx # Custom calendar widget
+      dock.jsx           # Apple-style dock component
+      apple-dock-demo.jsx
+
+safe_post_extension/     # PRODUCTION extension folder
+  manifest.json          # MV3 manifest, version 7.2
+  background.js          # Service worker: alarm polling, SSE listener, job dispatch, group sync
+  extensionStorage.js    # ExtStorage helper — chrome.storage.local wrapper (loaded via importScripts)
+  content.js             # Facebook DOM automation: post creation, typing, media upload, HUD
+  popup.html             # Extension popup
+
+public/
+  scripts/
+    bridge.js            # Content script bridge (web↔extension message relay via window.postMessage)
+    dashboard-bridge.js  # Zero-config bridge with DOM beacon + CustomEvent protocol
+    background.js        # Copy/variant of extension background
+    content.js           # Copy/variant of extension content
+  manifest.json          # Public copy of manifest
+```
+
+### Critical Rules
+
+- **`server/index.cjs` is the single source of truth for ALL backend routes.** Do NOT create separate route files, controllers, or middleware modules. All routes live in this file.
+- **`src/App.jsx` is the dashboard root and orchestrator.** It holds the `ApiService` class, global state, and composes extracted components. Modals live in `src/components/modals/`, panels in `src/components/panels/`. When adding new modals/panels, follow this split — do NOT inline them back into App.jsx.
+- **Components receive data/callbacks via props** — they never call `ApiService` directly. Example: `AiPostAssistantModal` receives `onGenerate={ApiService.generateAiContent.bind(ApiService)}` instead of importing `ApiService`.
+- **`safe_post_extension/` is the production extension.** The `public/scripts/` and `extension/` folders contain copies/variants. When modifying extension logic, edit `safe_post_extension/` first.
+- **CommonJS (`.cjs`) for all server files.** The project root is `"type": "module"` but the server uses `require()`. Never mix ESM imports into server files.
+- **Extension storage goes through `ExtStorage`** (loaded via `importScripts('extensionStorage.js')` in `background.js`). Do NOT call `chrome.storage.local` directly in background.js.
+
+---
+
+## 3. API Service Layer — The ONLY Way to Call the Backend
+
+### Frontend: `ApiService` class (defined near the top of `src/App.jsx`)
+
+**MANDATORY:** All HTTP calls from React MUST go through `ApiService`. Never use raw `fetch()` in components.
+
+```javascript
+// CORRECT — Always use ApiService
+const data = await ApiService.getQueue();
+const result = await ApiService.createPosts({ group_ids, content, schedule, media_url, ai_spin });
+
+// WRONG — Never do this in components
+const res = await fetch(`${API_BASE}/queue`);  // FORBIDDEN
+```
+
+#### Complete ApiService Method Registry
+
+| Method | HTTP | Endpoint | Used For |
+|--------|------|----------|----------|
+| `getGroups()` | GET | `/api/groups` | Fetch all Facebook groups |
+| `getQueue()` | GET | `/api/queue` | Fetch task queue with group joins |
+| `getSystemStatus()` | GET | `/api/system/status` | Worker status, version, last check-in |
+| `getGroupSets()` | GET | `/api/group-sets` | Fetch saved group folders |
+| `createPosts(data)` | POST | `/api/posts` | Create new posting tasks (bulk) |
+| `deleteTask(id)` | DELETE | `/api/tasks/:id` | Delete single task |
+| `bulkDelete(ids)` | POST | `/api/tasks/bulk-delete` | Delete multiple tasks |
+| `updateTask(id, data)` | PATCH | `/api/tasks/:id` | Update task fields |
+| `cancelTask(id)` | POST | `/api/tasks/:id/cancel` | Cancel single pending task |
+| `cancelAllPending()` | POST | `/api/tasks/cancel-all-pending` | Cancel all pending tasks |
+| `stopWorker()` | POST | `/api/worker/stop` | Send stop signal to extension |
+| `resumeWorker()` | POST | `/api/worker/resume` | Resume worker operations |
+| `saveGroupSet(name, ids)` | POST | `/api/group-sets` | Save a group folder |
+| `deleteGroupSet(id)` | DELETE | `/api/group-sets/:id` | Delete a group folder |
+| `getTemplates()` | GET | `/api/templates` | Fetch post templates |
+| `saveTemplate(data)` | POST | `/api/templates` | Save a post template |
+| `deleteTemplate(id)` | DELETE | `/api/templates/:id` | Delete a template |
+| `uploadFile(file)` | POST | `/api/upload` | Upload media (multipart FormData) |
+| `generateAiContent(prompt, history)` | POST | `/api/ai/generate` | AI content generation |
+| `getAnalytics()` | GET | `/api/analytics` | 30-day analytics dashboard |
+
+#### Adding a New Endpoint
+
+1. Add the Express route in `server/index.cjs` (follow existing patterns: Supabase query → error check → `res.json()`)
+2. Add a static method to `ApiService` class in `src/App.jsx`
+3. If it's a mutation, emit the appropriate Socket.IO event (`io.emit('queue_updated')` or `io.emit('data_updated')`)
+4. Apply `strictLimiter` to expensive endpoints (uploads, AI), `apiLimiter` is already global on `/api/`
+
+### Backend URL Resolution
+
+```javascript
+// src/App.jsx:15-26
+const BACKEND_URL = (() => {
+    if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
+    if (window.location.hostname === 'safepost-backup.vercel.app')
+        return 'https://safepost-backup.onrender.com';
+    return 'https://safepost-backup.onrender.com'; // Fallback
+})();
+const API_BASE = `${BACKEND_URL}/api`;
+```
+
+**Extension uses hardcoded:** `const BASE_URL = 'https://safepost-backup.onrender.com';` in `safe_post_extension/background.js:4`
+
+---
+
+## 4. Real-Time Communication — Two Channels
+
+### Channel 1: Socket.IO (Server ↔ Dashboard)
+
+**Connection:** `src/App.jsx:29-35` — global `socket` instance, auto-reconnect with exponential backoff.
+
+**Events the server emits:**
+
+| Event | Trigger | Dashboard Action |
+|-------|---------|-----------------|
+| `status_update` | Task status change | Update queue row in-place, record timestamp |
+| `queue_updated` | Any queue mutation | Triggers `fetchAllData(true)` (silent refresh) |
+| `data_updated` | Group sync complete | Triggers `fetchAllData(true)` |
+| `groups_updated` | Groups upserted | Refresh group list |
+| `groups_sync_failed` | Sync error | Stop sync spinner, show error |
+| `worker_stop_signal` | Stop command sent | Update UI state |
+| `worker_resumed` | Resume command sent | Update UI state |
+
+**Pattern — listen in `useEffect`, cleanup on unmount:**
+```javascript
+useEffect(() => {
+    socket.on('queue_updated', () => fetchAllData(true));
+    socket.on('status_update', ({ taskId, status }) => { /* update state */ });
+    return () => { socket.off('queue_updated'); socket.off('status_update'); };
+}, [fetchAllData]);
+```
+
+### Channel 2: SSE (Server → Extension)
+
+**Endpoint:** `GET /api/stream/jobs` — server pushes events to connected extensions.
+
+**Events:**
+
+| SSE Type | Purpose |
+|----------|---------|
+| `connected` | Handshake confirmation |
+| `new_job` | Dispatch a task to the extension worker |
+| `sync_groups` | Request extension to scrape Facebook groups |
+| `stop_worker` | Tell extension to halt |
+
+**Server broadcast helper:** `broadcastSSE(data)` in `server/index.cjs:245-247`
+
+### Channel 3: Extension ↔ Web App (BridgeService)
+
+**File:** `src/services/bridge.js` — `BridgeService` singleton object.
+
+**Protocol:**
+- **Extension mode** (`chrome.runtime.id` exists): Direct `chrome.runtime.sendMessage` / `chrome.runtime.onMessage`
+- **Web mode**: `window.postMessage` with protocol markers:
+  - Web → Extension: `{ target: 'EXTENSION_BG', action, payload }`
+  - Extension → Web: `{ target: 'DASHBOARD_APP', type, data }`
+
+**Content script bridges** (`public/scripts/bridge.js`, `public/scripts/dashboard-bridge.js`):
+- `bridge.js`: Relays between `window.postMessage` and `chrome.runtime.sendMessage`
+- `dashboard-bridge.js`: Injects DOM beacon (`#safepost-bridge-signal`) + uses `CustomEvent` protocol (`SAFEPOST_REQ` / `SAFEPOST_RES`)
+
+**Extension Message Actions (background.js listener):**
+
+| Action | Direction | Handler |
+|--------|-----------|---------|
+| `EXECUTE_POST` | BG → Content | Trigger Facebook posting automation |
+| `JOB_COMPLETE` | Content → BG | Mark task SUCCESS, close tab |
+| `CLOSE_TAB` | Content → BG | Close the Facebook tab |
+| `MISSION_FAILED` | Content → BG | Mark task FAILED, close tab |
+| `SYNC_GROUPS` | Content → BG | Forward scraped groups to server |
+| `REPORT_STATUS` | Content → BG → Server | Log or update task status via PATCH `/api/tasks/:id/status` |
+| `GET_COOKIES` | Any → BG | Retrieve Facebook cookies |
+| `START_AUTOMATION` | External → BG | Start posting from dashboard (via `externally_connectable`) |
+| `SCAN_AND_SYNC_GROUPS` | External → BG | Trigger group scan from dashboard |
+
+---
+
+## 5. Database Schema (Supabase Tables)
+
+Inferred from queries in `server/index.cjs`:
+
+| Table | Key Columns | Notes |
+|-------|-------------|-------|
+| `posts` | `id`, `group_id`, `content`, `media_url`, `media_paths`, `status`, `scheduled_time`, `app_source`, `failure_reason`, `proof_url`, `created_at`, `ended_at` | `app_source = 'backup'` filter is MANDATORY on all queries |
+| `groups` | `id`, `name`, `url` | Facebook group registry, upserted on sync |
+| `group_sets` | `id`, `name`, `group_ids` (array), `created_at` | Saved group folders |
+| `post_templates` | `id`, `name`, `content`, `media_url`, `app_source`, `created_at` | Reusable post templates |
+| `system_logs` | `id`, `log_level`, `source`, `message` | Audit trail for automation events |
+| `app_config` | `config_key`, `config_data` (JSONB), `updated_at` | Dynamic extension DOM selectors |
+
+### Critical Supabase Rules
+
+1. **Always filter by `app_source = 'backup'`** when querying `posts`. This table is shared with other apps.
+2. **The `posts` table has NO `updated_at` column.** Never include it in updates.
+3. **Status lifecycle:** `PENDING` → `SENT` → `PROCESSING` → `SUCCESS` / `FAILED` / `CANCELLED`
+4. **Server uses `supabaseClient.cjs`** which prefers `SUPABASE_SERVICE_KEY` (RLS bypass). Never expose this key to the frontend.
+5. **Storage bucket:** `campaign-media` for all uploaded files.
+
+---
+
+## 6. State Management — React Conventions
+
+### Pattern: `useState` + `useCallback` + Socket.IO events
+
+There is **no Redux, Zustand, or Context API** in this project. All state lives in `App()` via `useState` hooks.
+
+**Core state variables (App.jsx):**
+
+| State | Type | Purpose |
+|-------|------|---------|
+| `groups` | `Group[]` | All Facebook groups from Supabase |
+| `queue` | `Task[]` | All tasks (posts) in the queue |
+| `serverStatus` | `boolean` | Server reachable (3 consecutive failures = offline) |
+| `workerStatus` | `{ status, message, last_checkin }` | Extension worker health |
+| `selectedGroups` | `string[]` | Group IDs selected for posting |
+| `postContent` | `string` | Current post text |
+| `scheduleTime` | `string` | Datetime-local string for scheduling |
+| `theme` | `'dark' \| 'light'` | Persisted in `localStorage` |
+| `selectedTaskIds` | `string[]` | Selected task IDs in queue table |
+| `statusTimestamps` | `{ [taskId]: { [status]: timeString } }` | Timeline of status transitions |
+
+**Data refresh pattern:**
+
+```javascript
+const fetchAllData = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    const [gData, qData, sData, gsData, tData] = await Promise.all([
+        ApiService.getGroups(), ApiService.getQueue(),
+        ApiService.getSystemStatus(), ApiService.getGroupSets(),
+        ApiService.getTemplates()
+    ]);
+    // ... set all state ...
+}, []);
+```
+
+**ALWAYS use `fetchAllData(true)` for silent refreshes** (no loading spinner). Socket.IO events trigger silent refreshes.
+
+---
+
+## 7. Component Conventions
+
+### Styling Rules
+
+1. **Dark mode first.** Use `dark:` prefix for dark variants, plain classes for light. The `<html>` element toggles `class="dark"`.
+2. **Color palette:**
+   - Backgrounds: `bg-[#0d1117]` (deepest), `bg-[#161b22]` (panels), `bg-[#1c2128]` (cards), `bg-[#21262d]` (hover)
+   - Borders: `border-[#30363d]`
+   - Text: `text-white` (primary), `text-gray-400`/`text-gray-500` (secondary)
+   - Status colors: emerald=success, rose/red=failed, amber/yellow=pending, sky/blue=processing, gray=cancelled
+3. **CSS variables** are used in extracted components (QueueTable, StatsBar, Toast): `var(--panel-bg)`, `var(--panel-border)`, `var(--text-primary)`, `var(--text-secondary)`, `var(--card-shadow)`, `var(--accent-color)`.
+4. **Font size convention:** `text-[10px]` for labels/badges, `text-xs` for secondary, `text-sm` for body.
+5. **Uppercase labels:** `text-[10px] font-black uppercase tracking-widest` is the standard label style.
+6. **Border radius:** `rounded-xl` for cards/panels, `rounded-lg` for inputs/buttons, `rounded-full` for badges/pills.
+7. **Glass morphism:** `backdrop-blur-xl` + semi-transparent backgrounds on panels.
+
+### Modal Pattern
+
+All modals follow this structure (see SaveFolderModal, StopWorkerModal, etc.):
+
+```jsx
+<div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+    <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] w-full max-w-sm rounded-xl shadow-2xl overflow-hidden">
+        {/* Header: p-4 border-b bg-gray-50 dark:bg-[#1c2128] */}
+        {/* Body: p-4 space-y-4 */}
+        {/* Error bar (conditional) */}
+        {/* Footer: p-4 bg-gray-50 dark:bg-[#0d1117] flex justify-end gap-2 border-t */}
+    </div>
+</div>
+```
+
+### Component Props Pattern
+
+Components receive callbacks and data, never fetch their own data:
+```jsx
+// CORRECT
+<QueueTable jobs={queue} onDelete={handleDelete} onRefresh={() => fetchAllData(true)} />
+
+// WRONG — components should not call ApiService directly
+```
+
+---
+
+## 8. Utility Functions — MUST Reuse
+
+### `src/lib/utils.js` — `cn()`
+```javascript
+import { cn } from "@/lib/utils";
+// Merges Tailwind classes with conflict resolution
+cn("px-4 py-2", isActive && "bg-blue-500", className)
+```
+
+### `src/utils/timeUtils.js`
+```javascript
+import { formatLocalTime, formatLocalDateTime, getLocalDateTimeInput, toUTCISO } from '@/utils/timeUtils';
+// formatLocalTime("2026-04-17T10:30:00Z")    → "13:30" (Israel time)
+// formatLocalDateTime("2026-04-17T10:30:00Z") → "17/04/26, 13:30"
+// getLocalDateTimeInput(date)                  → "2026-04-17T13:30" (for <input type="datetime-local">)
+// toUTCISO("2026-04-17T13:30")                → "2026-04-17T10:30:00.000Z"
+```
+
+### `src/services/bridge.js` — `BridgeService`
+```javascript
+import { BridgeService } from '@/services/bridge';
+BridgeService.init();                    // Call once on app mount
+BridgeService.sendMessage('GET_STATUS'); // Send to extension
+BridgeService.onMessage((type, data) => { /* handle */ }); // Subscribe
+```
+
+### `src/components/ui/button.jsx`
+```javascript
+import { Button } from "@/components/ui/button";
+<Button variant="destructive" size="sm">Delete</Button>
+// Variants: default, destructive, outline, secondary, ghost, link
+// Sizes: default, sm, lg, icon
+```
+
+### Server: `server/supabaseClient.cjs`
+```javascript
+const { supabase } = require('./supabaseClient.cjs');
+// ALWAYS use this singleton. Never create a new Supabase client.
+```
+
+### Server: `updateTaskStatus(taskId, status, message, metadata)`
+Defined in `server/index.cjs:250-281`. Updates Supabase AND broadcasts via Socket.IO. MUST be used for all status transitions instead of raw Supabase updates.
+
+### Server: `broadcastSSE(data)`
+Defined in `server/index.cjs:245-247`. Sends to all connected SSE extension clients.
+
+### Server: `spinText(text, useAutoSynonyms)`
+Defined in `server/index.cjs:30-52`. Processes `{a|b|c}` spintax and Hebrew synonym auto-replacement. Used in POST `/api/posts` when `ai_spin` is true.
+
+### Extension: `ExtStorage` (`safe_post_extension/extensionStorage.js`)
+
+Wraps `chrome.storage.local` for job-state and cooldown tracking. Loaded in `background.js` via `importScripts('extensionStorage.js')`. All methods return Promises.
+
+| Method | Purpose |
+|--------|---------|
+| `ExtStorage.getLastJobId()` | Returns `lastJobId` or `null` (prevents re-running same job) |
+| `ExtStorage.setLastJobId(id)` | Marks a job as the currently-processing one |
+| `ExtStorage.clearLastJobId()` | Clears after completion/failure, allowing the next job |
+| `ExtStorage.setCooldown(durationMs)` | Sets `last_post_timestamp` + `cooldown_until` in one call |
+| `ExtStorage.getCooldownTimestamp()` | Returns `last_post_timestamp` or `null` |
+| `ExtStorage.clearAll()` | Reset helper (testing) — removes all three keys |
+
+**Rule:** All new extension storage writes/reads go through `ExtStorage`. Extend the helper rather than calling `chrome.storage.local` directly.
+
+### Frontend: `ErrorBoundary` (`src/components/ErrorBoundary.jsx`)
+
+React class component that catches render errors in its children and shows a Hebrew fallback UI with a retry button. Currently wraps `AnalyticsPanel`. Use it to isolate any new heavy/SVG-rendering panel where a render failure should not take down the whole dashboard.
+
+```jsx
+import ErrorBoundary from '@/components/ErrorBoundary';
+<ErrorBoundary>
+    <AnalyticsPanel data={analytics} onClose={() => setShowAnalytics(false)} />
+</ErrorBoundary>
+```
+
+---
+
+## 9. Extension Automation — Content Script Rules
+
+### `safe_post_extension/content.js` Core Functions
+
+| Function | Purpose | DO NOT DUPLICATE |
+|----------|---------|-----------------|
+| `performPost(job)` | Full posting sequence: trigger → input → media → type → submit → verify |
+| `typeHumanLike(element, text)` | Human-like typing with typo simulation and variable delays |
+| `humanClick(el)` | Realistic click sequence: focus → mousedown → mouseup → click |
+| `clickPostButton()` | Multi-strategy post button finder (semantic text → blue heuristic) |
+| `waitForInputBox()` | Polls for `contenteditable` inside `div[role="dialog"]` |
+| `uploadMedia(mediaPath)` | Downloads media → finds upload trigger → injects via `DataTransfer` |
+| `findElementRobust(phrases)` | XPath-based element finder with retry loop |
+| `findElementInModal(phrases)` | Scoped search within `div[role="dialog"]` |
+| `safeSendMessage(payload)` | Handles "Extension context invalidated" gracefully |
+| `logRemote(message, metadata)` | Sends log to server via `REPORT_STATUS` action |
+| `sleep(ms)` | Promise-based delay |
+| `window.hud` | On-screen HUD overlay (mount, updateText, startTimer, destroy) |
+
+### Extension Safety Mechanisms
+
+1. **Safety cooldown:** 3-minute minimum between posts (`checkSafetyCooldown()`)
+2. **Jitter scheduling:** First post 10-30s, subsequent posts 150-210s apart
+3. **Watchdog:** If no server contact for 2 minutes, extension self-reloads
+4. **Job dedup:** `lastJobId` in `chrome.storage.local` prevents double-processing
+5. **Tab load timeout:** 60s max for Facebook tab to load
+
+---
+
+## 10. Security Hardening — Already Applied
+
+1. **SSRF guard** (`isSafeUrl()` in App.jsx): Blocks private IPs, localhost, non-HTTP protocols.
+2. **Rate limiting**: `apiLimiter` (500/min) on all `/api/`, `strictLimiter` (20/15min) on upload + AI.
+3. **Helmet** with CSP headers on Express.
+4. **Vercel CSP** in `vercel.json` — restricts `connect-src`, `script-src`, `frame-ancestors`. Includes `report-uri` for violation reporting.
+5. **Vercel CORS** — `Access-Control-Allow-Origin` set explicitly to `https://safepost-backup.vercel.app` (not wildcard).
+6. **Backend CORS whitelist** — only specific origins + `chrome-extension://` allowed on Express.
+7. **Input validation** — UUID format check on ID params (`/^[0-9a-f-]{8,}$/i`).
+8. **Explicit field listing** in `/api/jobs/next` response to prevent prototype pollution from DB objects.
+9. **Trust proxy** set for accurate rate limiting behind Render's reverse proxy.
+10. **File upload limits** — 50MB max via multer.
+11. **Security headers** in `vercel.json`: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` locking camera/microphone/geolocation.
+
+**DO NOT weaken any of these.** When adding new endpoints, apply the same patterns.
+**When editing `vercel.json`** — keep CORS restrictive (never revert to `*`), keep CSP `connect-src` allowlist minimal (only Render + Supabase domains), and keep `report-uri` present.
+
+---
+
+## 11. Deployment Topology
+
+| Component | Host | URL |
+|-----------|------|-----|
+| React Dashboard | Vercel | `safepost-backup.vercel.app` |
+| Express API + Socket.IO | Render | `safepost-backup.onrender.com` |
+| Supabase | Supabase Cloud | `namyhsldzufeoycleqxf.supabase.co` |
+| Chrome Extension | Local install | `chrome-extension://<dynamic-id>` |
+
+- **Build:** `vite build` → `dist/` (served by Vercel)
+- **Server start:** `node server/index.cjs` (port 3001)
+- **Path alias:** `@` → `./src` (configured in `vite.config.js`)
+
+---
+
+## 12. Anti-Patterns — NEVER Do These
+
+1. **Never create a new Supabase client.** Use `server/supabaseClient.cjs`.
+2. **Never use raw `fetch()` in React components.** Use `ApiService`.
+3. **Never query `posts` without `app_source = 'backup'` filter.**
+4. **Never include `updated_at` in post updates** — the column doesn't exist.
+5. **Never create separate route files.** All routes go in `server/index.cjs`.
+6. **Never use TypeScript** in production source files (dev types are fine).
+7. **Never import icons from anything other than `lucide-react`.**
+8. **Never use Context or Redux.** State lives in `App()` via `useState`.
+9. **Never create ESM (`.mjs` or `import`) in server files.** Server is CommonJS.
+10. **Never hardcode Supabase keys in frontend code.** The server acts as proxy.
+11. **Never skip the `SENT` → `PROCESSING` handshake.** The queue poller enforces single-task-at-a-time execution.
+12. **Never use `window.location.reload()`** for data refresh. Call `fetchAllData(true)`.
+13. **Never call `chrome.storage.local` directly in `background.js`.** Use `ExtStorage` from `extensionStorage.js`.
+14. **Never import `ApiService` into modal/panel components.** Pass API calls as props (e.g. `onGenerate`, `onSave`) from App.jsx.
+15. **Never re-inline extracted modals/panels into App.jsx.** Keep `src/components/modals/` and `src/components/panels/` as the canonical locations.
+16. **Never set `Access-Control-Allow-Origin: *` in `vercel.json`.** Use the explicit origin.
