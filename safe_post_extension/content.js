@@ -703,11 +703,11 @@ function injectStyles() {
     s.id = 'hud-css';
     s.innerHTML = `
         #safepost-hud { position: fixed; bottom: 20px; right: 20px; width: 280px; background: #1a1a1a; border: 3px solid #28a745; color: white; padding: 15px; border-radius: 10px; z-index: 1000000; direction: rtl; font-family: sans-serif; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
-        #hud-elapsed { position: absolute; top: 15px; right: 15px; background: #28a745; padding: 3px 10px; border-radius: 4px; font-weight: bold; font-size: 13px; font-family: monospace; min-width: 45px; text-align: center; }
-        #hud-timer { position: absolute; top: 15px; left: 15px; background: #007bff; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 14px; }
+        #hud-elapsed { position: absolute; top: 15px; left: 15px; background: #28a745; padding: 4px 12px; border-radius: 4px; font-weight: bold; font-size: 14px; font-family: monospace; min-width: 50px; text-align: center; color: white; direction: ltr; }
+        #hud-timer { position: absolute; top: 15px; right: 15px; background: #007bff; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 14px; }
         #hud-title { font-weight: bold; margin-bottom: 5px; color: #007bff; font-size: 16px; margin-left: 50px; }
         #hud-status { font-size: 13px; opacity: 0.8; }
-        #hud-version { position: absolute; bottom: 5px; left: 5px; font-size: 9px; opacity: 0.3; }
+        #hud-version { position: absolute; bottom: 5px; right: 5px; font-size: 9px; opacity: 0.3; }
     `;
     document.head.appendChild(s);
 }
