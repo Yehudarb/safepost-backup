@@ -651,6 +651,45 @@ app.get('/api/analytics', async (req, res) => {
     });
 });
 
+// --- LOGS STORAGE (in-memory for simplicity, persists within session) ---
+const eventLogs = [];
+const MAX_LOGS = 500; // Keep last 500 events
+
+function logEvent(taskId, type, message, metadata = {}) {
+    const entry = {
+        taskId,
+        type, // 'FAILED', 'STUCK', 'SUCCESS', 'ERROR', etc.
+        message,
+        metadata,
+        timestamp: new Date().toISOString(),
+        age_seconds: 0
+    };
+    eventLogs.unshift(entry);
+    if (eventLogs.length > MAX_LOGS) eventLogs.pop();
+    console.log(`[EVENT] ${type} - Task #${taskId}: ${message}`);
+}
+
+app.get('/api/logs', (req, res) => {
+    const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+    const type = req.query.type; // Optional filter by type
+
+    let filtered = eventLogs;
+    if (type) {
+        filtered = filtered.filter(log => log.type === type);
+    }
+
+    const logsWithAge = filtered.map(log => ({
+        ...log,
+        age_seconds: Math.floor((Date.now() - new Date(log.timestamp).getTime()) / 1000)
+    })).slice(0, limit);
+
+    res.json({
+        total: filtered.length,
+        returned: logsWithAge.length,
+        logs: logsWithAge
+    });
+});
+
 // --- AI CONTENT GENERATION (GEMINI + CLAUDE FALLBACK) ---
 app.post('/api/ai/generate', strictLimiter, async (req, res) => {
     const { prompt, history = [] } = req.body;
@@ -1078,6 +1117,7 @@ app.post('/api/tasks/update-status', async (req, res) => {
 
     if (status === 'FAILED') {
         await supabase.from('system_logs').insert([{ log_level: 'error', source: 'extension_worker', message: `Task #${numericId} FAILED: ${failure_reason || 'Unknown error'}` }]);
+        logEvent(numericId, 'FAILED', failure_reason || 'Task failed with unknown error', { source: 'extension_worker' });
     }
 
     if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(status)) {
@@ -1125,6 +1165,7 @@ app.patch('/api/tasks/:id/status', async (req, res) => {
             source: 'extension_worker',
             message: `Task #${id} FAILED: ${failReason || 'Unknown error'}`
         }]);
+        logEvent(id, 'FAILED', failReason || 'Task failed with unknown error', { source: 'extension_worker' });
     }
 
     // Clear from tracking maps on end states
@@ -1294,10 +1335,11 @@ app.post('/api/tasks/reset-stuck', async (req, res) => {
 
         if (updateError) throw updateError;
 
-        // Clear from in-memory tracking
+        // Clear from in-memory tracking and log
         toReset.forEach(id => {
             processingStartTimestamps.delete(id);
             sentTaskTimestamps.delete(id);
+            logEvent(id, 'STUCK', 'Manually reset from stuck state', { reset_by: 'manual' });
         });
 
         io.emit('queue_updated');
@@ -1363,6 +1405,11 @@ server.listen(PORT, '0.0.0.0', async () => {
                     .update({ status: 'PENDING', scheduled_time: newScheduledTime })
                     .in('id', stuckTasks.map(t => t.id))
                     .in('status', ['PROCESSING', 'SENT']);
+
+                // Log stuck task resets
+                stuckTasks.forEach(t => {
+                    logEvent(t.id, 'STUCK', `Task was stuck for ${t.age}s on startup, reset to PENDING`, { age_seconds: t.age });
+                });
             }
         }
     } catch (e) {
