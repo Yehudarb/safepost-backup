@@ -1261,10 +1261,10 @@ app.post('/api/tasks/reset-stuck', async (req, res) => {
         const now = Date.now();
         const FOUR_MINUTES = 4 * 60 * 1000;
 
-        // Find tasks stuck in PROCESSING/SENT for >4 minutes
+        // Find tasks stuck in PROCESSING/SENT for >4 minutes (using created_at as proxy)
         const { data: stuckTasks, error: fetchError } = await supabase
             .from('posts')
-            .select('id, status, updated_at')
+            .select('id, status, created_at')
             .in('status', ['PROCESSING', 'SENT'])
             .eq('app_source', 'backup');
 
@@ -1273,7 +1273,8 @@ app.post('/api/tasks/reset-stuck', async (req, res) => {
         const toReset = [];
         if (stuckTasks) {
             stuckTasks.forEach(task => {
-                const ageMs = now - new Date(task.updated_at).getTime();
+                const ageMs = now - new Date(task.created_at).getTime();
+                // A task is stuck if it's been in system for >4 mins AND still in PROCESSING/SENT
                 if (ageMs > FOUR_MINUTES) {
                     toReset.push(task.id);
                 }
