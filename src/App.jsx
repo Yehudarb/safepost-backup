@@ -5,7 +5,7 @@ import {
     Edit3, Trash2, Save, X, Sun, Moon, Paperclip, Clock,
     FolderPlus, Folder, Search, Ban, Zap, StopCircle,
     Sparkles, Info, Smile, Scissors, AlignLeft, Languages, Hash, Megaphone,
-    GripVertical
+    GripVertical, BarChart3
 } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar-bento';
 import { io } from 'socket.io-client';
@@ -1313,6 +1313,32 @@ export default function App() {
                     onGenerate={ApiService.generateAiContent.bind(ApiService)}
                     onClose={() => setShowAiModal(false)} />
             )}
+
+            {/* ── STITCH DOCK (glass bottom nav) ── */}
+            <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-40">
+                <div className="flex gap-1 bg-[#161b22]/80 backdrop-blur-md border border-[#30363d] rounded-2xl px-2 py-2 shadow-2xl">
+                    <button onClick={handleToggleAnalytics} disabled={analyticsLoading}
+                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-400 hover:text-emerald-400 transition disabled:opacity-50"
+                        aria-label="Analytics" title="Analytics">
+                        <BarChart3 className="w-5 h-5" />
+                    </button>
+                    <button onClick={() => setShowAiModal(true)}
+                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-400 hover:text-amber-400 transition"
+                        aria-label="AI Assistant" title="AI Assistant">
+                        <Sparkles className="w-5 h-5" />
+                    </button>
+                    <button onClick={() => setShowLibraryPanel(p => !p)}
+                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-400 hover:text-blue-400 transition"
+                        aria-label="Templates" title="Templates">
+                        <Layers className="w-5 h-5" />
+                    </button>
+                    <button onClick={() => setShowFoldersPanel(p => !p)}
+                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-400 hover:text-sky-400 transition"
+                        aria-label="Folders" title="Folders">
+                        <Folder className="w-5 h-5" />
+                    </button>
+                </div>
+            </div>
 
             {/* ── FOOTER ── */}
             <footer className="fixed bottom-0 w-full h-8 bg-white dark:bg-[#0d1117] border-t border-gray-200 dark:border-[#30363d] flex items-center justify-between px-6 text-[10px] text-slate-500 dark:text-gray-500 uppercase tracking-wider z-50 transition-colors duration-300">
