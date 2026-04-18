@@ -1415,22 +1415,22 @@ export default function App() {
 }
 
 function StatBox({ label, value, icon, accent = 'blue' }) {
-    const accentBorder = {
-        blue: 'border-l-blue-400',
-        green: 'border-l-emerald-400',
-        yellow: 'border-l-amber-400',
-        red: 'border-l-rose-400',
+    const accentMap = {
+        blue: { border: 'border-l-blue-500', iconBg: 'bg-blue-50', icon: 'text-blue-600' },
+        green: { border: 'border-l-emerald-500', iconBg: 'bg-emerald-50', icon: 'text-emerald-600' },
+        yellow: { border: 'border-l-amber-500', iconBg: 'bg-amber-50', icon: 'text-amber-600' },
+        red: { border: 'border-l-rose-500', iconBg: 'bg-rose-50', icon: 'text-rose-600' },
     };
+    const colors = accentMap[accent];
     return (
-        <div className={`${accentBorder[accent]} border-l-4 bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-xl p-4 lg:p-5 shadow-lg hover:shadow-xl hover:border-[#30363d] transition-all duration-200 group cursor-default overflow-hidden relative`}>
-            <div className="absolute inset-0 bg-gradient-to-br from-white/8 to-transparent pointer-events-none rounded-xl" />
+        <div className={`${colors.border} border-l-4 bg-white border border-gray-100 rounded-lg p-4 lg:p-5 shadow-sm hover:shadow-md hover:border-gray-200 transition-all duration-200 group cursor-default overflow-hidden relative`}>
             <div className="relative flex flex-col justify-between h-full">
                 <div>
-                    <div className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">{label}</div>
-                    <div className="text-2xl lg:text-3xl font-black text-white mt-2">{value}</div>
+                    <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest letter-spacing-wide">{label}</div>
+                    <div className="text-3xl lg:text-4xl font-black text-gray-900 mt-2">{value}</div>
                 </div>
-                <div className="mt-4 p-2 bg-white/10 rounded-lg border border-white/20 w-fit group-hover:bg-white/15 transition-all">
-                    {icon}
+                <div className={`mt-4 p-2.5 ${colors.iconBg} rounded-lg w-fit`}>
+                    <div className={colors.icon}>{icon}</div>
                 </div>
             </div>
         </div>
