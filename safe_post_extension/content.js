@@ -123,28 +123,27 @@ function detectAdminApprovalBanner() {
     const bodyText = document.body.innerText || '';
     const htmlText = document.body.innerHTML || '';
 
-    // Search for any visible approval-related text on page
-    const allElements = document.querySelectorAll('*');
-    let foundElements = [];
+    // Collect text from all visible elements
+    const allText = Array.from(document.querySelectorAll('*'))
+        .filter(el => el.offsetParent !== null) // visible only
+        .map(el => el.textContent || el.innerText || '')
+        .join(' ');
 
-    allElements.forEach(el => {
-        const text = el.innerText || '';
-        if (text && (
-            /ממתין.*אישור|אישור.*מנהל|במחתנה.*אישור|מנהל.*אישור/i.test(text) ||
-            /pending.*approval|approval.*pending|awaiting.*approval/i.test(text)
-        )) {
-            foundElements.push({
-                tag: el.tagName,
-                text: text.substring(0, 100),
-                visible: el.offsetParent !== null
-            });
-        }
-    });
+    // Simple patterns for the most common cases
+    const simplePatterns = [
+        /ממתין.*מנהל/i,         // "pending admin" pattern
+        /ממתין.*אישור/i,        // "pending approval" pattern
+        /בהמתנה.*מנהל/i,        // "awaiting admin" pattern
+        /בהמתנה.*אישור/i,       // "awaiting approval" pattern
+    ];
 
     const hebrewPatterns = [
+        /ממתין.*למנהל/i,           // "ממתין למנהל"
+        /ממתין.*מנהל/i,            // "ממתין מנהל"
+        /בהמתנה.*מנהל/i,           // "בהמתנה מנהל"
+        /למנהל/i,                  // "למנהל" (to admin)
         /במחתנה.*לאישור.*מנהל/i,  // "במחתנה לאישור מנהל"
         /ממתין.*אישור.*מנהל/i,    // "ממתין אישור מנהל"
-        /בהמתנה.*מנהל/i,          // "בהמתנה מנהל"
         /לאישור.*מנהל/i,          // "לאישור מנהל"
         /מנהל.*אישור/i,           // "מנהל אישור"
         /אישור.*מנהל/i,           // "אישור מנהל"
@@ -159,18 +158,25 @@ function detectAdminApprovalBanner() {
         /admin.*approval/i,
     ];
 
-    const detected = hebrewPatterns.some(p => p.test(bodyText)) ||
-                     englishPatterns.some(p => p.test(bodyText));
+    // Check against all collected sources
+    const detected = simplePatterns.some(p => p.test(bodyText) || p.test(allText)) ||
+                     hebrewPatterns.some(p => p.test(bodyText) || p.test(allText)) ||
+                     englishPatterns.some(p => p.test(bodyText) || p.test(allText));
 
     logRemote("🔍 APPROVAL CHECK", {
         detected,
         bodyTextLength: bodyText.length,
-        foundElements: foundElements.length,
-        elements: foundElements.slice(0, 3)
+        allTextLength: allText.length,
+        foundSimple: simplePatterns.some(p => p.test(bodyText) || p.test(allText)),
+        foundHebrew: hebrewPatterns.some(p => p.test(bodyText) || p.test(allText)),
+        foundEnglish: englishPatterns.some(p => p.test(bodyText) || p.test(allText))
     });
 
     if (detected) {
-        logRemote("⛔ APPROVAL BANNER DETECTED - BLOCKING POST", { bodyText: bodyText.substring(0, 300) });
+        logRemote("⛔ APPROVAL BANNER DETECTED - BLOCKING POST", {
+            bodyText: bodyText.substring(0, 300),
+            allText: allText.substring(0, 300)
+        });
     }
 
     return detected;

@@ -258,8 +258,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(request.payload)
-        }).catch(err => console.error("Status Network Error:", err));
-        return false;
+        }).catch(err => console.error("Status Network Error:", err))
+         .finally(() => sendResponse({ ok: true }));
+        return true;
     }
 
     if (request.action === "GET_COOKIES") {
