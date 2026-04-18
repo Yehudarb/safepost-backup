@@ -119,14 +119,33 @@ async function scrapeAndSyncGroups() {
 
 // --- Admin Approval Detection ---
 function detectAdminApprovalBanner() {
-    const text = document.body.innerText || '';
-    const patterns = [
-        /ממתין לאישור מנהל/i,
-        /pending.*admin.*approv/i,
-        /awaiting.*moderator/i,
-        /needs.*admin.*approv/i,
+    const pageText = document.body.innerText || '';
+
+    // Hebrew patterns
+    const hebrewPatterns = [
+        /ממתין.*אישור.*מנהל/i,
+        /אישור.*מנהל/i,
+        /המנהל.*אישור/i,
+        /אישור.*מודעה/i,
+        /ממתין.*מנהל/i,
     ];
-    return patterns.some(p => p.test(text));
+
+    // English patterns
+    const englishPatterns = [
+        /pending.*admin.*approval/i,
+        /awaiting.*approval/i,
+        /admin.*approval/i,
+        /needs.*approval/i,
+        /approval.*pending/i,
+    ];
+
+    const detected = hebrewPatterns.some(p => p.test(pageText)) ||
+                     englishPatterns.some(p => p.test(pageText));
+
+    if (detected) {
+        logRemote("🔍 Admin approval banner detected", { pageText: pageText.substring(0, 200) });
+    }
+    return detected;
 }
 
 // --- Posting Logic ---
@@ -146,8 +165,11 @@ async function performPost(job) {
     window.hud.updateText("מתחיל עבודה", "טוען נתוני פוסט...");
 
     // Pre-flight: Check for admin approval pending
+    logRemote("🔐 Running pre-flight admin approval check...");
+    await sleep(500); // Wait for page to fully render
+
     if (detectAdminApprovalBanner()) {
-        logRemote("⛔ Admin approval pending detected - cancelling task");
+        logRemote("⛔ ADMIN APPROVAL PENDING DETECTED - TASK CANCELLED");
         window.hud.updateText("ביטול", "ממתין לאישור מנהל");
         safeSendMessage({
             action: "REPORT_STATUS",
@@ -157,10 +179,13 @@ async function performPost(job) {
                 failure_reason: 'ממתין לאישור מנהל – הפוסט לא נשלח'
             }
         });
-        await sleep(1000);
+        await sleep(1500);
         window.hud.destroy();
         safeSendMessage({ action: 'CLOSE_TAB' });
+        logRemote("✅ Task cancelled and tab closing");
         return;
+    } else {
+        logRemote("✅ Pre-flight check passed - no admin approval pending");
     }
 
     // 1. Trigger "Create Post" Modal
