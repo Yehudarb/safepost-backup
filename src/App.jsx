@@ -763,7 +763,7 @@ export default function App() {
                         </div>
 
                         {/* CONTENT */}
-                        <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl p-4 shadow-sm space-y-3">
+                        <div className="bg-[#161b22]/80 backdrop-blur-md border border-[#30363d]/50 rounded-2xl p-5 shadow-lg space-y-3">
                             <div className="flex justify-between items-center">
                                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
                                     <span className="w-1 h-1 bg-blue-500 rounded-full" /> Content Architecture
@@ -854,7 +854,7 @@ export default function App() {
                         </div>
 
                         {/* MEDIA */}
-                        <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl p-4 shadow-sm space-y-3">
+                        <div className="bg-[#161b22]/80 backdrop-blur-md border border-[#30363d]/50 rounded-2xl p-5 shadow-lg space-y-3">
                             <div className="flex justify-between items-center">
                                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
                                     <span className="w-1 h-1 bg-blue-500 rounded-full" /> Media Attachment
@@ -888,7 +888,7 @@ export default function App() {
                         </div>
 
                         {/* GROUPS */}
-                        <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl p-4 shadow-sm flex flex-col space-y-3">
+                        <div className="bg-[#161b22]/80 backdrop-blur-md border border-[#30363d]/50 rounded-2xl p-5 shadow-lg flex flex-col space-y-3">
                             <div className="flex justify-between items-center">
                                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
                                     <span className="w-1 h-1 bg-blue-500 rounded-full" /> Target Nodes ({selectedGroups.length})
@@ -1056,7 +1056,7 @@ export default function App() {
                         </div>
 
                         {/* CALENDAR */}
-                        <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl p-4 shadow-sm">
+                        <div className="bg-[#161b22]/80 backdrop-blur-md border border-[#30363d]/50 rounded-2xl p-5 shadow-lg">
                             <Calendar value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} compact={true} />
                         </div>
                     </div>
@@ -1102,13 +1102,13 @@ export default function App() {
                         </div>
                     )}
 
-                    {/* Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 md:gap-4 mb-4">
-                        <StatBox label="Total"            value={stats.total}      icon={<Layers      className="text-blue-500" />} />
-                        <StatBox label="Pending"          value={stats.pending}    icon={<Clock       className="text-yellow-500" />} />
-                        <StatBox label="Processing"       value={stats.processing} icon={<Zap         className="text-blue-400" />} />
-                        <StatBox label="Successful"       value={stats.completed}  icon={<CheckCircle className="text-green-500" />} />
-                        <StatBox label="Failed/Abort"     value={stats.failed + stats.cancelled} icon={<XCircle className="text-red-500" />} />
+                    {/* Stats — Bento Grid */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                        <StatBox label="Total Tasks"         value={stats.total}      icon={<Layers      className="w-6 h-6 text-blue-400" />}         size="large" accent="blue" />
+                        <StatBox label="Pending Queue"       value={stats.pending}    icon={<Clock       className="w-6 h-6 text-amber-400" />}       size="large" accent="yellow" />
+                        <StatBox label="Publishing"         value={stats.processing} icon={<Zap         className="w-5 h-5 text-blue-400" />}        accent="blue" />
+                        <StatBox label="Completed"          value={stats.completed}  icon={<CheckCircle className="w-5 h-5 text-emerald-400" />}  accent="green" />
+                        <StatBox label="Failed/Cancelled"   value={stats.failed + stats.cancelled} icon={<XCircle className="w-5 h-5 text-rose-400" />} accent="red" />
                     </div>
 
                     {/* Analytics Toggle Button */}
@@ -1131,11 +1131,11 @@ export default function App() {
                         </ErrorBoundary>
                     )}
 
-                    {/* Operation Feed */}
-                    <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-xl overflow-hidden shadow-sm">
-                        <div className="p-4 border-b border-gray-200 dark:border-[#30363d] flex justify-between items-center bg-gray-50 dark:bg-[#1c2128]">
+                    {/* Operation Feed — Glassmorphic Card */}
+                    <div className="bg-[#161b22]/80 backdrop-blur-md border border-[#30363d]/50 rounded-2xl overflow-hidden shadow-2xl">
+                        <div className="p-6 border-b border-[#30363d]/30 flex justify-between items-center bg-gradient-to-r from-[#1c2128]/80 to-[#161b22]/40 backdrop-blur-sm">
                             <div className="flex items-center gap-3">
-                                <h3 className="font-bold text-slate-800 dark:text-white text-sm flex items-center gap-2">
+                                <h3 className="font-black text-white text-sm uppercase tracking-widest flex items-center gap-2">
                                     <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" /> Live Operation Feed
                                 </h3>
                                 <CountdownTimer queue={queue} fetchAllData={fetchAllData} />
@@ -1182,7 +1182,7 @@ export default function App() {
 
                         <div className="overflow-x-auto">
                             <table className="w-full text-left">
-                                <thead className={`bg-gray-50 dark:bg-[#0d1117] text-gray-500 dark:text-gray-400 uppercase font-semibold border-b border-gray-100 dark:border-[#30363d] ${isCompact ? 'text-[9px]' : 'text-xs'}`}>
+                                <thead className={`bg-[#0d1117]/60 text-gray-400 uppercase font-black border-b border-[#30363d]/30 ${isCompact ? 'text-[9px]' : 'text-xs'}`}>
                                     <tr>
                                         <th className={`${isCompact ? 'p-2' : 'p-4'} w-10`}>
                                             <button onClick={toggleAll} aria-label="בחר הכל" className="p-1 hover:bg-gray-200 dark:hover:bg-gray-800 rounded transition">
@@ -1198,11 +1198,11 @@ export default function App() {
                                         <th className={`${isCompact ? 'p-2' : 'p-4'} w-24 lg:w-32 text-center`}>Actions</th>
                                     </tr>
                                 </thead>
-                                <tbody className={`divide-y divide-gray-100 dark:divide-[#30363d] text-xs`} onClick={handleTableClick}>
+                                <tbody className={`divide-y divide-[#30363d]/20 text-xs`} onClick={handleTableClick}>
                                     {filteredQueue.length === 0
-                                        ? <tr><td colSpan="7" className="p-12 text-center text-gray-500 dark:text-gray-600">{queue.length === 0 ? 'No tasks found.' : 'No tasks match this filter.'}</td></tr>
+                                        ? <tr><td colSpan="7" className="p-12 text-center text-gray-600">{queue.length === 0 ? 'No tasks found.' : 'No tasks match this filter.'}</td></tr>
                                         : filteredQueue.map(row => (
-                                            <tr key={row.id} className={`hover:bg-gray-50 dark:hover:bg-[#1f242c] transition group ${processingIds.has(row.id) ? 'opacity-50 pointer-events-none' : ''} ${row.status === 'CANCELLED' ? 'opacity-40' : ''}`}>
+                                            <tr key={row.id} className={`hover:bg-white/5 transition duration-200 group ${processingIds.has(row.id) ? 'opacity-50 pointer-events-none' : ''} ${row.status === 'CANCELLED' ? 'opacity-40' : ''}`}>
                                                 <td className={`${isCompact ? 'p-2' : 'p-4'}`}>
                                                     <button onClick={e => { e.stopPropagation(); toggleSingle(row.id); }} className="p-1">
                                                         {selectedTaskIds.includes(row.id)
@@ -1414,30 +1414,42 @@ export default function App() {
     );
 }
 
-function StatBox({ label, value, icon }) {
+function StatBox({ label, value, icon, size = 'normal', accent = 'blue' }) {
+    const accentMap = {
+        blue: 'border-blue-500/20 hover:border-blue-500/40 hover:bg-blue-500/5',
+        green: 'border-emerald-500/20 hover:border-emerald-500/40 hover:bg-emerald-500/5',
+        yellow: 'border-amber-500/20 hover:border-amber-500/40 hover:bg-amber-500/5',
+        red: 'border-rose-500/20 hover:border-rose-500/40 hover:bg-rose-500/5',
+    };
+    const sizeClass = size === 'large' ? 'md:col-span-2 md:row-span-2' : 'col-span-1';
     return (
-        <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] p-3 lg:p-5 rounded-lg flex items-center justify-between shadow-sm transition-colors duration-300">
-            <div>
-                <div className="text-[9px] lg:text-[10px] font-bold text-gray-500 uppercase tracking-wider">{label}</div>
-                <div className="text-xl lg:text-2xl font-bold text-slate-900 dark:text-white mt-1">{value}</div>
+        <div className={`${sizeClass} bg-[#161b22]/80 backdrop-blur-md border ${accentMap[accent]} rounded-2xl p-5 lg:p-7 shadow-xl hover:shadow-2xl transition-all duration-300 group cursor-default overflow-hidden relative`}>
+            <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent pointer-events-none rounded-2xl" />
+            <div className="relative flex flex-col justify-between h-full">
+                <div>
+                    <div className="text-[9px] font-black text-gray-500 uppercase tracking-widest">{label}</div>
+                    <div className={`${size === 'large' ? 'text-4xl lg:text-5xl' : 'text-2xl lg:text-3xl'} font-black text-white mt-4`}>{value}</div>
+                </div>
+                <div className="mt-4 p-3 bg-[#0d1117]/60 rounded-xl border border-[#30363d]/30 w-fit group-hover:border-[#30363d]/60 transition-colors">
+                    {icon}
+                </div>
             </div>
-            <div className="p-2 bg-gray-100 dark:bg-[#0d1117] rounded-lg border border-gray-200 dark:border-[#30363d]">{icon}</div>
         </div>
     );
 }
 
 function getStatusBadge(status) {
     if (status === 'COMPLETED' || status === 'SUCCESS')
-        return 'bg-green-100 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-700 dark:text-green-400';
+        return 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 font-bold';
     if (status === 'FAILED')
-        return 'bg-red-100 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400';
+        return 'bg-rose-500/20 border-rose-500/40 text-rose-300 font-bold';
     if (status === 'SENT')
-        return 'bg-sky-100 dark:bg-sky-900/20 border-sky-200 dark:border-sky-800 text-sky-700 dark:text-sky-400 animate-pulse';
+        return 'bg-sky-500/20 border-sky-500/40 text-sky-300 font-bold animate-pulse';
     if (status === 'PROCESSING')
-        return 'bg-blue-100 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-400 status-pulse';
+        return 'bg-blue-500/20 border-blue-500/40 text-blue-300 font-bold status-pulse';
     if (status === 'CANCELLED')
-        return 'bg-gray-100 dark:bg-gray-800/40 border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-500 line-through';
+        return 'bg-gray-500/20 border-gray-500/40 text-gray-400 font-bold line-through';
     if (status === 'PENDING_APPROVAL')
-        return 'bg-yellow-50 dark:bg-yellow-900/10 border-yellow-200 dark:border-yellow-700 text-yellow-700 dark:text-yellow-500';
-    return 'bg-yellow-100 dark:bg-yellow-900/20 border-yellow-200 dark:border-yellow-800 text-yellow-700 dark:text-yellow-400';
+        return 'bg-amber-500/20 border-amber-500/40 text-amber-300 font-bold';
+    return 'bg-amber-500/20 border-amber-500/40 text-amber-300 font-bold';
 }
