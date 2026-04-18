@@ -763,7 +763,7 @@ export default function App() {
                         </div>
 
                         {/* CONTENT */}
-                        <div className="bg-[#161b22]/80 backdrop-blur-md border border-[#30363d]/50 rounded-2xl p-5 shadow-lg space-y-3">
+                        <div className="bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-2xl p-5 shadow-lg space-y-3">
                             <div className="flex justify-between items-center">
                                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
                                     <span className="w-1 h-1 bg-blue-500 rounded-full" /> Content Architecture
@@ -854,7 +854,7 @@ export default function App() {
                         </div>
 
                         {/* MEDIA */}
-                        <div className="bg-[#161b22]/80 backdrop-blur-md border border-[#30363d]/50 rounded-2xl p-5 shadow-lg space-y-3">
+                        <div className="bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-2xl p-5 shadow-lg space-y-3">
                             <div className="flex justify-between items-center">
                                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
                                     <span className="w-1 h-1 bg-blue-500 rounded-full" /> Media Attachment
@@ -888,7 +888,7 @@ export default function App() {
                         </div>
 
                         {/* GROUPS */}
-                        <div className="bg-[#161b22]/80 backdrop-blur-md border border-[#30363d]/50 rounded-2xl p-5 shadow-lg flex flex-col space-y-3">
+                        <div className="bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-2xl p-5 shadow-lg flex flex-col space-y-3">
                             <div className="flex justify-between items-center">
                                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
                                     <span className="w-1 h-1 bg-blue-500 rounded-full" /> Target Nodes ({selectedGroups.length})
@@ -1056,7 +1056,7 @@ export default function App() {
                         </div>
 
                         {/* CALENDAR */}
-                        <div className="bg-[#161b22]/80 backdrop-blur-md border border-[#30363d]/50 rounded-2xl p-5 shadow-lg">
+                        <div className="bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-2xl p-5 shadow-lg">
                             <Calendar value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} compact={true} />
                         </div>
                     </div>
@@ -1132,8 +1132,8 @@ export default function App() {
                     )}
 
                     {/* Operation Feed — Glassmorphic Card */}
-                    <div className="bg-[#161b22]/80 backdrop-blur-md border border-[#30363d]/50 rounded-2xl overflow-hidden shadow-2xl">
-                        <div className="p-6 border-b border-[#30363d]/30 flex justify-between items-center bg-gradient-to-r from-[#1c2128]/80 to-[#161b22]/40 backdrop-blur-sm">
+                    <div className="bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-2xl overflow-hidden shadow-2xl">
+                        <div className="p-6 border-b border-[#30363d]/30 flex justify-between items-center bg-gradient-to-r from-[#0d1117]/90 to-[#161b22]/80 backdrop-blur-sm">
                             <div className="flex items-center gap-3">
                                 <h3 className="font-black text-white text-sm uppercase tracking-widest flex items-center gap-2">
                                     <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" /> Live Operation Feed
@@ -1148,7 +1148,7 @@ export default function App() {
                                     { key: 'failed', label: `Failed (${stats.failed + stats.cancelled})` },
                                 ].map(({ key, label }) => (
                                     <button key={key} onClick={() => setQueueFilter(key)}
-                                        className={`text-[10px] font-bold px-3 py-1 rounded border transition ${queueFilter === key ? 'bg-blue-600 text-white border-blue-600' : 'bg-transparent text-slate-500 border-gray-300 dark:border-gray-600 dark:text-gray-400 hover:border-blue-400 hover:text-blue-400'}`}>
+                                        className={`text-[10px] font-bold px-3 py-1 rounded border transition ${queueFilter === key ? 'bg-blue-600 text-white border-blue-600' : 'bg-transparent text-gray-300 border-gray-500 dark:border-gray-500 dark:text-gray-200 hover:border-blue-400 hover:text-blue-300'}`}>
                                         {label}
                                     </button>
                                 ))}
@@ -1182,7 +1182,7 @@ export default function App() {
 
                         <div className="overflow-x-auto">
                             <table className="w-full text-left">
-                                <thead className={`bg-[#0d1117]/60 text-gray-400 uppercase font-black border-b border-[#30363d]/30 ${isCompact ? 'text-[9px]' : 'text-xs'}`}>
+                                <thead className={`bg-[#0d1117]/90 text-gray-200 uppercase font-black border-b border-[#30363d]/60 ${isCompact ? 'text-[9px]' : 'text-xs'}`}>
                                     <tr>
                                         <th className={`${isCompact ? 'p-2' : 'p-4'} w-10`}>
                                             <button onClick={toggleAll} aria-label="בחר הכל" className="p-1 hover:bg-gray-200 dark:hover:bg-gray-800 rounded transition">
@@ -1416,21 +1416,21 @@ export default function App() {
 
 function StatBox({ label, value, icon, size = 'normal', accent = 'blue' }) {
     const accentMap = {
-        blue: 'border-blue-500/40 hover:border-blue-500/60 bg-blue-950/20 hover:bg-blue-950/30',
-        green: 'border-emerald-500/40 hover:border-emerald-500/60 bg-emerald-950/20 hover:bg-emerald-950/30',
-        yellow: 'border-amber-500/40 hover:border-amber-500/60 bg-amber-950/20 hover:bg-amber-950/30',
-        red: 'border-rose-500/40 hover:border-rose-500/60 bg-rose-950/20 hover:bg-rose-950/30',
+        blue: 'border-blue-400/70 hover:border-blue-400/90 bg-blue-900/50 hover:bg-blue-900/65',
+        green: 'border-emerald-400/70 hover:border-emerald-400/90 bg-emerald-900/50 hover:bg-emerald-900/65',
+        yellow: 'border-amber-400/70 hover:border-amber-400/90 bg-amber-900/50 hover:bg-amber-900/65',
+        red: 'border-rose-400/70 hover:border-rose-400/90 bg-rose-900/50 hover:bg-rose-900/65',
     };
     const sizeClass = size === 'large' ? 'md:col-span-2 md:row-span-2' : 'col-span-1';
     return (
-        <div className={`${sizeClass} ${accentMap[accent]} backdrop-blur-md border rounded-2xl p-5 lg:p-7 shadow-xl hover:shadow-2xl transition-all duration-300 group cursor-default overflow-hidden relative`}>
-            <div className="absolute inset-0 bg-gradient-to-br from-white/8 to-transparent pointer-events-none rounded-2xl" />
+        <div className={`${sizeClass} ${accentMap[accent]} backdrop-blur-md border rounded-2xl p-5 lg:p-7 shadow-2xl hover:shadow-3xl transition-all duration-300 group cursor-default overflow-hidden relative`}>
+            <div className="absolute inset-0 bg-gradient-to-br from-white/15 to-transparent pointer-events-none rounded-2xl" />
             <div className="relative flex flex-col justify-between h-full">
                 <div>
-                    <div className="text-[10px] font-black text-gray-300 uppercase tracking-widest">{label}</div>
+                    <div className="text-[11px] font-black text-white uppercase tracking-widest opacity-90">{label}</div>
                     <div className={`${size === 'large' ? 'text-5xl lg:text-6xl' : 'text-3xl lg:text-4xl'} font-black text-white mt-3`}>{value}</div>
                 </div>
-                <div className="mt-6 p-3 bg-white/10 rounded-xl border border-white/20 w-fit group-hover:bg-white/15 group-hover:border-white/30 transition-all">
+                <div className="mt-6 p-3 bg-white/20 rounded-xl border border-white/40 w-fit group-hover:bg-white/30 group-hover:border-white/60 transition-all">
                     {icon}
                 </div>
             </div>
