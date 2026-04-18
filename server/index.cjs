@@ -1193,6 +1193,16 @@ app.patch('/api/tasks/:id/status', async (req, res) => {
         logEvent(id, 'FAILED', failReason || 'Task failed with unknown error', { source: 'extension_worker' });
     }
 
+    // Task Cancellation LOG
+    if (status === 'CANCELLED') {
+        await supabase.from('system_logs').insert([{
+            log_level: 'warn',
+            source: 'extension_worker',
+            message: `Task #${id} CANCELLED: ${failReason || 'Manual cancellation'}`
+        }]);
+        logEvent(id, 'CANCELLED', failReason || 'Task cancelled', { source: 'extension_worker', reason: failReason });
+    }
+
     // Clear from tracking maps on end states
     if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(status)) {
         processingStartTimestamps.delete(parseInt(id) || id);
