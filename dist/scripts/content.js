@@ -121,6 +121,30 @@ async function scrapeAndSyncGroups() {
 function detectAdminApprovalBanner() {
     logRemote("🔍 STARTING ADMIN APPROVAL DETECTION", { url: window.location.href });
 
+    // AGGRESSIVE: Scan EVERY element for approval text
+    let foundElements = [];
+    const approvalKeywords = ['בהמתנה', 'ממתין', 'אישור', 'מנהל', 'pending', 'approval', 'awaiting'];
+
+    Array.from(document.querySelectorAll('*')).forEach(el => {
+        const text = (el.textContent || el.innerText || '').trim();
+        if (text.length > 0 && text.length < 200) { // Only check reasonably-sized text
+            const hasApproval = approvalKeywords.some(kw => text.toLowerCase().includes(kw.toLowerCase()));
+            if (hasApproval) {
+                foundElements.push({
+                    tag: el.tagName,
+                    text: text,
+                    classes: el.className,
+                    visible: el.offsetParent !== null
+                });
+            }
+        }
+    });
+
+    logRemote("🔎 Found approval-related elements", {
+        count: foundElements.length,
+        elements: foundElements.slice(0, 5)
+    });
+
     // Check multiple sources
     const bodyText = document.body.innerText || '';
     const htmlText = document.body.innerHTML || '';
@@ -137,15 +161,24 @@ function detectAdminApprovalBanner() {
         .map(el => `${el.getAttribute('data-tooltip-content') || ''} ${el.getAttribute('title') || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('placeholder') || ''}`)
         .join(' ');
 
+    // CRITICAL: Check for exact phrase "בהמתנה לאישור מנהל"
+    const exactMatch = bodyText.includes('בהמתנה לאישור מנהל') ||
+                       allText.includes('בהמתנה לאישור מנהל') ||
+                       bodyText.includes('בהמתנה לאישור') ||
+                       allText.includes('בהמתנה לאישור');
+
     // Simple patterns for the most common cases
     const simplePatterns = [
-        /ממתין.*מנהל/i,         // "pending admin" pattern
-        /ממתין.*אישור/i,        // "pending approval" pattern
-        /בהמתנה.*מנהל/i,        // "awaiting admin" pattern
-        /בהמתנה.*אישור/i,       // "awaiting approval" pattern
+        /בהמתנה.*לאישור.*מנהל/i,  // "בהמתנה לאישור מנהל" (exact)
+        /בהמתנה.*לאישור/i,        // "בהמתנה לאישור" (common)
+        /ממתין.*מנהל/i,            // "ממתין מנהל"
+        /ממתין.*אישור/i,           // "ממתין אישור"
+        /בהמתנה.*מנהל/i,           // "בהמתנה מנהל"
+        /בהמתנה.*אישור/i,          // "בהמתנה אישור"
     ];
 
     const hebrewPatterns = [
+        /בהמתנה.*למנהל/i,          // "בהמתנה למנהל"
         /ממתין.*למנהל/i,           // "ממתין למנהל"
         /ממתין.*מנהל/i,            // "ממתין מנהל"
         /בהמתנה.*מנהל/i,           // "בהמתנה מנהל"
@@ -170,10 +203,11 @@ function detectAdminApprovalBanner() {
     const detectedSimple = simplePatterns.some(p => p.test(bodyText) || p.test(allText) || p.test(attributeText));
     const detectedHebrew = hebrewPatterns.some(p => p.test(bodyText) || p.test(allText) || p.test(attributeText));
     const detectedEnglish = englishPatterns.some(p => p.test(bodyText) || p.test(allText) || p.test(attributeText));
-    const detected = detectedSimple || detectedHebrew || detectedEnglish;
+    const detected = exactMatch || detectedSimple || detectedHebrew || detectedEnglish;
 
     logRemote("🔍 APPROVAL CHECK DETAILED", {
         detected,
+        exactMatch,
         url: window.location.href,
         bodyTextLength: bodyText.length,
         allTextLength: allText.length,
@@ -181,17 +215,15 @@ function detectAdminApprovalBanner() {
         foundSimple: detectedSimple,
         foundHebrew: detectedHebrew,
         foundEnglish: detectedEnglish,
-        bodyTextSample: bodyText.substring(0, 200),
-        allTextSample: allText.substring(0, 200),
-        attributeTextSample: attributeText.substring(0, 200)
+        foundElements: foundElements.length,
+        bodyTextSample: bodyText.substring(0, 300),
     });
 
     if (detected) {
         logRemote("⛔⛔⛔ APPROVAL BANNER DETECTED - BLOCKING POST IMMEDIATELY ⛔⛔⛔", {
             url: window.location.href,
-            bodyText: bodyText.substring(0, 500),
-            allText: allText.substring(0, 500),
-            attributeText: attributeText.substring(0, 300)
+            bodyText: bodyText.substring(0, 800),
+            foundElements: foundElements
         });
     }
 
