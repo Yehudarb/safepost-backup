@@ -119,6 +119,8 @@ async function scrapeAndSyncGroups() {
 
 // --- Admin Approval Detection ---
 function detectAdminApprovalBanner() {
+    logRemote("🔍 STARTING ADMIN APPROVAL DETECTION", { url: window.location.href });
+
     // Check multiple sources
     const bodyText = document.body.innerText || '';
     const htmlText = document.body.innerHTML || '';
@@ -127,6 +129,12 @@ function detectAdminApprovalBanner() {
     const allText = Array.from(document.querySelectorAll('*'))
         .filter(el => el.offsetParent !== null) // visible only
         .map(el => el.textContent || el.innerText || '')
+        .join(' ');
+
+    // Also check attributes and special places
+    const allElements = document.querySelectorAll('[data-tooltip-content], [title], [aria-label], [placeholder]');
+    const attributeText = Array.from(allElements)
+        .map(el => `${el.getAttribute('data-tooltip-content') || ''} ${el.getAttribute('title') || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('placeholder') || ''}`)
         .join(' ');
 
     // Simple patterns for the most common cases
@@ -159,23 +167,31 @@ function detectAdminApprovalBanner() {
     ];
 
     // Check against all collected sources
-    const detected = simplePatterns.some(p => p.test(bodyText) || p.test(allText)) ||
-                     hebrewPatterns.some(p => p.test(bodyText) || p.test(allText)) ||
-                     englishPatterns.some(p => p.test(bodyText) || p.test(allText));
+    const detectedSimple = simplePatterns.some(p => p.test(bodyText) || p.test(allText) || p.test(attributeText));
+    const detectedHebrew = hebrewPatterns.some(p => p.test(bodyText) || p.test(allText) || p.test(attributeText));
+    const detectedEnglish = englishPatterns.some(p => p.test(bodyText) || p.test(allText) || p.test(attributeText));
+    const detected = detectedSimple || detectedHebrew || detectedEnglish;
 
-    logRemote("🔍 APPROVAL CHECK", {
+    logRemote("🔍 APPROVAL CHECK DETAILED", {
         detected,
+        url: window.location.href,
         bodyTextLength: bodyText.length,
         allTextLength: allText.length,
-        foundSimple: simplePatterns.some(p => p.test(bodyText) || p.test(allText)),
-        foundHebrew: hebrewPatterns.some(p => p.test(bodyText) || p.test(allText)),
-        foundEnglish: englishPatterns.some(p => p.test(bodyText) || p.test(allText))
+        attributeTextLength: attributeText.length,
+        foundSimple: detectedSimple,
+        foundHebrew: detectedHebrew,
+        foundEnglish: detectedEnglish,
+        bodyTextSample: bodyText.substring(0, 200),
+        allTextSample: allText.substring(0, 200),
+        attributeTextSample: attributeText.substring(0, 200)
     });
 
     if (detected) {
-        logRemote("⛔ APPROVAL BANNER DETECTED - BLOCKING POST", {
-            bodyText: bodyText.substring(0, 300),
-            allText: allText.substring(0, 300)
+        logRemote("⛔⛔⛔ APPROVAL BANNER DETECTED - BLOCKING POST IMMEDIATELY ⛔⛔⛔", {
+            url: window.location.href,
+            bodyText: bodyText.substring(0, 500),
+            allText: allText.substring(0, 500),
+            attributeText: attributeText.substring(0, 300)
         });
     }
 
@@ -625,9 +641,18 @@ async function waitForModalClosure() {
         if (dialogText.includes("Post successful") || dialogText.includes("הפוסט פורסם")) return true;
 
         // Check for post-flight pending approval
-        const pendingPatterns = ['ממתין לאישור', 'pending review', 'awaiting approval', 'needs approval'];
+        const pendingPatterns = [
+            'ממתין לאישור',      // "pending approval"
+            'ממתין למנהל',       // "pending admin"
+            'ממתין מנהל',        // "pending admin" (variant)
+            'בהמתנה לאישור',    // "awaiting approval"
+            'בהמתנה מנהל',       // "awaiting admin"
+            'pending review',
+            'awaiting approval',
+            'needs approval'
+        ];
         if (pendingPatterns.some(p => dialogText.toLowerCase().includes(p.toLowerCase()))) {
-            logRemote("⚠️ Post submitted but pending review detected");
+            logRemote("⚠️ Post submitted but pending review detected - blocking post");
             return 'PENDING_REVIEW';
         }
 
