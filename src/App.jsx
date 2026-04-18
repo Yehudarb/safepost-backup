@@ -1102,10 +1102,10 @@ export default function App() {
                         </div>
                     )}
 
-                    {/* Stats — Bento Grid */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                        <StatBox label="Total Tasks"         value={stats.total}      icon={<Layers      className="w-6 h-6 text-blue-400" />}         size="large" accent="blue" />
-                        <StatBox label="Pending Queue"       value={stats.pending}    icon={<Clock       className="w-6 h-6 text-amber-400" />}       size="large" accent="yellow" />
+                    {/* Stats — Uniform Grid */}
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+                        <StatBox label="Total Tasks"         value={stats.total}      icon={<Layers      className="w-5 h-5 text-blue-400" />}         accent="blue" />
+                        <StatBox label="Pending Queue"       value={stats.pending}    icon={<Clock       className="w-5 h-5 text-amber-400" />}       accent="yellow" />
                         <StatBox label="Publishing"         value={stats.processing} icon={<Zap         className="w-5 h-5 text-blue-400" />}        accent="blue" />
                         <StatBox label="Completed"          value={stats.completed}  icon={<CheckCircle className="w-5 h-5 text-emerald-400" />}  accent="green" />
                         <StatBox label="Failed/Cancelled"   value={stats.failed + stats.cancelled} icon={<XCircle className="w-5 h-5 text-rose-400" />} accent="red" />
@@ -1414,23 +1414,22 @@ export default function App() {
     );
 }
 
-function StatBox({ label, value, icon, size = 'normal', accent = 'blue' }) {
-    const accentMap = {
-        blue: 'border-blue-400/70 hover:border-blue-400/90 bg-blue-900/50 hover:bg-blue-900/65',
-        green: 'border-emerald-400/70 hover:border-emerald-400/90 bg-emerald-900/50 hover:bg-emerald-900/65',
-        yellow: 'border-amber-400/70 hover:border-amber-400/90 bg-amber-900/50 hover:bg-amber-900/65',
-        red: 'border-rose-400/70 hover:border-rose-400/90 bg-rose-900/50 hover:bg-rose-900/65',
+function StatBox({ label, value, icon, accent = 'blue' }) {
+    const accentBorder = {
+        blue: 'border-l-blue-400',
+        green: 'border-l-emerald-400',
+        yellow: 'border-l-amber-400',
+        red: 'border-l-rose-400',
     };
-    const sizeClass = size === 'large' ? 'md:col-span-2 md:row-span-2' : 'col-span-1';
     return (
-        <div className={`${sizeClass} ${accentMap[accent]} backdrop-blur-md border rounded-2xl p-5 lg:p-7 shadow-2xl hover:shadow-3xl transition-all duration-300 group cursor-default overflow-hidden relative`}>
-            <div className="absolute inset-0 bg-gradient-to-br from-white/15 to-transparent pointer-events-none rounded-2xl" />
+        <div className={`${accentBorder[accent]} border-l-4 bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-xl p-4 lg:p-5 shadow-lg hover:shadow-xl hover:border-[#30363d] transition-all duration-200 group cursor-default overflow-hidden relative`}>
+            <div className="absolute inset-0 bg-gradient-to-br from-white/8 to-transparent pointer-events-none rounded-xl" />
             <div className="relative flex flex-col justify-between h-full">
                 <div>
-                    <div className="text-[11px] font-black text-white uppercase tracking-widest opacity-90">{label}</div>
-                    <div className={`${size === 'large' ? 'text-5xl lg:text-6xl' : 'text-3xl lg:text-4xl'} font-black text-white mt-3`}>{value}</div>
+                    <div className="text-[10px] font-bold text-gray-300 uppercase tracking-widest">{label}</div>
+                    <div className="text-2xl lg:text-3xl font-black text-white mt-2">{value}</div>
                 </div>
-                <div className="mt-6 p-3 bg-white/20 rounded-xl border border-white/40 w-fit group-hover:bg-white/30 group-hover:border-white/60 transition-all">
+                <div className="mt-4 p-2 bg-white/10 rounded-lg border border-white/20 w-fit group-hover:bg-white/15 transition-all">
                     {icon}
                 </div>
             </div>
