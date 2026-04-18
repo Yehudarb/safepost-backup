@@ -257,6 +257,9 @@ async function updateTaskStatus(taskId, status, message = null, metadata = null)
     } else if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(status)) {
         processingStartTimestamps.delete(taskId);
         sentTaskTimestamps.delete(taskId);
+        if (status === 'CANCELLED') {
+            logEvent(taskId, 'CANCELLED', `Task cancelled`, { failure_reason: message });
+        }
     }
     try {
         // 1. Update Post Status (Only if not a transient log)
@@ -1241,10 +1244,11 @@ app.post('/api/tasks/:id/cancel', async (req, res) => {
     const { id } = req.params;
     const { error } = await supabase
         .from('posts')
-        .update({ status: 'CANCELLED' })
+        .update({ status: 'CANCELLED', failure_reason: 'ביטול ידני' })
         .eq('id', id)
         .in('status', ['PENDING']);
     if (error) return res.status(500).json({ error: error.message });
+    logEvent(id, 'CANCELLED', 'Task manually cancelled', { reason: 'ביטול ידני' });
     io.emit('queue_updated');
     res.json({ success: true });
 });

@@ -117,6 +117,18 @@ async function scrapeAndSyncGroups() {
     }
 }
 
+// --- Admin Approval Detection ---
+function detectAdminApprovalBanner() {
+    const text = document.body.innerText || '';
+    const patterns = [
+        /ממתין לאישור מנהל/i,
+        /pending.*admin.*approv/i,
+        /awaiting.*moderator/i,
+        /needs.*admin.*approv/i,
+    ];
+    return patterns.some(p => p.test(text));
+}
+
 // --- Posting Logic ---
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'EXECUTE_POST') {
@@ -132,6 +144,24 @@ async function performPost(job) {
     window.hud.mount();
     window.hud.startElapsedTimer();
     window.hud.updateText("מתחיל עבודה", "טוען נתוני פוסט...");
+
+    // Pre-flight: Check for admin approval pending
+    if (detectAdminApprovalBanner()) {
+        logRemote("⛔ Admin approval pending detected - cancelling task");
+        window.hud.updateText("ביטול", "ממתין לאישור מנהל");
+        safeSendMessage({
+            action: "REPORT_STATUS",
+            payload: {
+                taskId: job.id,
+                status: 'CANCELLED',
+                failure_reason: 'ממתין לאישור מנהל – הפוסט לא נשלח'
+            }
+        });
+        await sleep(1000);
+        window.hud.destroy();
+        safeSendMessage({ action: 'CLOSE_TAB' });
+        return;
+    }
 
     // 1. Trigger "Create Post" Modal
     const triggers = ["What's on your mind", "Write something", "Create a public post", "כתוב משהו", "כאן כותבים", "צור פוסט ציבורי", "הבעת דעה"];
@@ -202,14 +232,27 @@ async function performPost(job) {
 
         // 5. Verify
         const verifySuccess = await waitForModalClosure();
-        if (verifySuccess) {
+
+        // Check for post-flight pending approval
+        if (verifySuccess === 'PENDING_REVIEW') {
+            logRemote("⛔ Post submitted but pending review detected - cancelling task");
+            window.hud.updateText("ביטול", "הפוסט ממתין לאישור מנהל");
+            safeSendMessage({
+                action: "REPORT_STATUS",
+                payload: {
+                    taskId: job.id,
+                    status: 'CANCELLED',
+                    failure_reason: 'ממתין לאישור מנהל – הפוסט ממתין לאישור מנהל'
+                }
+            });
+        } else if (verifySuccess) {
             logRemote("🎯 Post Success Verified. Capturing permalink...");
             window.hud.updateText("מזהה לינק...", "מחפש כתובת פוסט...");
             const proofUrl = await findPostPermalink();
-            
+
             logRemote("🎯 Final Post Result", { proofUrl });
             window.hud.updateText("הצלחה! 🏆", "הפוסט פורסם.");
-            
+
             safeSendMessage({
                 action: "REPORT_STATUS",
                 payload: { taskId: job.id, status: 'SUCCESS', proof_url: proofUrl }
@@ -497,12 +540,19 @@ async function waitForModalClosure() {
     logRemote("⏳ Monitoring modal closure...");
     for (let i = 0; i < 30; i++) {
         const dialog = document.querySelector('div[role="dialog"]');
-        
+
         // If no dialog or dialog contains "Post successful" or similar (Hebrew/English)
         if (!dialog) return true;
-        
+
         const dialogText = dialog.innerText || "";
         if (dialogText.includes("Post successful") || dialogText.includes("הפוסט פורסם")) return true;
+
+        // Check for post-flight pending approval
+        const pendingPatterns = ['ממתין לאישור', 'pending review', 'awaiting approval', 'needs approval'];
+        if (pendingPatterns.some(p => dialogText.toLowerCase().includes(p.toLowerCase()))) {
+            logRemote("⚠️ Post submitted but pending review detected");
+            return 'PENDING_REVIEW';
+        }
 
         await sleep(500);
     }
