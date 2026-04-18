@@ -716,7 +716,7 @@ export default function App() {
                         <h1 className="text-slate-900 dark:text-white font-bold text-lg">
                             SafePost <span className="text-blue-500 dark:text-blue-400 text-xs px-1 border border-blue-200 dark:border-blue-400/30 rounded">OS 5.1</span>
                         </h1>
-                        <p className="text-[10px] text-slate-500 dark:text-gray-500 uppercase tracking-widest">Enterprise Shield Refactored</p>
+                        <p className="text-[10px] text-slate-500 dark:text-gray-700 uppercase tracking-widest">Enterprise Shield Refactored</p>
                     </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -734,12 +734,12 @@ export default function App() {
                     )}
                     <button onClick={() => setTheme(p => p === 'dark' ? 'light' : 'dark')}
                         aria-label="החלף ערכת נושא"
-                        className="p-2 hover:bg-gray-200 dark:hover:bg-[#242c38] rounded-full transition text-slate-500 dark:text-gray-400">
+                        className="p-2 hover:bg-gray-200 dark:hover:bg-[#242c38] rounded-full transition text-slate-500 dark:text-gray-700">
                         {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
                     </button>
                     <button onClick={() => fetchAllData()}
                         aria-label="רענן"
-                        className="p-2 hover:bg-gray-200 dark:hover:bg-[#242c38] rounded-full transition text-slate-500 dark:text-gray-400">
+                        className="p-2 hover:bg-gray-200 dark:hover:bg-[#242c38] rounded-full transition text-slate-500 dark:text-gray-700">
                         <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
                     </button>
                     <div className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-2 ${serverStatus
@@ -763,9 +763,9 @@ export default function App() {
                         </div>
 
                         {/* CONTENT */}
-                        <div className="bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-2xl p-5 shadow-lg space-y-3">
+                        <div className="bg-white backdrop-blur-md border border-gray-200 rounded-2xl p-5 shadow-lg space-y-3">
                             <div className="flex justify-between items-center">
-                                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                                <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest flex items-center gap-2">
                                     <span className="w-1 h-1 bg-blue-500 rounded-full" /> Content Architecture
                                 </label>
                                 <div className="flex items-center gap-2">
@@ -787,7 +787,7 @@ export default function App() {
                             {showLibraryPanel && (
                                 <div className="bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2 space-y-1">
                                     {postTemplates.length === 0
-                                        ? <p className="text-[10px] text-gray-500 text-center py-2">No saved templates yet.</p>
+                                        ? <p className="text-[10px] text-gray-700 text-center py-2">No saved templates yet.</p>
                                         : postTemplates.map(t => (
                                             <div key={t.id} className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-white/5 group">
                                                 <button onClick={() => handleLoadTemplate(t)} className="flex items-center gap-2 flex-1 text-left overflow-hidden">
@@ -834,8 +834,8 @@ export default function App() {
                             {/* AI SMART SPIN TOGGLE */}
                             <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-gray-800/50">
                                 <div className="flex items-center gap-2 group cursor-help">
-                                    <Sparkles size={14} className={useAiSpin ? "text-amber-500" : "text-gray-400"} />
-                                    <span className={`text-xs font-bold uppercase tracking-wider ${useAiSpin ? "text-amber-500" : "text-gray-500"}`}>
+                                    <Sparkles size={14} className={useAiSpin ? "text-amber-500" : "text-gray-700"} />
+                                    <span className={`text-xs font-bold uppercase tracking-wider ${useAiSpin ? "text-amber-500" : "text-gray-700"}`}>
                                         AI Smart Spin
                                     </span>
                                     <div className="absolute ml-28 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-800 text-[10px] text-white p-2 rounded shadow-xl w-48 pointer-events-none z-[60]">
@@ -854,9 +854,9 @@ export default function App() {
                         </div>
 
                         {/* MEDIA */}
-                        <div className="bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-2xl p-5 shadow-lg space-y-3">
+                        <div className="bg-white backdrop-blur-md border border-gray-200 rounded-2xl p-5 shadow-lg space-y-3">
                             <div className="flex justify-between items-center">
-                                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                                <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest flex items-center gap-2">
                                     <span className="w-1 h-1 bg-blue-500 rounded-full" /> Media Attachment
                                 </label>
                                 {selectedFile && (
@@ -867,8 +867,8 @@ export default function App() {
                             </div>
                             {!selectedFile ? (
                                 <label className="cursor-pointer flex items-center gap-2 px-3 py-2.5 bg-gray-50 dark:bg-[#0d1117] border border-dashed border-gray-200 dark:border-[#30363d] rounded-lg hover:border-blue-400 dark:hover:border-blue-500 transition group w-full">
-                                    <Paperclip size={16} className="text-gray-400 group-hover:text-blue-500 transition" />
-                                    <span className="text-xs text-gray-500 group-hover:text-blue-500 transition font-medium">
+                                    <Paperclip size={16} className="text-gray-700 group-hover:text-blue-500 transition" />
+                                    <span className="text-xs text-gray-700 group-hover:text-blue-500 transition font-medium">
                                         Attach Image or Video…
                                     </span>
                                     <input type="file" className="hidden" accept="image/*,video/*" onChange={handleFileSelect} />
@@ -888,9 +888,9 @@ export default function App() {
                         </div>
 
                         {/* GROUPS */}
-                        <div className="bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-2xl p-5 shadow-lg flex flex-col space-y-3">
+                        <div className="bg-white backdrop-blur-md border border-gray-200 rounded-2xl p-5 shadow-lg flex flex-col space-y-3">
                             <div className="flex justify-between items-center">
-                                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                                <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest flex items-center gap-2">
                                     <span className="w-1 h-1 bg-blue-500 rounded-full" /> Target Nodes ({selectedGroups.length})
                                 </label>
                                 <div className="flex items-center gap-1.5">
@@ -903,7 +903,7 @@ export default function App() {
                                     {customGroupOrder.length > 0 && (
                                         <button onClick={resetGroupOrder}
                                             title="אפס סדר ידני"
-                                            className="text-[9px] font-black uppercase px-2 py-0.5 rounded border text-gray-400 border-gray-700 hover:bg-gray-800 transition">
+                                            className="text-[9px] font-black uppercase px-2 py-0.5 rounded border text-gray-700 border-gray-700 hover:bg-gray-800 transition">
                                             ↺ סדר
                                         </button>
                                     )}
@@ -932,13 +932,13 @@ export default function App() {
                             {showFoldersPanel && (
                                 <div className="bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2 space-y-1">
                                     {groupSets.length === 0
-                                        ? <p className="text-[10px] text-gray-500 text-center py-2">No saved folders yet.</p>
+                                        ? <p className="text-[10px] text-gray-700 text-center py-2">No saved folders yet.</p>
                                         : groupSets.map(set => (
                                             <div key={set.id} className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-white/5 group">
                                                 <button onClick={() => handleLoadFolder(set)} className="flex items-center gap-2 flex-1 text-left">
                                                     <Folder size={12} className="text-blue-400 shrink-0" />
                                                     <span className="text-xs text-gray-300 font-medium truncate">{set.name}</span>
-                                                    <span className="text-[10px] text-gray-500 shrink-0">{set.group_ids?.length || 0}</span>
+                                                    <span className="text-[10px] text-gray-700 shrink-0">{set.group_ids?.length || 0}</span>
                                                 </button>
                                                 <button onClick={() => handleDeleteFolder(set.id)}
                                                     aria-label="מחק תיקייה"
@@ -980,12 +980,12 @@ export default function App() {
                             {/* Search & Smart Filters */}
                             <div className="space-y-2">
                                 <div className="relative">
-                                    <Search size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                                    <Search size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-700 pointer-events-none" />
                                     <input type="text" placeholder="Filter groups…" dir="rtl"
                                         value={groupSearch} onChange={e => setGroupSearch(e.target.value)}
                                         className="w-full pr-7 pl-7 py-2 bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg text-xs text-slate-700 dark:text-gray-300 placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 outline-none transition" />
                                     {groupSearch && (
-                                        <button onClick={() => setGroupSearch('')} aria-label="נקה חיפוש" className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-300 transition">
+                                        <button onClick={() => setGroupSearch('')} aria-label="נקה חיפוש" className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-700 hover:text-gray-300 transition">
                                             <X size={11} />
                                         </button>
                                     )}
@@ -994,9 +994,9 @@ export default function App() {
                                 {groupSearch && (
                                     <div className="flex flex-wrap gap-1.5 animate-in fade-in slide-in-from-top-1 duration-200">
                                         <button onClick={() => handleBulkSelectFiltered('all')} className="text-[9px] font-black uppercase px-2 py-1 bg-blue-600/10 text-blue-400 border border-blue-500/30 rounded hover:bg-blue-600/20 transition">Select All ({filteredGroups.length})</button>
-                                        <button onClick={() => handleBulkSelectFiltered(5)} className="text-[9px] font-black uppercase px-2 py-1 bg-white/5 text-gray-400 border border-white/10 rounded hover:bg-white/10 transition">Top 5</button>
-                                        <button onClick={() => handleBulkSelectFiltered(10)} className="text-[9px] font-black uppercase px-2 py-1 bg-white/5 text-gray-400 border border-white/10 rounded hover:bg-white/10 transition">Top 10</button>
-                                        <button onClick={() => handleBulkSelectFiltered(20)} className="text-[9px] font-black uppercase px-2 py-1 bg-white/5 text-gray-400 border border-white/10 rounded hover:bg-white/10 transition">Top 20</button>
+                                        <button onClick={() => handleBulkSelectFiltered(5)} className="text-[9px] font-black uppercase px-2 py-1 bg-white/5 text-gray-700 border border-white/10 rounded hover:bg-white/10 transition">Top 5</button>
+                                        <button onClick={() => handleBulkSelectFiltered(10)} className="text-[9px] font-black uppercase px-2 py-1 bg-white/5 text-gray-700 border border-white/10 rounded hover:bg-white/10 transition">Top 10</button>
+                                        <button onClick={() => handleBulkSelectFiltered(20)} className="text-[9px] font-black uppercase px-2 py-1 bg-white/5 text-gray-700 border border-white/10 rounded hover:bg-white/10 transition">Top 20</button>
                                         <button onClick={handleClearFiltered} className="text-[9px] font-black uppercase px-2 py-1 bg-red-900/10 text-red-400 border border-red-900/30 rounded hover:bg-red-900/20 transition ml-auto">Clear</button>
                                     </div>
                                 )}
@@ -1005,7 +1005,7 @@ export default function App() {
                             {/* Group List with Drag-and-Drop */}
                             <div className="max-h-48 overflow-y-auto pr-1 custom-scrollbar">
                                 {filteredGroups.length === 0
-                                    ? <p className="text-[10px] text-gray-500 text-center py-4">{groupSearch ? `No match for "${groupSearch}"` : 'No groups loaded.'}</p>
+                                    ? <p className="text-[10px] text-gray-700 text-center py-4">{groupSearch ? `No match for "${groupSearch}"` : 'No groups loaded.'}</p>
                                     : filteredGroups.map(g => (
                                         <div key={g.id}
                                             draggable
@@ -1024,7 +1024,7 @@ export default function App() {
                                                     : 'bg-white/5 border-transparent hover:border-white/10 hover:bg-white/[0.08]'
                                             }`}>
                                             {/* Drag Handle */}
-                                            <div className="shrink-0 cursor-grab active:cursor-grabbing text-gray-700 hover:text-gray-400 transition-colors"
+                                            <div className="shrink-0 cursor-grab active:cursor-grabbing text-gray-700 hover:text-gray-700 transition-colors"
                                                 onClick={e => e.stopPropagation()}>
                                                 <GripVertical size={15} />
                                             </div>
@@ -1056,7 +1056,7 @@ export default function App() {
                         </div>
 
                         {/* CALENDAR */}
-                        <div className="bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-2xl p-5 shadow-lg">
+                        <div className="bg-white backdrop-blur-md border border-gray-200 rounded-2xl p-5 shadow-lg">
                             <Calendar value={scheduleTime} onChange={e => setScheduleTime(e.target.value)} compact={true} />
                         </div>
                     </div>
@@ -1065,7 +1065,7 @@ export default function App() {
                             <div className="flex gap-2 p-2">
                                 <button
                                     onClick={() => { setPostContent(''); setSelectedFile(null); setMediaPreview(null); }}
-                                    className="flex-1 py-3 border border-gray-200 dark:border-[#30363d] text-slate-500 dark:text-gray-400 rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-gray-100 dark:hover:bg-[#242c38] transition">
+                                    className="flex-1 py-3 border border-gray-200 dark:border-[#30363d] text-slate-500 dark:text-gray-700 rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-gray-100 dark:hover:bg-[#242c38] transition">
                                     Clear
                                 </button>
                                 <button
@@ -1131,11 +1131,11 @@ export default function App() {
                         </ErrorBoundary>
                     )}
 
-                    {/* Operation Feed — Glassmorphic Card */}
-                    <div className="bg-[#0d1117]/95 backdrop-blur-md border border-[#30363d]/80 rounded-2xl overflow-hidden shadow-2xl">
-                        <div className="p-6 border-b border-[#30363d]/30 flex justify-between items-center bg-gradient-to-r from-[#0d1117]/90 to-[#161b22]/80 backdrop-blur-sm">
+                    {/* Operation Feed — Light Card */}
+                    <div className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
+                        <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                             <div className="flex items-center gap-3">
-                                <h3 className="font-black text-white text-sm uppercase tracking-widest flex items-center gap-2">
+                                <h3 className="font-black text-gray-900 text-sm uppercase tracking-widest flex items-center gap-2">
                                     <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" /> Live Operation Feed
                                 </h3>
                                 <CountdownTimer queue={queue} fetchAllData={fetchAllData} />
@@ -1148,7 +1148,7 @@ export default function App() {
                                     { key: 'failed', label: `Failed (${stats.failed + stats.cancelled})` },
                                 ].map(({ key, label }) => (
                                     <button key={key} onClick={() => setQueueFilter(key)}
-                                        className={`text-[10px] font-bold px-3 py-1 rounded border transition ${queueFilter === key ? 'bg-blue-600 text-white border-blue-600' : 'bg-transparent text-gray-300 border-gray-500 dark:border-gray-500 dark:text-gray-200 hover:border-blue-400 hover:text-blue-300'}`}>
+                                        className={`text-[10px] font-bold px-3 py-1 rounded border transition ${queueFilter === key ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:border-blue-400 hover:text-blue-600'}`}>
                                         {label}
                                     </button>
                                 ))}
@@ -1168,7 +1168,7 @@ export default function App() {
                                     </button>
                                 )}
                                 <button onClick={toggleCompact}
-                                    className={`text-[10px] font-bold px-3 py-1 rounded border transition ${isCompact ? 'bg-blue-600 text-white border-blue-600' : 'bg-transparent text-slate-500 border-gray-300 dark:border-gray-600 dark:text-gray-400'}`}>
+                                    className={`text-[10px] font-bold px-3 py-1 rounded border transition ${isCompact ? 'bg-blue-600 text-white border-blue-600' : 'bg-transparent text-slate-500 border-gray-300 dark:border-gray-600 dark:text-gray-700'}`}>
                                     COMPACT VIEW
                                 </button>
                                 {selectedTaskIds.length > 0 && (
@@ -1182,7 +1182,7 @@ export default function App() {
 
                         <div className="overflow-x-auto">
                             <table className="w-full text-left">
-                                <thead className={`bg-[#0d1117]/90 text-gray-200 uppercase font-black border-b border-[#30363d]/60 ${isCompact ? 'text-[9px]' : 'text-xs'}`}>
+                                <thead className={`bg-gray-100 text-gray-700 uppercase font-black border-b border-gray-200 ${isCompact ? 'text-[9px]' : 'text-xs'}`}>
                                     <tr>
                                         <th className={`${isCompact ? 'p-2' : 'p-4'} w-10`}>
                                             <button onClick={toggleAll} aria-label="בחר הכל" className="p-1 hover:bg-gray-200 dark:hover:bg-gray-800 rounded transition">
@@ -1198,18 +1198,18 @@ export default function App() {
                                         <th className={`${isCompact ? 'p-2' : 'p-4'} w-24 lg:w-32 text-center`}>Actions</th>
                                     </tr>
                                 </thead>
-                                <tbody className={`divide-y divide-[#30363d]/20 text-xs`} onClick={handleTableClick}>
+                                <tbody className={`divide-y divide-gray-200 text-xs`} onClick={handleTableClick}>
                                     {filteredQueue.length === 0
-                                        ? <tr><td colSpan="7" className="p-12 text-center text-gray-600">{queue.length === 0 ? 'No tasks found.' : 'No tasks match this filter.'}</td></tr>
+                                        ? <tr><td colSpan="7" className="p-12 text-center text-gray-700">{queue.length === 0 ? 'No tasks found.' : 'No tasks match this filter.'}</td></tr>
                                         : filteredQueue.map(row => (
-                                            <tr key={row.id} className={`hover:bg-white/5 transition duration-200 group ${processingIds.has(row.id) ? 'opacity-50 pointer-events-none' : ''} ${row.status === 'CANCELLED' ? 'opacity-40' : ''}`}>
+                                            <tr key={row.id} className={`hover:bg-gray-50 transition duration-200 group ${processingIds.has(row.id) ? 'opacity-50 pointer-events-none' : ''} ${row.status === 'CANCELLED' ? 'opacity-60' : ''}`}>
                                                 <td className={`${isCompact ? 'p-2' : 'p-4'}`}>
                                                     <button onClick={e => { e.stopPropagation(); toggleSingle(row.id); }} className="p-1">
                                                         {selectedTaskIds.includes(row.id)
                                                             ? <CheckSquare size={14} className="text-blue-500" /> : <Square size={14} />}
                                                     </button>
                                                 </td>
-                                                <td className={`${isCompact ? 'p-2' : 'p-4'} font-mono text-gray-500`}>#{row.id}</td>
+                                                <td className={`${isCompact ? 'p-2' : 'p-4'} font-mono text-gray-700`}>#{row.id}</td>
                                                 <td className={`${isCompact ? 'p-2' : 'p-4'} font-medium text-slate-800 dark:text-white max-w-[180px]`}>
                                                     {row.group_url ? (
                                                         <a href={row.group_url} target="_blank" rel="noreferrer" className="truncate hover:text-blue-400 transition text-blue-500 dark:text-blue-400 hover:underline" title={row.group_name}>
@@ -1218,12 +1218,12 @@ export default function App() {
                                                     ) : (
                                                         <div className="truncate" title={row.group_name}>{row.group_name || 'Unknown'}</div>
                                                     )}
-                                                    <div className="text-[10px] text-gray-600 font-mono truncate">{row.group_id}</div>
+                                                    <div className="text-[10px] text-gray-700 font-mono truncate">{row.group_id}</div>
                                                 </td>
-                                                <td className={`${isCompact ? 'p-2' : 'p-4'} text-gray-400 max-w-[200px] lg:max-w-xs`}>
+                                                <td className={`${isCompact ? 'p-2' : 'p-4'} text-gray-700 max-w-[200px] lg:max-w-xs`}>
                                                     <div className="truncate" title={row.content}>"{row.content}"</div>
                                                 </td>
-                                                <td className={`${isCompact ? 'p-2' : 'p-4'} text-gray-500 font-mono text-[10px]`}>
+                                                <td className={`${isCompact ? 'p-2' : 'p-4'} text-gray-700 font-mono text-[10px]`}>
                                                     <div className="flex flex-col gap-0.5">
                                                         <TaskTimer
                                                             targetTime={row.scheduled_time || row.scheduled_at}
@@ -1240,7 +1240,7 @@ export default function App() {
                                                         {row.status}
                                                     </span>
                                                     {row.failure_reason && (
-                                                        <div className="mt-1 text-[10px] text-rose-300 font-medium max-w-[160px] truncate flex items-center gap-1" title={row.failure_reason}>
+                                                        <div className="mt-1 text-[10px] text-rose-500 font-medium max-w-[160px] truncate flex items-center gap-1" title={row.failure_reason}>
                                                             <AlertTriangle size={9} className="flex-shrink-0" />
                                                             {row.failure_reason}
                                                         </div>
@@ -1252,7 +1252,7 @@ export default function App() {
                                                         return (
                                                             <div className="mt-1.5 space-y-0.5 text-left">
                                                                 {entries.map((s, i) => (
-                                                                    <div key={s} className={`flex items-center gap-1 text-[9px] font-mono ${s === row.status ? 'text-blue-300 font-bold' : 'text-gray-600'}`}>
+                                                                    <div key={s} className={`flex items-center gap-1 text-[9px] font-mono ${s === row.status ? 'text-blue-300 font-bold' : 'text-gray-700'}`}>
                                                                         <span className={`w-1 h-1 rounded-full flex-shrink-0 ${s === row.status ? 'bg-blue-400' : 'bg-gray-700'}`} />
                                                                         <span>{statusTimestamps[row.id][s]}</span>
                                                                         <span className={`text-[8px] ${s === row.status ? 'text-blue-400/70' : 'text-gray-700'}`}>{s}</span>
@@ -1304,16 +1304,16 @@ export default function App() {
                             <h2 className="text-slate-900 dark:text-white font-bold flex items-center gap-2">
                                 <Edit3 size={18} className="text-blue-500" /> Patch Task #{editingTask.id}
                             </h2>
-                            <button onClick={() => setEditingTask(null)} aria-label="סגור" className="text-gray-500 hover:text-white transition"><X size={20} /></button>
+                            <button onClick={() => setEditingTask(null)} aria-label="סגור" className="text-gray-700 hover:text-white transition"><X size={20} /></button>
                         </div>
                         <div className="p-6 space-y-4">
                             <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-gray-500 uppercase">Payload Content</label>
+                                <label className="text-[10px] font-bold text-gray-700 uppercase">Payload Content</label>
                                 <textarea className="w-full h-32 bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-3 text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 transition resize-none outline-none"
                                     defaultValue={editingTask.content} id="edit-content" />
                             </div>
                             <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-gray-500 uppercase">New T-Minus Schedule</label>
+                                <label className="text-[10px] font-bold text-gray-700 uppercase">New T-Minus Schedule</label>
                                 <div className="bg-white dark:bg-[#1c2128] border border-gray-300 dark:border-[#30363d] rounded-lg px-3 py-2 flex items-center">
                                     <CalendarIcon size={16} className="text-gray-800 dark:text-gray-300 mr-2" />
                                     <input type="datetime-local" className="bg-transparent text-black dark:text-white text-xs w-full outline-none font-medium"
@@ -1322,7 +1322,7 @@ export default function App() {
                             </div>
                         </div>
                         <div className="p-6 bg-gray-50 dark:bg-[#0d1117] flex justify-end gap-3 border-t border-gray-100 dark:border-transparent" dir="ltr">
-                            <button onClick={() => setEditingTask(null)} className="px-4 py-2 text-xs font-bold uppercase text-gray-400 hover:text-white transition">Cancel</button>
+                            <button onClick={() => setEditingTask(null)} className="px-4 py-2 text-xs font-bold uppercase text-gray-700 hover:text-white transition">Cancel</button>
                             <button onClick={() => {
                                 const content = document.getElementById('edit-content').value;
                                 const time    = document.getElementById('edit-time').value;
@@ -1371,22 +1371,22 @@ export default function App() {
             <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-40">
                 <div className="flex gap-1 bg-[#161b22]/80 backdrop-blur-md border border-[#30363d] rounded-2xl px-2 py-2 shadow-2xl">
                     <button onClick={handleToggleAnalytics} disabled={analyticsLoading}
-                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-400 hover:text-emerald-400 transition disabled:opacity-50"
+                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-700 hover:text-emerald-400 transition disabled:opacity-50"
                         aria-label="Analytics" title="Analytics">
                         <BarChart3 className="w-5 h-5" />
                     </button>
                     <button onClick={() => setShowAiModal(true)}
-                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-400 hover:text-amber-400 transition"
+                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-700 hover:text-amber-400 transition"
                         aria-label="AI Assistant" title="AI Assistant">
                         <Sparkles className="w-5 h-5" />
                     </button>
                     <button onClick={() => setShowLibraryPanel(p => !p)}
-                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-400 hover:text-blue-400 transition"
+                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-700 hover:text-blue-400 transition"
                         aria-label="Templates" title="Templates">
                         <Layers className="w-5 h-5" />
                     </button>
                     <button onClick={() => setShowFoldersPanel(p => !p)}
-                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-400 hover:text-sky-400 transition"
+                        className="p-2 rounded-xl hover:bg-[#21262d] text-gray-700 hover:text-sky-400 transition"
                         aria-label="Folders" title="Folders">
                         <Folder className="w-5 h-5" />
                     </button>
@@ -1394,7 +1394,7 @@ export default function App() {
             </div>
 
             {/* ── FOOTER ── */}
-            <footer className="fixed bottom-0 w-full h-8 bg-white dark:bg-[#0d1117] border-t border-gray-200 dark:border-[#30363d] flex items-center justify-between px-6 text-[10px] text-slate-500 dark:text-gray-500 uppercase tracking-wider z-50 transition-colors duration-300">
+            <footer className="fixed bottom-0 w-full h-8 bg-white dark:bg-[#0d1117] border-t border-gray-200 dark:border-[#30363d] flex items-center justify-between px-6 text-[10px] text-slate-500 dark:text-gray-700 uppercase tracking-wider z-50 transition-colors duration-300">
                 <div className="flex items-center gap-4">
                     <span className="flex items-center gap-1">
                         <div className={`w-1.5 h-1.5 rounded-full ${serverStatus ? 'bg-green-500' : 'bg-red-500'}`} />
@@ -1405,7 +1405,7 @@ export default function App() {
                         Worker: {workerStopped ? <span className="text-red-400 font-bold">STOPPED</span> : (workerStatus.status === 'ACTIVE' ? <span className="text-green-400">ACTIVE</span> : workerStatus.message)}
                     </span>
                 </div>
-                <span className={`${integrity.status === 'MISMATCH' ? 'text-red-500 font-bold' : 'text-gray-600'}`}>
+                <span className={`${integrity.status === 'MISMATCH' ? 'text-red-500 font-bold' : 'text-gray-700'}`}>
                     v{integrity.version}
                     <span className="text-[9px] bg-gray-100 dark:bg-[#21262d] px-1 rounded ml-1 border border-gray-200 dark:border-[#30363d]">PROD</span>
                 </span>
@@ -1426,7 +1426,7 @@ function StatBox({ label, value, icon, accent = 'blue' }) {
         <div className={`${colors.border} border-l-4 bg-white border border-gray-100 rounded-lg p-4 lg:p-5 shadow-sm hover:shadow-md hover:border-gray-200 transition-all duration-200 group cursor-default overflow-hidden relative`}>
             <div className="relative flex flex-col justify-between h-full">
                 <div>
-                    <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest letter-spacing-wide">{label}</div>
+                    <div className="text-[9px] font-bold text-gray-700 uppercase tracking-widest letter-spacing-wide">{label}</div>
                     <div className="text-3xl lg:text-4xl font-black text-gray-900 mt-2">{value}</div>
                 </div>
                 <div className={`mt-4 p-2.5 ${colors.iconBg} rounded-lg w-fit`}>
@@ -1441,13 +1441,13 @@ function getStatusBadge(status) {
     if (status === 'COMPLETED' || status === 'SUCCESS')
         return 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 font-bold';
     if (status === 'FAILED')
-        return 'bg-rose-500/20 border-rose-500/40 text-rose-300 font-bold';
+        return 'bg-rose-500/20 border-rose-500/40 text-rose-500 font-bold';
     if (status === 'SENT')
         return 'bg-sky-500/20 border-sky-500/40 text-sky-300 font-bold animate-pulse';
     if (status === 'PROCESSING')
         return 'bg-blue-500/20 border-blue-500/40 text-blue-300 font-bold status-pulse';
     if (status === 'CANCELLED')
-        return 'bg-gray-500/20 border-gray-500/40 text-gray-400 font-bold line-through';
+        return 'bg-gray-500/20 border-gray-500/40 text-gray-700 font-bold line-through';
     if (status === 'PENDING_APPROVAL')
         return 'bg-amber-500/20 border-amber-500/40 text-amber-300 font-bold';
     return 'bg-amber-500/20 border-amber-500/40 text-amber-300 font-bold';
