@@ -514,5 +514,5 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
         return true;
     }
 
-    return true;
+    return false;
 });
