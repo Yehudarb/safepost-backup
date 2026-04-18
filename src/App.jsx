@@ -1416,21 +1416,21 @@ export default function App() {
 
 function StatBox({ label, value, icon, size = 'normal', accent = 'blue' }) {
     const accentMap = {
-        blue: 'border-blue-500/20 hover:border-blue-500/40 hover:bg-blue-500/5',
-        green: 'border-emerald-500/20 hover:border-emerald-500/40 hover:bg-emerald-500/5',
-        yellow: 'border-amber-500/20 hover:border-amber-500/40 hover:bg-amber-500/5',
-        red: 'border-rose-500/20 hover:border-rose-500/40 hover:bg-rose-500/5',
+        blue: 'border-blue-500/40 hover:border-blue-500/60 bg-blue-950/20 hover:bg-blue-950/30',
+        green: 'border-emerald-500/40 hover:border-emerald-500/60 bg-emerald-950/20 hover:bg-emerald-950/30',
+        yellow: 'border-amber-500/40 hover:border-amber-500/60 bg-amber-950/20 hover:bg-amber-950/30',
+        red: 'border-rose-500/40 hover:border-rose-500/60 bg-rose-950/20 hover:bg-rose-950/30',
     };
     const sizeClass = size === 'large' ? 'md:col-span-2 md:row-span-2' : 'col-span-1';
     return (
-        <div className={`${sizeClass} bg-[#161b22]/80 backdrop-blur-md border ${accentMap[accent]} rounded-2xl p-5 lg:p-7 shadow-xl hover:shadow-2xl transition-all duration-300 group cursor-default overflow-hidden relative`}>
-            <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent pointer-events-none rounded-2xl" />
+        <div className={`${sizeClass} ${accentMap[accent]} backdrop-blur-md border rounded-2xl p-5 lg:p-7 shadow-xl hover:shadow-2xl transition-all duration-300 group cursor-default overflow-hidden relative`}>
+            <div className="absolute inset-0 bg-gradient-to-br from-white/8 to-transparent pointer-events-none rounded-2xl" />
             <div className="relative flex flex-col justify-between h-full">
                 <div>
-                    <div className="text-[9px] font-black text-gray-500 uppercase tracking-widest">{label}</div>
-                    <div className={`${size === 'large' ? 'text-4xl lg:text-5xl' : 'text-2xl lg:text-3xl'} font-black text-white mt-4`}>{value}</div>
+                    <div className="text-[10px] font-black text-gray-300 uppercase tracking-widest">{label}</div>
+                    <div className={`${size === 'large' ? 'text-5xl lg:text-6xl' : 'text-3xl lg:text-4xl'} font-black text-white mt-3`}>{value}</div>
                 </div>
-                <div className="mt-4 p-3 bg-[#0d1117]/60 rounded-xl border border-[#30363d]/30 w-fit group-hover:border-[#30363d]/60 transition-colors">
+                <div className="mt-6 p-3 bg-white/10 rounded-xl border border-white/20 w-fit group-hover:bg-white/15 group-hover:border-white/30 transition-all">
                     {icon}
                 </div>
             </div>
