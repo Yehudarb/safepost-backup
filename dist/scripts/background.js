@@ -146,8 +146,10 @@ async function checkJobs() {
                         }
 
                         const cooldownSeconds = Math.floor(Math.random() * (720 - 180 + 1)) + 180;
-                        await ExtStorage.setCooldown(cooldownSeconds * 1000);
-                        console.log(`[SAFETY] Cooldown active for ${cooldownSeconds}s`);
+                        (async () => {
+                            await ExtStorage.setCooldown(cooldownSeconds * 1000);
+                            console.log(`[SAFETY] Cooldown active for ${cooldownSeconds}s`);
+                        })();
                     }, 5000);
                 }
             }
