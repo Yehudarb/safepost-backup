@@ -119,38 +119,57 @@ async function scrapeAndSyncGroups() {
 
 // --- Admin Approval Detection ---
 function detectAdminApprovalBanner() {
-    const pageText = document.body.innerText || '';
+    // Check multiple sources
+    const bodyText = document.body.innerText || '';
+    const htmlText = document.body.innerHTML || '';
 
-    // Hebrew patterns - exact and variations
+    // Search for any visible approval-related text on page
+    const allElements = document.querySelectorAll('*');
+    let foundElements = [];
+
+    allElements.forEach(el => {
+        const text = el.innerText || '';
+        if (text && (
+            /ממתין.*אישור|אישור.*מנהל|במחתנה.*אישור|מנהל.*אישור/i.test(text) ||
+            /pending.*approval|approval.*pending|awaiting.*approval/i.test(text)
+        )) {
+            foundElements.push({
+                tag: el.tagName,
+                text: text.substring(0, 100),
+                visible: el.offsetParent !== null
+            });
+        }
+    });
+
     const hebrewPatterns = [
-        /במחתנה.*לאישור.*מנהל/i,  // Exact: "במחתנה לאישור מנהל"
-        /לאישור.*מנהל/i,           // "לאישור מנהל"
-        /ממתין.*אישור.*מנהל/i,     // "ממתין אישור מנהל"
-        /אישור.*מנהל/i,            // "אישור מנהל"
-        /המנהל.*אישור/i,           // "המנהל אישור"
-        /ממתין.*מנהל/i,            // "ממתין מנהל"
+        /במחתנה.*לאישור.*מנהל/i,
+        /ממתין.*אישור.*מנהל/i,
+        /לאישור.*מנהל/i,
+        /מנהל.*אישור/i,
+        /אישור.*מנהל/i,
+        /המנהל.*אישור/i,
     ];
 
-    // English patterns
     const englishPatterns = [
-        /pending.*admin.*approval/i,
+        /pending.*approval/i,
         /awaiting.*approval/i,
         /admin.*approval/i,
-        /needs.*approval/i,
-        /approval.*pending/i,
-        /member.*approval/i,
     ];
 
-    const detected = hebrewPatterns.some(p => p.test(pageText)) ||
-                     englishPatterns.some(p => p.test(pageText));
+    const detected = hebrewPatterns.some(p => p.test(bodyText)) ||
+                     englishPatterns.some(p => p.test(bodyText));
+
+    logRemote("🔍 APPROVAL CHECK", {
+        detected,
+        bodyTextLength: bodyText.length,
+        foundElements: foundElements.length,
+        elements: foundElements.slice(0, 3)
+    });
 
     if (detected) {
-        // Find and log which pattern matched
-        const matchedPattern = hebrewPatterns.find(p => p.test(pageText)) ||
-                               englishPatterns.find(p => p.test(pageText));
-        logRemote("🔍 MATCHED PATTERN", { pattern: matchedPattern?.toString() });
-        logRemote("🔍 Admin approval banner DETECTED", { text: pageText.substring(0, 500) });
+        logRemote("⛔ APPROVAL BANNER DETECTED - BLOCKING POST", { bodyText: bodyText.substring(0, 300) });
     }
+
     return detected;
 }
 
@@ -171,37 +190,45 @@ async function performPost(job) {
     window.hud.updateText("בדיקה", "בודק הרשאות קבוצה...");
 
     // Pre-flight: Check for admin approval pending BEFORE opening dialog
-    logRemote("🔐 Running pre-flight admin approval check...");
-    await sleep(1000); // Wait for page to fully render before checking
+    logRemote("🔐 Starting pre-flight admin approval check...", { url: window.location.href });
 
-    // Check multiple sources for the banner
-    const bodyText = document.body.innerText || '';
-    const htmlText = document.body.innerHTML || '';
+    // Wait for page to fully render
+    await sleep(2000);
 
-    logRemote("📄 Checking for admin approval banner...", {
-        textLength: bodyText.length,
-        hasHebrewApproval: /ממתין.*אישור|אישור.*מנהל/i.test(bodyText)
-    });
+    logRemote("📄 Scanning page for approval banner...");
+    const approved = detectAdminApprovalBanner();
 
-    if (detectAdminApprovalBanner()) {
-        logRemote("⛔ ADMIN APPROVAL PENDING DETECTED - TASK CANCELLED");
-        window.hud.updateText("ביטול", "ממתין לאישור מנהל");
+    if (approved) {
+        logRemote("🛑 CRITICAL: ADMIN APPROVAL PENDING DETECTED!!!");
+        window.hud.updateText("ביטול משימה", "הקבוצה ממתינה לאישור מנהל");
+
+        // Send cancellation to server
+        const payload = {
+            taskId: job.id,
+            status: 'CANCELLED',
+            failure_reason: 'ממתין לאישור מנהל – הפוסט לא נשלח'
+        };
+
+        logRemote("📤 Sending CANCELLED status", payload);
         safeSendMessage({
             action: "REPORT_STATUS",
-            payload: {
-                taskId: job.id,
-                status: 'CANCELLED',
-                failure_reason: 'ממתין לאישור מנהל – הפוסט לא נשלח'
-            }
+            payload: payload
         });
-        await sleep(1500);
+
+        // Wait to ensure message sends
+        await sleep(2000);
+        logRemote("🔴 Destroying HUD and closing tab");
         window.hud.destroy();
+
+        // Double-ensure tab closes
         safeSendMessage({ action: 'CLOSE_TAB' });
-        logRemote("✅ Task cancelled and tab closing");
-        return;
+        await sleep(1000);
+
+        logRemote("✅ Task cancelled successfully - stopping execution");
+        return; // STOP HERE - do not continue
     }
 
-    logRemote("✅ Pre-flight check passed - no admin approval pending");
+    logRemote("✅ Pre-flight check PASSED - no admin approval pending, proceeding with post");
     window.hud.updateText("מתחיל עבודה", "טוען נתוני פוסט...");
 
     // 1. Trigger "Create Post" Modal
