@@ -114,6 +114,7 @@ class ApiService {
 function CountdownTimer({ queue, fetchAllData }) {
     const [timeLeft, setTimeLeft] = useState(null);
     const [activeTask, setActiveTask] = useState(null);
+    const [sentElapsed, setSentElapsed] = useState(0);
 
     useEffect(() => {
         const current = queue.find(q => ['SENT', 'PROCESSING'].includes(q.status));
@@ -145,13 +146,24 @@ function CountdownTimer({ queue, fetchAllData }) {
         return () => clearInterval(iv);
     }, [activeTask, fetchAllData]);
 
+    useEffect(() => {
+        if (activeTask?.status !== 'SENT') { setSentElapsed(0); return; }
+        setSentElapsed(0);
+        const iv = setInterval(() => setSentElapsed(s => s + 1), 1000);
+        return () => clearInterval(iv);
+    }, [activeTask?.id, activeTask?.status]);
+
     if (!activeTask) return null;
 
     if (activeTask.status === 'SENT') {
+        const mm = String(Math.floor(sentElapsed / 60)).padStart(2, '0');
+        const ss = String(sentElapsed % 60).padStart(2, '0');
+        const isWarning = sentElapsed > 20;
         return (
             <div className="flex items-center gap-2 px-3 py-1.5 bg-sky-500/10 border border-sky-500/30 text-sky-400 rounded-lg animate-pulse">
                 <RefreshCw size={14} className="animate-spin" />
                 <span className="text-[10px] font-black uppercase tracking-widest">Handshake with Worker...</span>
+                <span className={`font-mono text-[10px] font-bold tabular-nums ${isWarning ? 'text-amber-400' : 'text-sky-300'}`}>{mm}:{ss}</span>
             </div>
         );
     }
