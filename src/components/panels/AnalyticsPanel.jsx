@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
     BarChart3, CheckCircle2, AlertCircle, Clock, X, TrendingUp
 } from 'lucide-react';
 
 const AnalyticsPanel = ({ data, onClose }) => {
+    const [filterTab, setFilterTab] = useState('success');
+
     const summary = data?.summary || {
         total: 0,
         success: 0,
@@ -14,6 +16,8 @@ const AnalyticsPanel = ({ data, onClose }) => {
 
     const byDay = data?.byDay || [];
     const topGroups = data?.topGroups || [];
+    const problemGroups = data?.problemGroups || [];
+    const pendingGroups = data?.pendingGroups || [];
 
     const successRate = summary.total > 0
         ? Math.round((summary.success / summary.total) * 100)
@@ -158,24 +162,86 @@ const AnalyticsPanel = ({ data, onClose }) => {
                         <div className="z-10 text-white text-3xl font-black">{summary.total}</div>
                     </div>
 
-                    {/* Top Groups Table (full width) */}
-                    {topGroups.length > 0 && (
-                        <div className="md:col-span-4 bg-[#161b22] border border-[#30363d] rounded-2xl p-4">
-                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-3">קבוצות מובילות</h3>
-                            <div className="space-y-2">
-                                {topGroups.slice(0, 5).map((group, i) => (
-                                    <div key={i} className="flex justify-between items-center p-2 bg-[#1c2128] rounded-lg hover:bg-[#21262d] transition">
-                                        {group.url ? (
-                                            <a href={group.url} target="_blank" rel="noreferrer" className="text-sm text-blue-400 hover:text-blue-300 hover:underline transition" dir="rtl">{group.name}</a>
-                                        ) : (
-                                            <span className="text-sm text-white" dir="rtl">{group.name}</span>
-                                        )}
-                                        <span className="text-xs text-gray-500">{group.total} posts • {group.success} success</span>
-                                    </div>
-                                ))}
-                            </div>
+                    {/* Groups List with Tabs (full width) */}
+                    <div className="md:col-span-4 bg-[#161b22] border border-[#30363d] rounded-2xl p-4">
+                        {/* Tabs */}
+                        <div className="flex gap-2 mb-4 border-b border-[#30363d] pb-3">
+                            <button
+                                onClick={() => setFilterTab('success')}
+                                className={`px-3 py-1 text-xs font-bold uppercase tracking-widest rounded transition ${
+                                    filterTab === 'success'
+                                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                        : 'text-gray-500 hover:text-gray-300'
+                                }`}
+                            >
+                                הצלחות ({topGroups.length})
+                            </button>
+                            <button
+                                onClick={() => setFilterTab('failed')}
+                                className={`px-3 py-1 text-xs font-bold uppercase tracking-widest rounded transition ${
+                                    filterTab === 'failed'
+                                        ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                                        : 'text-gray-500 hover:text-gray-300'
+                                }`}
+                            >
+                                כשלונות ({problemGroups.length})
+                            </button>
+                            <button
+                                onClick={() => setFilterTab('pending')}
+                                className={`px-3 py-1 text-xs font-bold uppercase tracking-widest rounded transition ${
+                                    filterTab === 'pending'
+                                        ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                        : 'text-gray-500 hover:text-gray-300'
+                                }`}
+                            >
+                                ממתינים ({pendingGroups.length})
+                            </button>
                         </div>
-                    )}
+
+                        {/* Tab Content */}
+                        <div className="space-y-2">
+                            {filterTab === 'success' && topGroups.map((group, i) => (
+                                <div key={i} className="flex justify-between items-center p-2 bg-[#1c2128] rounded-lg hover:bg-[#21262d] transition">
+                                    {group.url ? (
+                                        <a href={group.url} target="_blank" rel="noreferrer" className="text-sm text-blue-400 hover:text-blue-300 hover:underline transition" dir="rtl">{group.name}</a>
+                                    ) : (
+                                        <span className="text-sm text-white" dir="rtl">{group.name}</span>
+                                    )}
+                                    <span className="text-xs text-emerald-500 font-bold">{group.success} הצלחות</span>
+                                </div>
+                            ))}
+
+                            {filterTab === 'failed' && problemGroups.map((group, i) => (
+                                <div key={i} className="flex justify-between items-center p-2 bg-[#1c2128] rounded-lg hover:bg-[#21262d] transition">
+                                    {group.url ? (
+                                        <a href={group.url} target="_blank" rel="noreferrer" className="text-sm text-blue-400 hover:text-blue-300 hover:underline transition" dir="rtl">{group.name}</a>
+                                    ) : (
+                                        <span className="text-sm text-white" dir="rtl">{group.name}</span>
+                                    )}
+                                    <span className="text-xs text-rose-500 font-bold">{group.failed} כשלונות</span>
+                                </div>
+                            ))}
+
+                            {filterTab === 'pending' && pendingGroups.map((group, i) => (
+                                <div key={i} className="flex justify-between items-center p-2 bg-[#1c2128] rounded-lg hover:bg-[#21262d] transition">
+                                    {group.url ? (
+                                        <a href={group.url} target="_blank" rel="noreferrer" className="text-sm text-blue-400 hover:text-blue-300 hover:underline transition" dir="rtl">{group.name}</a>
+                                    ) : (
+                                        <span className="text-sm text-white" dir="rtl">{group.name}</span>
+                                    )}
+                                    <span className="text-xs text-amber-500 font-bold">{group.pending} ממתינים</span>
+                                </div>
+                            ))}
+
+                            {((filterTab === 'success' && topGroups.length === 0) ||
+                              (filterTab === 'failed' && problemGroups.length === 0) ||
+                              (filterTab === 'pending' && pendingGroups.length === 0)) && (
+                                <div className="text-center py-6 text-gray-500 text-xs">
+                                    אין נתונים להצגה
+                                </div>
+                            )}
+                        </div>
+                    </div>
 
                 </div>
 

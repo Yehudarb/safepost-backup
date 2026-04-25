@@ -633,6 +633,14 @@ app.get('/api/analytics', async (req, res) => {
     const problemGroups = allGroups.filter(g => g.failed > 0).sort((a, b) => b.failed - a.failed).slice(0, 5);
     const activeGroups  = [...allGroups].sort((a, b) => b.total - a.total).slice(0, 6);
 
+    // Count pending by group
+    const pendingGroupStats = {};
+    posts.filter(p => ['PENDING', 'SENT', 'PROCESSING'].includes(p.status)).forEach(p => {
+        if (!pendingGroupStats[p.group_id]) pendingGroupStats[p.group_id] = { name: groupMap[p.group_id]?.name || p.group_id, url: groupMap[p.group_id]?.url || null, pending: 0 };
+        pendingGroupStats[p.group_id].pending++;
+    });
+    const pendingGroups = Object.values(pendingGroupStats).filter(g => g.pending > 0).sort((a, b) => b.pending - a.pending).slice(0, 6);
+
     // Top error messages
     const errorMap = {};
     posts.filter(p => p.status === 'FAILED' && p.failure_reason).forEach(p => {
@@ -649,6 +657,7 @@ app.get('/api/analytics', async (req, res) => {
         byDay: Object.entries(byDay).map(([date, d]) => ({ date, ...d })),
         topGroups,
         problemGroups,
+        pendingGroups,
         activeGroups,
         topErrors
     });
