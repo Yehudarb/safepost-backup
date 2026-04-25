@@ -21,8 +21,22 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 setTimeout(checkJobs, 500);
 
 let isScanning = false;
+let activeTabId = null;        // Tab currently running a job
+let activeJobTimeout = null;   // Safety timeout to prevent infinite stuck state
+
+// If a tab is closed externally (user closed it), release the lock
+chrome.tabs.onRemoved.addListener((tabId) => {
+    if (tabId === activeTabId) {
+        console.log("[Background] Active tab closed externally — releasing job lock");
+        activeTabId = null;
+        if (activeJobTimeout) { clearTimeout(activeJobTimeout); activeJobTimeout = null; }
+    }
+});
+
 async function checkJobs() {
     if (isScanning) return;
+    if (activeTabId !== null) return; // Job already running — wait for it to finish
+
     isScanning = true;
     try {
         const res = await fetch(`${API_BASE}/api/jobs/next`);
@@ -41,12 +55,34 @@ async function checkJobs() {
         }
 
         const tab = await chrome.tabs.create({ url: targetUrl, active: true });
+        activeTabId = tab.id;
+
+        // Safety valve: if no REPORT_STATUS within 120s, release the lock
+        activeJobTimeout = setTimeout(() => {
+            console.warn("[Background] ⚠️ Job timeout — releasing lock for job:", job.id);
+            if (activeTabId) {
+                chrome.tabs.remove(activeTabId).catch(() => {});
+                activeTabId = null;
+            }
+            activeJobTimeout = null;
+        }, 120000);
 
         chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
             if (tabId === tab.id && info.status === 'complete') {
                 chrome.tabs.onUpdated.removeListener(listener);
                 setTimeout(() => {
-                    chrome.tabs.sendMessage(tabId, { action: 'EXECUTE_POST', job: job });
+                    chrome.tabs.sendMessage(tabId, { action: 'EXECUTE_POST', job: job }, (response) => {
+                        if (chrome.runtime.lastError) {
+                            console.error("[Background] ❌ sendMessage failed:", chrome.runtime.lastError.message);
+                            // Content script not ready — report FAILED and release lock
+                            fetch(`${API_BASE}/api/tasks/update-status`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ taskId: job.id, status: 'FAILED', failure_reason: `Content script unavailable: ${chrome.runtime.lastError.message}` })
+                            }).catch(() => {});
+                            releaseJobLock();
+                        }
+                    });
                 }, 4000); // Wait for page to stabilize
             }
         });
@@ -58,15 +94,31 @@ async function checkJobs() {
     }
 }
 
+function releaseJobLock() {
+    if (activeTabId !== null) {
+        chrome.tabs.remove(activeTabId).catch(() => {});
+        activeTabId = null;
+    }
+    if (activeJobTimeout) { clearTimeout(activeJobTimeout); activeJobTimeout = null; }
+}
+
 // 3. Message Listener — handles reports from content.js
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'REPORT_STATUS') {
+        const status = request.payload?.status;
+
+        // When job finishes (any terminal state), close the tab and release the lock
+        if (status === 'SUCCESS' || status === 'FAILED') {
+            console.log(`[Background] ✅ Job done (${status}) — releasing lock`);
+            releaseJobLock();
+        }
+
         fetch(`${API_BASE}/api/tasks/update-status`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(request.payload)
         }).catch(err => console.error('[BG] Status update error:', err));
-        return false; // Fire and forget
+        return false;
     }
 
     if (request.action === 'SYNC_GROUPS') {

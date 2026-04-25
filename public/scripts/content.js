@@ -115,6 +115,10 @@ async function performPost(job) {
     if (!trigger) {
         logRemote("❌ Trigger not found");
         window.hud.updateText("שגיאה", "לא נמצא כפתור יצירת פוסט");
+        chrome.runtime.sendMessage({
+            action: "REPORT_STATUS",
+            payload: { taskId: job.id, status: 'FAILED', failure_reason: "Post trigger button not found" }
+        });
         return;
     }
 
@@ -122,13 +126,17 @@ async function performPost(job) {
     logRemote("✅ Clicked Trigger");
 
     window.hud.updateText("פותח חלונית", "ממתין לטעינת ממשק...");
-    await window.hud.startTimer(4);
+    await sleep(500);
 
     // 2. Find the Input Box
     let inputBox = await waitForInputBox();
     if (!inputBox) {
         logRemote("❌ Input box not found");
         window.hud.updateText("שגיאה קריטית", "לא נמצאה תיבת טקסט.");
+        chrome.runtime.sendMessage({
+            action: "REPORT_STATUS",
+            payload: { taskId: job.id, status: 'FAILED', failure_reason: "Input box (textarea) not found" }
+        });
         return;
     }
 
@@ -152,7 +160,7 @@ async function performPost(job) {
     await typeHumanLike(inputBox, job.content);
     logRemote("✅ Text injected");
 
-    await window.hud.startTimer(2);
+    await sleep(300);
 
     // 4. Click Post
     logRemote("🔵 Attempting to click POST button");
@@ -163,6 +171,10 @@ async function performPost(job) {
         clicked = await clickPostButton();
     } catch (err) {
         logRemote("❌ Click Error", { error: err.message });
+        chrome.runtime.sendMessage({
+            action: "REPORT_STATUS",
+            payload: { taskId: job.id, status: 'FAILED', failure_reason: `Click error: ${err.message}` }
+        });
     }
 
     if (clicked) {
@@ -194,7 +206,7 @@ async function performPost(job) {
         });
     }
 
-    await sleep(3000);
+    await sleep(800);
     window.hud.destroy();
 }
 
