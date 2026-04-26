@@ -926,37 +926,29 @@ export default function App() {
 
                         {/* GROUPS */}
                         <div className="bg-white backdrop-blur-md border border-gray-200 rounded-2xl p-5 shadow-lg flex flex-col space-y-3">
-                            {/* Facebook User Filter */}
-                            {uniqueUsers.length > 0 && (
-                                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                                    <label className="text-[9px] font-bold text-amber-700 uppercase tracking-widest block mb-2">Facebook Account</label>
-                                    <div className="flex gap-2 flex-wrap">
+                            {/* Facebook User Selector */}
+                            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                                <label className="text-[9px] font-bold text-amber-700 uppercase tracking-widest block mb-2">
+                                    ℹ️ Facebook Account (כל קבוצות שתסנכרן יתויגו בחשבון הזה)
+                                </label>
+                                <input
+                                    type="text"
+                                    value={currentUser}
+                                    onChange={(e) => setCurrentUser(e.target.value)}
+                                    placeholder="כתוב שם יוזר (למשל: alice, bob)"
+                                    className="w-full px-3 py-2 rounded-lg text-[12px] border border-amber-300 bg-white text-gray-800 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                                />
+                                {currentUser && (
+                                    <div className="mt-2 flex gap-2 flex-wrap">
                                         <button
                                             onClick={() => setCurrentUser('')}
-                                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition ${
-                                                !currentUser
-                                                    ? 'bg-amber-600 text-white border border-amber-600'
-                                                    : 'bg-white text-amber-600 border border-amber-300 hover:bg-amber-50'
-                                            }`}
+                                            className="px-2 py-1 bg-red-500 text-white text-[9px] rounded hover:bg-red-600 transition"
                                         >
-                                            All
+                                            נקה
                                         </button>
-                                        {uniqueUsers.map(user => (
-                                            <button
-                                                key={user}
-                                                onClick={() => setCurrentUser(user)}
-                                                className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition ${
-                                                    currentUser === user
-                                                        ? 'bg-amber-600 text-white border border-amber-600'
-                                                        : 'bg-white text-amber-600 border border-amber-300 hover:bg-amber-50'
-                                                }`}
-                                            >
-                                                {user}
-                                            </button>
-                                        ))}
                                     </div>
-                                </div>
-                            )}
+                                )}
+                            </div>
 
                             <div className="flex justify-between items-center">
                                 <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest flex items-center gap-2">

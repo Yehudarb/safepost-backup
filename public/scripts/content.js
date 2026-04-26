@@ -19,26 +19,10 @@ async function logRemote(message, metadata = {}) {
     }
 }
 
-// Get current Facebook user identifier
+// Get current Facebook user from dashboard (stored in localStorage)
 function getCurrentFacebookUser() {
-    // Try to find user profile link in nav
-    const profileLink = document.querySelector('a[href*="/me/"], a[data-testid="profile"]');
-    if (profileLink) {
-        const match = profileLink.href.match(/\/([a-zA-Z0-9.]+)(?:\?|\/|$)/);
-        if (match) return match[1];
-    }
-
-    // Try to find user name in profile picture alt text
-    const profileImg = document.querySelector('img[alt*="'\'']');
-    if (profileImg && profileImg.alt) {
-        return profileImg.alt.split('\'\'')[0];
-    }
-
-    // Try page title which often contains username
-    const titleMatch = document.title.match(/([A-Za-z0-9._]+) \|/);
-    if (titleMatch) return titleMatch[1];
-
-    return null;
+    // Read from localStorage that dashboard sets
+    return localStorage.getItem('safepost_currentUser') || null;
 }
 
 // 1. Inject Manual Sync Button
