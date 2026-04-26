@@ -39,29 +39,41 @@ async function checkJobs() {
 
     isScanning = true;
     try {
+        console.log("[Background] 🔄 Checking for new jobs...");
         const res = await fetch(`${API_BASE}/api/jobs/next`);
-        if (!res.ok) return;
-
-        const data = await res.json();
-        const job = data.job || (data.id ? data : null);
-        if (!job) return;
-
-        console.log("[Background] 🔥 New Job Found:", job.id);
-
-        const targetUrl = job.group_url || job.url;
-        if (!targetUrl) {
-            console.error("No URL found in job", job);
+        if (!res.ok) {
+            console.warn("[Background] Failed to fetch jobs:", res.status);
             return;
         }
 
+        const data = await res.json();
+        const job = data.job || (data.id ? data : null);
+        if (!job) {
+            console.log("[Background] No jobs in queue");
+            return;
+        }
+
+        console.log("[Background] 🔥 New Job Found:", job.id, "Group:", job.group_url);
+
+        const targetUrl = job.group_url || job.url;
+        if (!targetUrl) {
+            console.error("[Background] ❌ No URL found in job", job);
+            return;
+        }
+
+        console.log("[Background] 📱 Creating tab with URL:", targetUrl);
         const tab = await chrome.tabs.create({ url: targetUrl, active: true });
         activeTabId = tab.id;
+        console.log("[Background] ✅ Tab created, ID:", tab.id);
 
         // Safety valve: if no REPORT_STATUS within 120s, release the lock
         activeJobTimeout = setTimeout(() => {
-            console.warn("[Background] ⚠️ Job timeout — releasing lock for job:", job.id);
+            console.warn("[Background] ⚠️ Job timeout — releasing lock for job:", job.id, "Tab:", activeTabId);
             if (activeTabId) {
-                chrome.tabs.remove(activeTabId).catch(() => {});
+                console.log("[Background] 🗑️ Closing tab", activeTabId);
+                chrome.tabs.remove(activeTabId).catch((err) => {
+                    console.error("[Background] Failed to close tab:", err);
+                });
                 activeTabId = null;
             }
             activeJobTimeout = null;
@@ -69,19 +81,27 @@ async function checkJobs() {
 
         chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
             if (tabId === tab.id && info.status === 'complete') {
+                console.log("[Background] 📄 Tab loaded (status=complete), ID:", tabId);
                 chrome.tabs.onUpdated.removeListener(listener);
+                console.log("[Background] ⏳ Waiting 4s for page to stabilize before sending EXECUTE_POST...");
                 setTimeout(() => {
+                    console.log("[Background] 📤 Sending EXECUTE_POST message to tab", tabId, "for job", job.id);
                     try {
                         chrome.tabs.sendMessage(tabId, { action: 'EXECUTE_POST', job: job }, (response) => {
                             if (chrome.runtime.lastError) {
                                 console.error("[Background] ❌ sendMessage failed:", chrome.runtime.lastError.message);
                                 // Content script not ready — report FAILED and release lock
+                                console.log("[Background] 🔴 Reporting FAILED to server...");
                                 fetch(`${API_BASE}/api/tasks/update-status`, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ taskId: job.id, status: 'FAILED', failure_reason: `Content script unavailable: ${chrome.runtime.lastError.message}` })
-                                }).catch(() => {});
+                                }).catch((err) => {
+                                    console.error("[Background] Failed to report to server:", err);
+                                });
                                 releaseJobLock();
+                            } else {
+                                console.log("[Background] ✅ sendMessage succeeded, waiting for content script response...");
                             }
                         });
                     } catch (err) {
@@ -117,6 +137,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'REPORT_STATUS') {
         const status = request.payload?.status;
         const taskId = request.payload?.taskId;
+        const failureReason = request.payload?.failure_reason;
+
+        console.log(`[Background] 📨 REPORT_STATUS received: Task #${taskId}, Status: ${status}, Reason: ${failureReason || 'N/A'}`);
 
         // When job finishes (any terminal state), close the tab and release the lock
         if (status === 'SUCCESS' || status === 'FAILED') {
@@ -124,14 +147,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             releaseJobLock();
         }
 
+        console.log(`[Background] 🔄 Sending status update to server for task #${taskId}...`);
         fetch(`${API_BASE}/api/tasks/update-status`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(request.payload)
+        }).then(res => {
+            if (res.ok) {
+                console.log(`[Background] ✅ Server received status update for task #${taskId}`);
+            } else {
+                console.error(`[Background] ❌ Server returned ${res.status} for task #${taskId}`);
+            }
         }).catch(err => {
-            console.error('[BG] Status update error:', err);
+            console.error('[Background] ❌ Status update error:', err);
             // Even if server update fails, still release the lock to avoid deadlock
             if (status === 'SUCCESS' || status === 'FAILED') {
+                console.log(`[Background] 🔒 Lock released anyway to prevent deadlock`);
                 releaseJobLock();
             }
         });

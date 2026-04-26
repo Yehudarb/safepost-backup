@@ -114,6 +114,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 async function performPost(job) {
     logRemote("🤖 Starting Execution Sequence", { jobId: job.id, url: window.location.href });
+    console.log(`[Content] 🚀 STARTING JOB #${job.id}`);
+    console.log(`[Content] URL: ${window.location.href}`);
+    console.log(`[Content] Content: ${job.content.substring(0, 50)}...`);
 
     window.hud.mount();
     window.hud.updateText("מתחיל עבודה", "טוען נתוני פוסט...");
@@ -122,11 +125,14 @@ async function performPost(job) {
     const pageTitle = document.title;
     const hasFbClass = document.body.className.includes('fb') || document.body.getAttribute('class')?.includes('fb');
     logRemote("📄 Page state", { title: pageTitle, url: window.location.href, hasFbClass });
+    console.log(`[Content] 📄 Page Title: ${pageTitle}, Has FB Class: ${hasFbClass}`);
 
     // 1. Trigger "Create Post" Modal
+    console.log(`[Content] 🔍 STEP 1: Looking for trigger button...`);
     const triggers = ["What's on your mind", "Write something", "Create a public post", "כתוב משהו", "כאן כותבים", "צור פוסט ציבורי", "הבעת דעה"];
     const trigger = await findElementRobust(triggers);
     if (!trigger) {
+        console.error(`[Content] ❌ FAILED: Trigger button not found`);
         logRemote("❌ Trigger not found");
         window.hud.updateText("שגיאה", "לא נמצא כפתור יצירת פוסט");
         chrome.runtime.sendMessage({
@@ -136,6 +142,7 @@ async function performPost(job) {
         return;
     }
 
+    console.log(`[Content] ✅ Found trigger button, clicking...`);
     trigger.click();
     logRemote("✅ Clicked Trigger");
 
@@ -143,8 +150,10 @@ async function performPost(job) {
     await sleep(500);
 
     // 2. Find the Input Box
+    console.log(`[Content] ⌛ STEP 2: Waiting for input box...`);
     let inputBox = await waitForInputBox();
     if (!inputBox) {
+        console.error(`[Content] ❌ FAILED: Input box not found after 10 seconds`);
         logRemote("❌ Input box not found");
         window.hud.updateText("שגיאה קריטית", "לא נמצאה תיבת טקסט.");
         chrome.runtime.sendMessage({
@@ -154,15 +163,19 @@ async function performPost(job) {
         return;
     }
 
+    console.log(`[Content] ✅ Found input box`);
     logRemote("✅ Found Input Box");
 
     // 2.5 Upload Media (If exists)
     const mediaToUpload = job.media_url || job.image_url;
     if (mediaToUpload) {
+        console.log(`[Content] 📸 STEP 2.5: Uploading media...`);
         try {
             await uploadMedia(mediaToUpload);
+            console.log(`[Content] ✅ Media upload completed`);
             logRemote("✅ Media upload flow completed");
         } catch (e) {
+            console.error(`[Content] ⚠️ Media upload error: ${e.message}`);
             logRemote("⚠️ Media Upload Error", { error: e.message });
             window.hud.updateText("שגיאת מדיה", "נכשל הוספת קובץ. ממשיך עם טקסט בלבד...");
             await sleep(2000);
@@ -170,20 +183,25 @@ async function performPost(job) {
     }
 
     // 3. Inject Text
+    console.log(`[Content] 📝 STEP 3: Typing text (${job.content.length} chars)...`);
     window.hud.updateText("כותב תוכן", "מזין טקסט...");
     await typeHumanLike(inputBox, job.content);
+    console.log(`[Content] ✅ Text injected`);
     logRemote("✅ Text injected");
 
     await sleep(300);
 
     // 4. Click Post
+    console.log(`[Content] 🔘 STEP 4: Looking for POST button...`);
     logRemote("🔵 Attempting to click POST button");
     window.hud.updateText("שלב סופי", "מפרסם...");
 
     let clicked = false;
     try {
         clicked = await clickPostButton();
+        console.log(`[Content] Click result: ${clicked}`);
     } catch (err) {
+        console.error(`[Content] ❌ Click error: ${err.message}`);
         logRemote("❌ Click Error", { error: err.message });
         chrome.runtime.sendMessage({
             action: "REPORT_STATUS",
@@ -192,11 +210,14 @@ async function performPost(job) {
     }
 
     if (clicked) {
+        console.log(`[Content] ✅ Post button clicked successfully`);
         logRemote("🚀 Post button clicked (Signal Sent)");
 
         // 5. Verify
+        console.log(`[Content] ⏳ STEP 5: Waiting for modal closure verification...`);
         const verifySuccess = await waitForModalClosure();
         if (verifySuccess) {
+            console.log(`[Content] ✅✅✅ JOB #${job.id} COMPLETED SUCCESSFULLY`);
             logRemote("🎯 Post Success Verified");
             window.hud.updateText("הצלחה! 🏆", "הפוסט פורסם.");
             chrome.runtime.sendMessage({
@@ -204,6 +225,7 @@ async function performPost(job) {
                 payload: { taskId: job.id, status: 'SUCCESS' }
             });
         } else {
+            console.log(`[Content] ❓ Modal closure verification timed out (likely still posted)`);
             logRemote("❓ Closure check timed out");
             window.hud.updateText("בדיקת סיום", "ממתין לאימות פייסבוק...");
             chrome.runtime.sendMessage({
@@ -212,6 +234,7 @@ async function performPost(job) {
             });
         }
     } else {
+        console.error(`[Content] ❌❌ JOB #${job.id} FAILED - Post button not found`);
         logRemote("❌ Failed to find or click Post button");
         window.hud.updateText("שגיאה", "כפתור פרסום לא נמצא");
         chrome.runtime.sendMessage({
