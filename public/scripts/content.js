@@ -450,24 +450,78 @@ async function findElementRobust(phrases) {
     logRemote("🔍 Starting trigger search", { phrases });
 
     for (let i = 0; i < 15; i++) {
+        // Strategy 1: Text contains (case-sensitive)
         for (let phrase of phrases) {
             const xpath = `//div[@role="button"][contains(., "${phrase}")] | //button[contains(., "${phrase}")] | //div[@aria-label="${phrase}"] | //span[contains(text(), "${phrase}")]`;
             const res = document.evaluate(xpath, document, null, 9, null).singleNodeValue;
             if (res) {
                 const btn = res.closest('[role="button"]') || res.closest('button') || res;
                 if (isElementVisibleAndEnabled(btn)) {
-                    logRemote("✅ Found trigger button", { phrase, attempt: i });
+                    logRemote("✅ Found trigger (exact match)", { phrase, attempt: i });
                     return btn;
                 }
             }
         }
+
+        // Strategy 2: Case-insensitive with aria-label contains
+        for (let phrase of phrases) {
+            const xpath = `//div[contains(@aria-label, "${phrase}")] | //button[contains(@aria-label, "${phrase}")] | //*[contains(@role, "button")][contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "${phrase.toLowerCase()}")]`;
+            const res = document.evaluate(xpath, document, null, 9, null).singleNodeValue;
+            if (res) {
+                const btn = res.closest('[role="button"]') || res.closest('button') || res;
+                if (isElementVisibleAndEnabled(btn)) {
+                    logRemote("✅ Found trigger (case-insensitive)", { phrase, attempt: i });
+                    return btn;
+                }
+            }
+        }
+
+        // Strategy 3: data-testid (Facebook's internal selectors)
+        let testIdRes = document.evaluate(`//div[@data-testid="status-update"] | //div[@data-testid="create-status"] | //a[@aria-label*="Write"]`, document, null, 9, null).singleNodeValue;
+        if (testIdRes && isElementVisibleAndEnabled(testIdRes)) {
+            logRemote("✅ Found trigger (data-testid)", { attempt: i });
+            return testIdRes;
+        }
+
+        // Strategy 4: Broad text scan - look for any button with write/create/post/כתוב
+        const allInteractive = Array.from(document.querySelectorAll('[role="button"], button, a[role="button"]'));
+        const writeButton = allInteractive.find(el => {
+            const text = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase();
+            const hebrewText = (el.innerText || el.getAttribute('aria-label') || '');
+            return (text.includes('write') || text.includes('create') || text.includes('post') ||
+                    hebrewText.includes('כתוב') || hebrewText.includes('צור') || hebrewText.includes('כאן') ||
+                    text.includes("what's on your mind") || text.includes("compose"));
+        });
+        if (writeButton && isElementVisibleAndEnabled(writeButton)) {
+            logRemote("✅ Found trigger (text scan fallback)", { attempt: i });
+            return writeButton;
+        }
+
         if (i === 0) {
-            logRemote("⚠️ Trigger not found on first attempt", { url: window.location.href, title: document.title });
+            // Debug: log first 15 buttons we see
+            const sample = Array.from(document.querySelectorAll('[role="button"], button'))
+                .slice(0, 15)
+                .map(b => (b.innerText || b.getAttribute('aria-label') || 'no-text').substring(0, 40))
+                .filter(t => t && t.length > 2);
+            logRemote("⚠️ Trigger not found on first attempt", {
+                url: window.location.href,
+                title: document.title,
+                sampleButtons: sample,
+                totalButtons: document.querySelectorAll('[role="button"], button').length
+            });
         }
         await sleep(500);
     }
 
-    logRemote("❌ Trigger not found after all attempts", { url: window.location.href, title: document.title, isLoggedIn: !!document.querySelector('[aria-label*="Profile"]') });
+    const allButtons = Array.from(document.querySelectorAll('[role="button"], button'))
+        .map(b => (b.innerText || b.getAttribute('aria-label') || 'no-text').substring(0, 30));
+    logRemote("❌ Trigger not found after all attempts", {
+        url: window.location.href,
+        title: document.title,
+        isLoggedIn: !!document.querySelector('[aria-label*="Profile"]'),
+        totalButtonsOnPage: allButtons.length,
+        sampleButtons: allButtons.slice(0, 20)
+    });
     return null;
 }
 
