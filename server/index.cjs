@@ -311,6 +311,36 @@ app.delete('/api/groups', async (req, res) => {
     res.json({ success: true, message: 'All groups deleted' });
 });
 
+// Fix stuck tasks - mark PROCESSING tasks older than 4 minutes as FAILED
+app.post('/api/tasks/fix-stuck', async (req, res) => {
+    const fourMinutesAgo = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+
+    console.log('🔧 [TASKS] Fixing stuck tasks (PROCESSING > 4 min)...');
+
+    const { data: stuckTasks, error: fetchError } = await supabase
+        .from('posts')
+        .select('id')
+        .eq('status', 'PROCESSING')
+        .lt('created_at', fourMinutesAgo);
+
+    if (fetchError) return res.status(500).json({ error: fetchError.message });
+
+    if (!stuckTasks || stuckTasks.length === 0) {
+        return res.json({ success: true, fixed: 0 });
+    }
+
+    const { error: updateError } = await supabase
+        .from('posts')
+        .update({ status: 'FAILED', failure_reason: 'Task timeout - stuck in PROCESSING > 4min' })
+        .eq('status', 'PROCESSING')
+        .lt('created_at', fourMinutesAgo);
+
+    if (updateError) return res.status(500).json({ error: updateError.message });
+
+    console.log(`✅ [TASKS] Fixed ${stuckTasks.length} stuck tasks`);
+    res.json({ success: true, fixed: stuckTasks.length });
+});
+
 app.post('/api/groups', async (req, res) => {
     const { groups } = req.body;
     if (!groups || !Array.isArray(groups)) return res.status(400).json({ error: "Invalid data" });

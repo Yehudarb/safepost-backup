@@ -650,6 +650,21 @@ export default function App() {
         catch (e) { alert(`❌ ${e.message}`); }
     };
 
+    const handleFixStuckTasks = async () => {
+        if (!confirm('⚠️ זה יסמן את משימות תקועות כ-FAILED. תרצה להמשיך?')) return;
+
+        try {
+            const response = await fetch(`${API_BASE}/tasks/fix-stuck`, { method: 'POST' });
+            if (!response.ok) throw new Error('Failed to fix stuck tasks');
+
+            const data = await response.json();
+            alert(`✅ תוקנו ${data.fixed} משימות תקועות`);
+            await fetchAllData(true);
+        } catch (e) {
+            alert(`❌ שגיאה: ${e.message}`);
+        }
+    };
+
     const handleSyncGroups = async () => {
         setIsSyncingGroups(true);
         const safetyTimer = setTimeout(() => {
@@ -785,11 +800,17 @@ export default function App() {
                             <Zap size={12} /> Resume Worker
                         </button>
                     ) : (
-                        <button onClick={() => setShowStopModal(true)} disabled={isStoppingWorker}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/10 border border-red-800/40 text-red-400 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-red-900/25 transition disabled:opacity-50">
-                            {isStoppingWorker ? <RefreshCw size={10} className="animate-spin" /> : <StopCircle size={12} />}
-                            Stop Worker
-                        </button>
+                        <>
+                            <button onClick={() => setShowStopModal(true)} disabled={isStoppingWorker}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/10 border border-red-800/40 text-red-400 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-red-900/25 transition disabled:opacity-50">
+                                {isStoppingWorker ? <RefreshCw size={10} className="animate-spin" /> : <StopCircle size={12} />}
+                                Stop Worker
+                            </button>
+                            <button onClick={handleFixStuckTasks}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-900/10 border border-amber-800/40 text-amber-400 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-amber-900/25 transition">
+                                <Zap size={12} /> Fix Stuck
+                            </button>
+                        </>
                     )}
                     <button onClick={() => setTheme(p => p === 'dark' ? 'light' : 'dark')}
                         aria-label="החלף ערכת נושא"
