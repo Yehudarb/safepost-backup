@@ -5,11 +5,12 @@ import {
     Edit3, Trash2, Save, X, Sun, Moon, Paperclip, Clock,
     FolderPlus, Folder, Search, Ban, Zap, StopCircle,
     Sparkles, Info, Smile, Scissors, AlignLeft, Languages, Hash, Megaphone,
-    GripVertical, BarChart3
+    GripVertical, BarChart3, RotateCcw
 } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar-bento';
 import { io } from 'socket.io-client';
 import TaskTimer from '@/components/TaskTimer';
+import Toast from '@/components/Toast';
 import SaveFolderModal from '@/components/modals/SaveFolderModal';
 import StopWorkerModal from '@/components/modals/StopWorkerModal';
 import SavePostTemplateModal from '@/components/modals/SavePostTemplateModal';
@@ -305,6 +306,18 @@ export default function App() {
     // Status timeline: { [taskId]: { [status]: "HH:MM:SS" } }
     const [statusTimestamps, setStatusTimestamps] = useState({});
 
+    // Toast & Confirmation Dialog
+    const [toast, setToast] = useState({ visible: false, message: '', type: 'info' });
+    const [confirmDialog, setConfirmDialog] = useState({ show: false, message: '', onConfirm: null });
+
+    const showToast = useCallback((message, type = 'info') => {
+        setToast({ visible: true, message, type });
+    }, []);
+
+    const showConfirm = useCallback((message, onConfirm) => {
+        setConfirmDialog({ show: true, message, onConfirm });
+    }, []);
+
     // Content Edit Actions
     const CONTENT_EDIT_ACTIONS = [
         { id: 'emojis',   icon: <Smile size={11} />,      label: "אמוג'ים",   prompt: t => `הוסף אמוג'ים רלוונטיים לטקסט הזה, אל תשנה את התוכן עצמו:\n\n${t}` },
@@ -406,13 +419,15 @@ export default function App() {
 
     const handleDeleteTemplate = async (id, e) => {
         e.stopPropagation();
-        if (!confirm('Are you sure you want to delete this template?')) return;
-        try {
-            await ApiService.deleteTemplate(id);
-            await fetchAllData(true);
-        } catch (e) {
-            console.error("Delete Template Error:", e);
-        }
+        showConfirm('Are you sure you want to delete this template?', async () => {
+            try {
+                await ApiService.deleteTemplate(id);
+                await fetchAllData(true);
+            } catch (e) {
+                console.error("Delete Template Error:", e);
+                showToast(`Error: ${e.message}`, 'error');
+            }
+        });
     };
 
     const handleInsertAiContent = (text) => {
@@ -490,7 +505,7 @@ export default function App() {
         socket.on('queue_updated', handleRefresh);
         socket.on('data_updated', handleRefresh);
         socket.on('groups_updated', () => { setIsSyncingGroups(false); fetchAllData(true); });
-        socket.on('groups_sync_failed', ({ error }) => { setIsSyncingGroups(false); alert(`❌ סנכרון נכשל: ${error}`); });
+        socket.on('groups_sync_failed', ({ error }) => { setIsSyncingGroups(false); showToast(`סנכרון נכשל: ${error}`, 'error'); });
         socket.on('worker_stop_signal', () => { setWorkerStopped(true); fetchAllData(true); });
         socket.on('worker_resumed',      () => { setWorkerStopped(false); fetchAllData(true); });
 
@@ -527,11 +542,11 @@ export default function App() {
             const response = await fetch(`${API_BASE}/groups`, { method: 'DELETE' });
             if (!response.ok) throw new Error('Failed to delete groups');
 
-            alert('✅ כל הקבוצות נמחקו. סנכרן מחדש מFacebook עכשיו.');
+            showToast('כל הקבוצות נמחקו. סנכרן מחדש מFacebook עכשיו.', 'success');
             setSelectedGroups([]);
             await fetchAllData(true);
         } catch (e) {
-            alert(`❌ שגיאה: ${e.message}`);
+            showToast(`שגיאה: ${e.message}`, 'error');
             console.error('Clear groups error:', e);
         } finally {
             setLoading(false);
@@ -584,7 +599,7 @@ export default function App() {
     // --- MISSION HANDLERS ---
     const handleLaunchPosts = async () => {
         if (!selectedGroups.length || (!postContent && !selectedFile))
-            return alert('⚠️ Select groups and enter content or attach media.');
+            return showToast('Select groups and enter content or attach media.', 'warning');
         setIsSubmitting(true);
         try {
             let mediaUrl = null;
@@ -601,32 +616,33 @@ export default function App() {
                 ai_spin: useAiSpin,
                 facebook_user: currentUser || null
             });
-            alert(`🚀 Success! Queued ${data.count} posts.`);
+            showToast(`Success! Queued ${data.count} posts.`, 'success');
             setPostContent(''); setSelectedGroups([]); setScheduleTime('');
             setSelectedFile(null); setMediaPreview(null);
             fetchAllData();
-        } catch (e) { alert(`❌ Error: ${e.message}`); }
+        } catch (e) { showToast(`Error: ${e.message}`, 'error'); }
         finally { setIsSubmitting(false); }
     };
 
     const handleDelete = async id => {
         const task = queue.find(q => q.id === id);
         const msg = task?.status === 'PROCESSING'
-            ? '⚠️ This task is PROCESSING by the worker.\n\nDeleting will NOT stop the extension mid-post. The post may still go through.\n\nDelete record anyway?'
+            ? 'This task is PROCESSING by the worker.\n\nDeleting will NOT stop the extension mid-post. The post may still go through.\n\nDelete record anyway?'
             : 'Delete this task?';
-        if (!confirm(msg)) return;
-        const orig = [...queue];
-        setQueue(p => p.filter(q => q.id !== id));
-        setProcessingIds(p => new Set(p).add(id));
-        try { await ApiService.deleteTask(id); }
-        catch (e) { setQueue(orig); alert(`❌ ${e.message}`); }
-        finally { setProcessingIds(p => { const n = new Set(p); n.delete(id); return n; }); }
+        showConfirm(msg, async () => {
+            const orig = [...queue];
+            setQueue(p => p.filter(q => q.id !== id));
+            setProcessingIds(p => new Set(p).add(id));
+            try { await ApiService.deleteTask(id); }
+            catch (e) { setQueue(orig); showToast(`${e.message}`, 'error'); }
+            finally { setProcessingIds(p => { const n = new Set(p); n.delete(id); return n; }); }
+        });
     };
 
     const handleAbortTask = async id => {
         setQueue(p => p.map(q => q.id === id ? { ...q, status: 'CANCELLED' } : q));
         try { await ApiService.cancelTask(id); }
-        catch (e) { fetchAllData(true); alert(`❌ ${e.message}`); }
+        catch (e) { fetchAllData(true); showToast(`${e.message}`, 'error'); }
     };
 
     const handleBulkDelete = async () => {
@@ -635,33 +651,33 @@ export default function App() {
         setQueue(p => p.filter(q => !selectedTaskIds.includes(q.id)));
         setLoading(true);
         try { await ApiService.bulkDelete(selectedTaskIds); setSelectedTaskIds([]); }
-        catch (e) { setQueue(orig); alert(`❌ ${e.message}`); }
+        catch (e) { setQueue(orig); showToast(`${e.message}`, 'error'); }
         finally { setLoading(false); }
     };
 
     const handleCancelAll = async () => {
         const count = queue.filter(q => q.status === 'PENDING').length;
-        if (count === 0) return alert('No PENDING tasks to cancel.');
+        if (count === 0) { showToast('No PENDING tasks to cancel.', 'info'); return; }
         if (!confirm(`Cancel all ${count} pending operations? Their status will be set to CANCELLED.`)) return;
         setIsCancelling(true);
         try { await ApiService.cancelAllPending(); fetchAllData(true); }
-        catch (e) { alert(`❌ ${e.message}`); }
+        catch (e) { showToast(`${e.message}`, 'error'); }
         finally { setIsCancelling(false); }
     };
 
     const handleResetStuckTasks = async () => {
         const stuckCount = queue.filter(q => q.status === 'PROCESSING' || q.status === 'SENT').length;
-        if (stuckCount === 0) return alert('No stuck tasks found (no PROCESSING/SENT tasks).');
+        if (stuckCount === 0) { showToast('No stuck tasks found (no PROCESSING/SENT tasks).', 'info'); return; }
         if (!confirm(`Reset stuck tasks (PROCESSING/SENT >4min)?\nThey will return to PENDING with new schedule.`)) return;
         setIsResettingStuck(true);
         try {
             const res = await fetch(`${API_BASE}/tasks/reset-stuck`, { method: 'POST' });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error);
-            alert(`✅ Reset ${data.reset_count} stuck task(s): ${data.task_ids.join(', ')}`);
+            showToast(`Reset ${data.reset_count} stuck task(s): ${data.task_ids.join(', ')}`, 'success');
             fetchAllData(true);
         }
-        catch (e) { alert(`❌ ${e.message}`); }
+        catch (e) { showToast(`${e.message}`, 'error'); }
         finally { setIsResettingStuck(false); }
     };
 
@@ -669,13 +685,13 @@ export default function App() {
         setShowStopModal(false);
         setIsStoppingWorker(true);
         try { await ApiService.stopWorker(); setWorkerStopped(true); }
-        catch (e) { alert(`❌ ${e.message}`); }
+        catch (e) { showToast(`${e.message}`, 'error'); }
         finally { setTimeout(() => setIsStoppingWorker(false), 2000); }
     };
 
     const handleResumeWorker = async () => {
         try { await ApiService.resumeWorker(); setWorkerStopped(false); }
-        catch (e) { alert(`❌ ${e.message}`); }
+        catch (e) { showToast(`${e.message}`, 'error'); }
     };
 
     const handleFixStuckTasks = async () => {
@@ -686,10 +702,10 @@ export default function App() {
             if (!response.ok) throw new Error('Failed to fix stuck tasks');
 
             const data = await response.json();
-            alert(`✅ תוקנו ${data.fixed} משימות תקועות`);
+            showToast(`תוקנו ${data.fixed} משימות תקועות`, 'success');
             await fetchAllData(true);
         } catch (e) {
-            alert(`❌ שגיאה: ${e.message}`);
+            showToast(`שגיאה: ${e.message}`, 'error');
         }
     };
 
@@ -697,7 +713,7 @@ export default function App() {
         setIsSyncingGroups(true);
         const safetyTimer = setTimeout(() => {
             setIsSyncingGroups(false);
-            alert('⏱️ הסנכרון לקח יותר מדי זמן. בדוק שה-extension פועל ופייסבוק פתוח.');
+            showToast('הסנכרון לקח יותר מדי זמן. בדוק שה-extension פועל ופייסבוק פתוח.', 'warning');
         }, 90000);
         try {
             const res = await fetch(`${API_BASE}/groups/request-sync`, { method: 'POST' });
@@ -708,7 +724,7 @@ export default function App() {
             }
         } catch (e) {
             clearTimeout(safetyTimer);
-            alert(`❌ שגיאה: ${e.message}`);
+            showToast(`שגיאה: ${e.message}`, 'error');
             setIsSyncingGroups(false);
         }
     };
@@ -716,8 +732,25 @@ export default function App() {
     const handleUpdate = async (id, data) => {
         setProcessingIds(p => new Set(p).add(id));
         try { await ApiService.updateTask(id, data); setEditingTask(null); fetchAllData(true); }
-        catch (e) { alert(`❌ Update failed: ${e.message}`); }
+        catch (e) { showToast(`Update failed: ${e.message}`, 'error'); }
         finally { setProcessingIds(p => { const n = new Set(p); n.delete(id); return n; }); }
+    };
+
+    const handleRetryTask = async (task) => {
+        try {
+            const mediaFiles = task.media_paths ? task.media_paths.map(p => ({ filePath: p })) : undefined;
+            await ApiService.launchPosts({
+                group_ids: [String(task.group_id)],
+                content: task.content || '',
+                media_url: task.media_url || null,
+                media_files: mediaFiles,
+                facebook_user: currentUser || null
+            });
+            showToast('Task queued for retry', 'success');
+            fetchAllData(true);
+        } catch (e) {
+            showToast(`Retry failed: ${e.message}`, 'error');
+        }
     };
 
     const handleTableClick = e => {
@@ -1419,6 +1452,13 @@ export default function App() {
                                                         {row.status === 'PROCESSING' && (
                                                             <span className="text-[9px] text-yellow-500 font-bold px-1">LIVE</span>
                                                         )}
+                                                        {row.status === 'FAILED' && (
+                                                            <button onClick={() => handleRetryTask(row)}
+                                                                aria-label="נסה שוב"
+                                                                className="p-1.5 hover:bg-blue-500/20 text-blue-400 rounded transition" title="Retry this task">
+                                                                <RotateCcw size={13} />
+                                                            </button>
+                                                        )}
                                                         <button data-action="delete" data-task-id={row.id}
                                                             aria-label="מחק משימה"
                                                             className="p-1.5 hover:bg-red-500/20 text-red-500 rounded transition" title="Delete record">
@@ -1550,6 +1590,39 @@ export default function App() {
                     <span className="text-[9px] bg-gray-100 dark:bg-[#21262d] px-1 rounded ml-1 border border-gray-200 dark:border-[#30363d]">PROD</span>
                 </span>
             </footer>
+
+            {/* ── TOAST NOTIFICATION ── */}
+            {toast.visible && (
+                <Toast
+                    message={toast.message}
+                    type={toast.type}
+                    onClose={() => setToast(t => ({ ...t, visible: false }))}
+                />
+            )}
+
+            {/* ── CONFIRMATION DIALOG ── */}
+            {confirmDialog.show && (
+                <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[300] flex items-center justify-center p-4">
+                    <div className="bg-[#161b22] border border-[#30363d] rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+                        <p className="text-white text-sm mb-6 leading-relaxed whitespace-pre-wrap">{confirmDialog.message}</p>
+                        <div className="flex gap-3 justify-end">
+                            <button
+                                onClick={() => setConfirmDialog({ show: false, message: '', onConfirm: null })}
+                                className="px-4 py-2 rounded-xl text-sm text-gray-400 hover:bg-[#21262d] transition-colors">
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => {
+                                    confirmDialog.onConfirm?.();
+                                    setConfirmDialog({ show: false, message: '', onConfirm: null });
+                                }}
+                                className="px-4 py-2 rounded-xl text-sm bg-rose-600 hover:bg-rose-500 text-white transition-colors font-bold">
+                                Confirm
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
