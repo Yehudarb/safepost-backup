@@ -286,10 +286,14 @@ async function updateTaskStatus(taskId, status, message = null, metadata = null)
 // --- API ROUTES ---
 
 app.get('/api/groups', async (req, res) => {
-    const { data, error } = await supabase
-        .from('groups')
-        .select('*')
-        .order('name', { ascending: true });
+    let query = supabase.from('groups').select('*');
+
+    // Filter by facebook_user if provided
+    if (req.query.user) {
+        query = query.eq('facebook_user', req.query.user);
+    }
+
+    const { data, error } = await query.order('name', { ascending: true });
 
     if (error) return res.status(500).json({ error: error.message });
     res.json({ groups: data });
@@ -315,14 +319,19 @@ app.post('/api/groups', async (req, res) => {
 // --- SYNC ENDPOINT ---
 app.post('/api/groups/sync', async (req, res) => {
     console.log("📥 Received sync data from extension:", req.body);
-    const { groups } = req.body;
+    const { groups, facebook_user } = req.body;
 
     if (!groups || !Array.isArray(groups) || groups.length === 0) {
         return res.status(400).json({ error: "No groups provided" });
     }
 
     // UPSERT newly scraped groups (preserves existing IDs and prevents SET NULL on posts)
-    const toUpsert = groups.map(g => ({ id: g.id, name: g.name, url: g.url }));
+    const toUpsert = groups.map(g => ({
+        id: g.id,
+        name: g.name,
+        url: g.url,
+        facebook_user: facebook_user || null
+    }));
     const { error: upsertError } = await supabase
         .from('groups')
         .upsert(toUpsert, { onConflict: 'id' });
@@ -817,7 +826,7 @@ app.post('/api/ai/generate', strictLimiter, async (req, res) => {
 
 // --- 1. PROPER JITTER CALCULATION ---
 app.post('/api/posts', async (req, res) => {
-    const { group_ids, content, schedule, media_url, media_files, ai_spin } = req.body;
+    const { group_ids, content, schedule, media_url, media_files, ai_spin, facebook_user } = req.body;
     if (!group_ids || !Array.isArray(group_ids) || group_ids.length === 0 || (!content && !media_url && !media_files)) {
         return res.status(400).json({ error: "Missing groups or content/media" });
     }
@@ -895,7 +904,8 @@ app.post('/api/posts', async (req, res) => {
             media_paths: mediaPaths || null,        // New field: array of Supabase Storage paths
             status: 'PENDING',
             scheduled_time: nextScheduleTime.toISOString(),
-            app_source: 'backup'
+            app_source: 'backup',
+            facebook_user: facebook_user || null    // Isolate posts by Facebook account
         });
     });
 

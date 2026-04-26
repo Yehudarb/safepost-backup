@@ -237,6 +237,12 @@ export default function App() {
         localStorage.setItem('theme', theme);
     }, [theme]);
 
+    useEffect(() => {
+        if (currentUser) {
+            localStorage.setItem('safepost_currentUser', currentUser);
+        }
+    }, [currentUser]);
+
     // Selection & processing
     const [selectedTaskIds, setSelectedTaskIds] = useState([]);
     const [processingIds, setProcessingIds]     = useState(new Set());
@@ -249,6 +255,10 @@ export default function App() {
     const [selectedFile, setSelectedFile]     = useState(null);
     const [mediaPreview, setMediaPreview]     = useState(null);
     const [useAiSpin, setUseAiSpin]           = useState(true);
+
+    // Facebook User Isolation
+    const [currentUser, setCurrentUser]       = useState(localStorage.getItem('safepost_currentUser') || '');
+    const [uniqueUsers, setUniqueUsers]       = useState([]);
 
     // Modals
     const [editingTask, setEditingTask]         = useState(null);
@@ -309,14 +319,28 @@ export default function App() {
     const fetchAllData = useCallback(async (silent = false) => {
         if (!silent) setLoading(true);
         try {
+            // Build groups URL with user filter if currentUser is set
+            const groupsUrl = currentUser ? `/groups?user=${encodeURIComponent(currentUser)}` : '/groups';
+
             const [gData, qData, sData, gsData, tData] = await Promise.all([
-                ApiService.getGroups(),
+                ApiService.request(groupsUrl),
                 ApiService.getQueue(),
                 ApiService.getSystemStatus(),
                 ApiService.getGroupSets(),
                 ApiService.getTemplates()
             ]);
+
             setGroups(gData.groups);
+
+            // Extract unique facebook_user values from ALL groups (not just filtered)
+            if (!currentUser) {
+                const allGroupsData = await ApiService.request('/groups');
+                const users = [...new Set(allGroupsData.groups
+                    .map(g => g.facebook_user)
+                    .filter(u => u)
+                )].sort();
+                setUniqueUsers(users);
+            }
             setQueue(qData.queue);
             setStatusTimestamps(prev => {
                 const updated = { ...prev };
@@ -524,7 +548,8 @@ export default function App() {
                 content: postContent,
                 schedule: scheduleTime ? new Date(scheduleTime).toISOString() : undefined,
                 media_url: mediaUrl,
-                ai_spin: useAiSpin
+                ai_spin: useAiSpin,
+                facebook_user: currentUser || null
             });
             alert(`🚀 Success! Queued ${data.count} posts.`);
             setPostContent(''); setSelectedGroups([]); setScheduleTime('');
@@ -901,6 +926,38 @@ export default function App() {
 
                         {/* GROUPS */}
                         <div className="bg-white backdrop-blur-md border border-gray-200 rounded-2xl p-5 shadow-lg flex flex-col space-y-3">
+                            {/* Facebook User Filter */}
+                            {uniqueUsers.length > 0 && (
+                                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                                    <label className="text-[9px] font-bold text-amber-700 uppercase tracking-widest block mb-2">Facebook Account</label>
+                                    <div className="flex gap-2 flex-wrap">
+                                        <button
+                                            onClick={() => setCurrentUser('')}
+                                            className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition ${
+                                                !currentUser
+                                                    ? 'bg-amber-600 text-white border border-amber-600'
+                                                    : 'bg-white text-amber-600 border border-amber-300 hover:bg-amber-50'
+                                            }`}
+                                        >
+                                            All
+                                        </button>
+                                        {uniqueUsers.map(user => (
+                                            <button
+                                                key={user}
+                                                onClick={() => setCurrentUser(user)}
+                                                className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase transition ${
+                                                    currentUser === user
+                                                        ? 'bg-amber-600 text-white border border-amber-600'
+                                                        : 'bg-white text-amber-600 border border-amber-300 hover:bg-amber-50'
+                                                }`}
+                                            >
+                                                {user}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
                             <div className="flex justify-between items-center">
                                 <label className="text-[10px] font-bold text-gray-700 uppercase tracking-widest flex items-center gap-2">
                                     <span className="w-1 h-1 bg-blue-500 rounded-full" /> Target Nodes ({selectedGroups.length})

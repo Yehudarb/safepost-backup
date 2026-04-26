@@ -125,7 +125,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         fetch(`${API_BASE}/api/groups/sync`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ groups: request.groups })
+            body: JSON.stringify({
+                groups: request.groups,
+                facebook_user: request.facebook_user || null
+            })
         })
         .then(async (res) => {
             const body = await res.json();
