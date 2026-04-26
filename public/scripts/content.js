@@ -130,14 +130,18 @@ async function performPost(job) {
     // 1. Trigger "Create Post" Modal
     console.log(`[Content] 🔍 STEP 1: Looking for trigger button...`);
     const triggers = ["What's on your mind", "Write something", "Create a public post", "כתוב משהו", "כאן כותבים", "צור פוסט ציבורי", "הבעת דעה"];
-    const trigger = await findElementRobust(triggers);
+    const step1Start = Date.now();
+    const trigger = await findElementRobust(triggers, 7000);
+    const step1Time = Date.now() - step1Start;
+    console.log(`[Content] 📊 STEP 1 took ${step1Time}ms`);
+
     if (!trigger) {
-        console.error(`[Content] ❌ FAILED: Trigger button not found`);
-        logRemote("❌ Trigger not found");
+        console.error(`[Content] ❌ FAILED: Trigger button not found after ${step1Time}ms`);
+        logRemote("❌ STEP 1 TIMEOUT: Trigger not found", { timeMs: step1Time });
         window.hud.updateText("שגיאה", "לא נמצא כפתור יצירת פוסט");
         chrome.runtime.sendMessage({
             action: "REPORT_STATUS",
-            payload: { taskId: job.id, status: 'FAILED', failure_reason: "Post trigger button not found" }
+            payload: { taskId: job.id, status: 'FAILED', failure_reason: `STEP 1 TIMEOUT (${step1Time}ms): Post trigger button not found` }
         });
         return;
     }
@@ -151,14 +155,18 @@ async function performPost(job) {
 
     // 2. Find the Input Box
     console.log(`[Content] ⌛ STEP 2: Waiting for input box...`);
-    let inputBox = await waitForInputBox();
+    const step2Start = Date.now();
+    let inputBox = await waitForInputBox(8000);
+    const step2Time = Date.now() - step2Start;
+    console.log(`[Content] 📊 STEP 2 took ${step2Time}ms`);
+
     if (!inputBox) {
-        console.error(`[Content] ❌ FAILED: Input box not found after 10 seconds`);
-        logRemote("❌ Input box not found");
+        console.error(`[Content] ❌ FAILED: Input box not found after ${step2Time}ms`);
+        logRemote("❌ STEP 2 TIMEOUT: Input box not found", { timeMs: step2Time });
         window.hud.updateText("שגיאה קריטית", "לא נמצאה תיבת טקסט.");
         chrome.runtime.sendMessage({
             action: "REPORT_STATUS",
-            payload: { taskId: job.id, status: 'FAILED', failure_reason: "Input box (textarea) not found" }
+            payload: { taskId: job.id, status: 'FAILED', failure_reason: `STEP 2 TIMEOUT (${step2Time}ms): Input box not found` }
         });
         return;
     }
@@ -197,16 +205,20 @@ async function performPost(job) {
     window.hud.updateText("שלב סופי", "מפרסם...");
 
     let clicked = false;
+    const step4Start = Date.now();
     try {
-        clicked = await clickPostButton();
-        console.log(`[Content] Click result: ${clicked}`);
+        clicked = await clickPostButton(6000);
+        const step4Time = Date.now() - step4Start;
+        console.log(`[Content] 📊 STEP 4 took ${step4Time}ms. Click result: ${clicked}`);
     } catch (err) {
-        console.error(`[Content] ❌ Click error: ${err.message}`);
-        logRemote("❌ Click Error", { error: err.message });
+        const step4Time = Date.now() - step4Start;
+        console.error(`[Content] ❌ STEP 4 error after ${step4Time}ms: ${err.message}`);
+        logRemote("❌ STEP 4 Error", { error: err.message, timeMs: step4Time });
         chrome.runtime.sendMessage({
             action: "REPORT_STATUS",
-            payload: { taskId: job.id, status: 'FAILED', failure_reason: `Click error: ${err.message}` }
+            payload: { taskId: job.id, status: 'FAILED', failure_reason: `STEP 4 ERROR (${step4Time}ms): ${err.message}` }
         });
+        return;
     }
 
     if (clicked) {
@@ -215,7 +227,11 @@ async function performPost(job) {
 
         // 5. Verify
         console.log(`[Content] ⏳ STEP 5: Waiting for modal closure verification...`);
-        const verifySuccess = await waitForModalClosure();
+        const step5Start = Date.now();
+        const verifySuccess = await waitForModalClosure(8000);
+        const step5Time = Date.now() - step5Start;
+        console.log(`[Content] 📊 STEP 5 took ${step5Time}ms`);
+
         if (verifySuccess) {
             console.log(`[Content] ✅✅✅ JOB #${job.id} COMPLETED SUCCESSFULLY`);
             logRemote("🎯 Post Success Verified");
@@ -225,21 +241,22 @@ async function performPost(job) {
                 payload: { taskId: job.id, status: 'SUCCESS' }
             });
         } else {
-            console.log(`[Content] ❓ Modal closure verification timed out (likely still posted)`);
-            logRemote("❓ Closure check timed out");
+            console.log(`[Content] ⏳ Modal closure verification timed out after ${step5Time}ms (likely still posted)`);
+            logRemote("❓ STEP 5 TIMEOUT: Closure check timed out", { timeMs: step5Time });
             window.hud.updateText("בדיקת סיום", "ממתין לאימות פייסבוק...");
+            // Still mark as SUCCESS because post button was clicked
             chrome.runtime.sendMessage({
                 action: "REPORT_STATUS",
-                payload: { taskId: job.id, status: 'SUCCESS', metadata: { notice: 'No modal closure confirmation' } }
+                payload: { taskId: job.id, status: 'SUCCESS', metadata: { notice: 'Modal closure timeout, but post likely sent' } }
             });
         }
     } else {
         console.error(`[Content] ❌❌ JOB #${job.id} FAILED - Post button not found`);
-        logRemote("❌ Failed to find or click Post button");
+        logRemote("❌ STEP 4 TIMEOUT/FAILED: Post button not found");
         window.hud.updateText("שגיאה", "כפתור פרסום לא נמצא");
         chrome.runtime.sendMessage({
             action: "REPORT_STATUS",
-            payload: { taskId: job.id, status: 'FAILED', failure_reason: "Post button not found (Color + Text strategies failed)" }
+            payload: { taskId: job.id, status: 'FAILED', failure_reason: "STEP 4: Post button not found (Color + Text strategies failed)" }
         });
     }
 
@@ -247,8 +264,11 @@ async function performPost(job) {
     window.hud.destroy();
 }
 
-async function waitForInputBox() {
-    for (let i = 0; i < 20; i++) {
+async function waitForInputBox(timeoutMs = 8000) {
+    const startTime = Date.now();
+    let attempt = 0;
+
+    while (Date.now() - startTime < timeoutMs) {
         const dialog = document.querySelector('div[role="dialog"]');
         if (dialog) {
             const edit = dialog.querySelector('[contenteditable="true"]');
@@ -258,8 +278,15 @@ async function waitForInputBox() {
         }
         const globalEdit = document.querySelector('div[role="dialog"] div[role="textbox"]');
         if (globalEdit) return globalEdit;
+
+        attempt++;
+        if (attempt % 3 === 0) {
+            console.log(`[Content] ⏳ STEP 2: Waiting for input box... attempt ${attempt}, ${Math.round((Date.now() - startTime) / 1000)}s elapsed`);
+        }
         await sleep(500);
     }
+
+    console.error(`[Content] ❌ Input box timeout after ${timeoutMs}ms`);
     return null;
 }
 
@@ -333,7 +360,8 @@ async function humanClick(el) {
     el.click();
 }
 
-async function clickPostButton() {
+async function clickPostButton(timeoutMs = 6000) {
+    const startTime = Date.now();
     console.group("⚓ [SafePost] V7.0 Bottom-Right Anchor Strategy");
     console.log("Searching for Blue Button in Bottom-Right Zone...");
 
@@ -341,6 +369,13 @@ async function clickPostButton() {
     const dialog = document.querySelector('div[role="dialog"]');
     if (!dialog) {
         console.error("❌ No dialog found!");
+        console.groupEnd();
+        return false;
+    }
+
+    // Safety: if we exceed timeout, abort
+    if (Date.now() - startTime > timeoutMs) {
+        console.error(`❌ clickPostButton timeout after ${timeoutMs}ms`);
         console.groupEnd();
         return false;
     }
@@ -456,11 +491,23 @@ async function clickPostButton() {
 }
 
 // Helpers
-async function waitForModalClosure() {
-    for (let i = 0; i < 20; i++) {
-        if (!document.querySelector('div[role="dialog"]')) return true;
+async function waitForModalClosure(timeoutMs = 8000) {
+    const startTime = Date.now();
+    let attempt = 0;
+
+    while (Date.now() - startTime < timeoutMs) {
+        if (!document.querySelector('div[role="dialog"]')) {
+            console.log(`[Content] ✅ Modal closed after ${Date.now() - startTime}ms`);
+            return true;
+        }
+        attempt++;
+        if (attempt % 3 === 0) {
+            console.log(`[Content] ⏳ STEP 5: Waiting for modal closure... ${Math.round((Date.now() - startTime) / 1000)}s elapsed`);
+        }
         await sleep(500);
     }
+
+    console.warn(`[Content] ⏳ Modal closure timeout after ${timeoutMs}ms (likely still posted)`);
     return false;
 }
 
@@ -469,10 +516,12 @@ function isElementVisibleAndEnabled(el) {
     return style.display !== 'none' && style.visibility !== 'hidden' && el.getAttribute('aria-disabled') !== 'true';
 }
 
-async function findElementRobust(phrases) {
-    logRemote("🔍 Starting trigger search", { phrases });
+async function findElementRobust(phrases, timeoutMs = 7000) {
+    logRemote("🔍 Starting trigger search", { phrases, timeoutMs });
+    const startTime = Date.now();
+    let attempt = 0;
 
-    for (let i = 0; i < 15; i++) {
+    while (Date.now() - startTime < timeoutMs) {
         // Strategy 1: Text contains (case-sensitive)
         for (let phrase of phrases) {
             const xpath = `//div[@role="button"][contains(., "${phrase}")] | //button[contains(., "${phrase}")] | //div[@aria-label="${phrase}"] | //span[contains(text(), "${phrase}")]`;
@@ -480,7 +529,7 @@ async function findElementRobust(phrases) {
             if (res) {
                 const btn = res.closest('[role="button"]') || res.closest('button') || res;
                 if (isElementVisibleAndEnabled(btn)) {
-                    logRemote("✅ Found trigger (exact match)", { phrase, attempt: i });
+                    logRemote("✅ Found trigger (exact match)", { phrase, attempt, timeMs: Date.now() - startTime });
                     return btn;
                 }
             }
@@ -493,7 +542,7 @@ async function findElementRobust(phrases) {
             if (res) {
                 const btn = res.closest('[role="button"]') || res.closest('button') || res;
                 if (isElementVisibleAndEnabled(btn)) {
-                    logRemote("✅ Found trigger (case-insensitive)", { phrase, attempt: i });
+                    logRemote("✅ Found trigger (case-insensitive)", { phrase, attempt, timeMs: Date.now() - startTime });
                     return btn;
                 }
             }
@@ -502,7 +551,7 @@ async function findElementRobust(phrases) {
         // Strategy 3: data-testid (Facebook's internal selectors)
         let testIdRes = document.evaluate(`//div[@data-testid="status-update"] | //div[@data-testid="create-status"] | //a[@aria-label*="Write"]`, document, null, 9, null).singleNodeValue;
         if (testIdRes && isElementVisibleAndEnabled(testIdRes)) {
-            logRemote("✅ Found trigger (data-testid)", { attempt: i });
+            logRemote("✅ Found trigger (data-testid)", { attempt, timeMs: Date.now() - startTime });
             return testIdRes;
         }
 
@@ -516,12 +565,12 @@ async function findElementRobust(phrases) {
                     text.includes("what's on your mind") || text.includes("compose"));
         });
         if (writeButton && isElementVisibleAndEnabled(writeButton)) {
-            logRemote("✅ Found trigger (text scan fallback)", { attempt: i });
+            logRemote("✅ Found trigger (text scan fallback)", { attempt, timeMs: Date.now() - startTime });
             return writeButton;
         }
 
-        if (i === 0) {
-            // Debug: log first 15 buttons we see
+        if (attempt === 0) {
+            // Debug: log first 15 buttons we see on first attempt
             const sample = Array.from(document.querySelectorAll('[role="button"], button'))
                 .slice(0, 15)
                 .map(b => (b.innerText || b.getAttribute('aria-label') || 'no-text').substring(0, 40))
@@ -533,14 +582,21 @@ async function findElementRobust(phrases) {
                 totalButtons: document.querySelectorAll('[role="button"], button').length
             });
         }
+
+        attempt++;
         await sleep(500);
     }
 
+    // Timeout reached
+    const timeElapsed = Date.now() - startTime;
+    console.error(`[Content] ❌ Trigger timeout after ${timeElapsed}ms`);
     const allButtons = Array.from(document.querySelectorAll('[role="button"], button'))
         .map(b => (b.innerText || b.getAttribute('aria-label') || 'no-text').substring(0, 30));
-    logRemote("❌ Trigger not found after all attempts", {
+    logRemote("❌ Trigger not found after timeout", {
         url: window.location.href,
         title: document.title,
+        timeoutMs,
+        timeElapsed,
         isLoggedIn: !!document.querySelector('[aria-label*="Profile"]'),
         totalButtonsOnPage: allButtons.length,
         sampleButtons: allButtons.slice(0, 20)

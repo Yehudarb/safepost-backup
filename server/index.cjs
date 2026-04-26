@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const Joi = require('joi');
 const { supabase } = require('./supabaseClient.cjs');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Anthropic = require('@anthropic-ai/sdk');
@@ -109,6 +110,69 @@ const strictLimiter = rateLimit({
     message: { error: 'Too many requests to this endpoint. Please slow down.' }
 });
 
+// ========== VALIDATION SCHEMAS ==========
+
+// Schema for POST /api/posts (create tasks)
+const postsSchema = Joi.object({
+    group_ids: Joi.array().items(Joi.string()).required().min(1).messages({
+        'array.required': 'group_ids is required and must be an array',
+        'array.min': 'group_ids must have at least 1 item'
+    }),
+    content: Joi.string().optional().allow('').max(50000).messages({
+        'string.max': 'Content cannot exceed 50000 characters'
+    }),
+    schedule: Joi.date().optional(),
+    media_url: Joi.string().optional().allow(null).uri({ scheme: ['http', 'https'] }),
+    media_files: Joi.array().items(
+        Joi.object({
+            filePath: Joi.string().required(),
+            fileName: Joi.string().optional(),
+            size: Joi.number().optional()
+        })
+    ).optional(),
+    ai_spin: Joi.boolean().optional().default(false),
+    facebook_user: Joi.string().optional().allow(null).max(500)
+});
+
+// Schema for POST /api/tasks/update-status
+const updateStatusSchema = Joi.object({
+    taskId: Joi.string().required().messages({
+        'any.required': 'taskId is required'
+    }),
+    status: Joi.string().required().valid('PENDING', 'SENT', 'PROCESSING', 'SUCCESS', 'FAILED', 'CANCELLED', 'LOG').messages({
+        'any.required': 'status is required',
+        'any.only': 'status must be one of: PENDING, SENT, PROCESSING, SUCCESS, FAILED, CANCELLED, LOG'
+    }),
+    failure_reason: Joi.string().optional().allow(null).max(1000),
+    proof_url: Joi.string().optional().allow(null).uri({ scheme: ['http', 'https'] })
+});
+
+// Schema for PATCH /api/tasks/:id/status
+const patchStatusSchema = Joi.object({
+    status: Joi.string().required().valid('PENDING', 'SENT', 'PROCESSING', 'SUCCESS', 'FAILED', 'CANCELLED', 'LOG').messages({
+        'any.required': 'status is required',
+        'any.only': 'status must be one of: PENDING, SENT, PROCESSING, SUCCESS, FAILED, CANCELLED, LOG'
+    }),
+    failure_reason: Joi.string().optional().allow(null).max(1000),
+    error: Joi.string().optional().allow(null).max(1000),
+    completed_at: Joi.date().optional(),
+    proof_url: Joi.string().optional().allow(null).uri({ scheme: ['http', 'https'] })
+});
+
+// Validation middleware
+const validate = (schema) => {
+    return (req, res, next) => {
+        const { error, value } = schema.validate(req.body, { abortEarly: false });
+        if (error) {
+            const messages = error.details.map(d => `${d.path.join('.')}: ${d.message}`).join('; ');
+            console.error(`[VALIDATION] ${messages}`);
+            return res.status(400).json({ error: 'Validation failed', details: messages });
+        }
+        req.validated = value;
+        next();
+    };
+};
+
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
@@ -126,6 +190,34 @@ const io = new Server(server, {
 const PORT = 3001;
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// Idempotency Key Store (taskId -> Set of processed request hashes)
+// This prevents duplicate status updates if the client retries with the same data
+const idempotencyStore = new Map();
+
+// Generate a hash for idempotency checking (taskId + status + reason)
+function generateIdempotencyKey(taskId, status, failureReason = '') {
+    const data = `${taskId}:${status}:${failureReason || ''}`;
+    // Simple hash: just use data as-is for now (good enough for most cases)
+    return data;
+}
+
+// Check if this exact request was already processed (within last 5 minutes)
+function isIdempotentDuplicate(taskId, idempotencyKey) {
+    if (!idempotencyStore.has(taskId)) {
+        idempotencyStore.set(taskId, new Set());
+    }
+    const processedKeys = idempotencyStore.get(taskId);
+    const isDuplicate = processedKeys.has(idempotencyKey);
+    if (!isDuplicate) {
+        processedKeys.add(idempotencyKey);
+        // Clean up old entries after 5 minutes
+        setTimeout(() => {
+            processedKeys.delete(idempotencyKey);
+        }, 5 * 60 * 1000);
+    }
+    return isDuplicate;
+}
 let lastWorkerCheckin = null;
 let lastWorkerVersion = 'UNKNOWN';
 let lastWorkerOrigin = 'UNKNOWN';
@@ -873,10 +965,12 @@ app.post('/api/ai/generate', strictLimiter, async (req, res) => {
 });
 
 // --- 1. PROPER JITTER CALCULATION ---
-app.post('/api/posts', async (req, res) => {
-    const { group_ids, content, schedule, media_url, media_files, ai_spin, facebook_user } = req.body;
-    if (!group_ids || !Array.isArray(group_ids) || group_ids.length === 0 || (!content && !media_url && !media_files)) {
-        return res.status(400).json({ error: "Missing groups or content/media" });
+app.post('/api/posts', validate(postsSchema), async (req, res) => {
+    const { group_ids, content, schedule, media_url, media_files, ai_spin, facebook_user } = req.validated;
+
+    // Additional validation: must have content or media
+    if (!content && !media_url && !media_files) {
+        return res.status(400).json({ error: "Must provide content, media_url, or media_files" });
     }
 
     console.log(`🚀 [POSTS] Intelligent Launch: Preparing ${group_ids.length} tasks...`);
@@ -1245,23 +1339,28 @@ app.get('/api/jobs/for-url', async (req, res) => {
 });
 
 // POST task status update (called by backup extension background.js REPORT_STATUS)
-app.post('/api/tasks/update-status', async (req, res) => {
-    const { taskId, status, failure_reason, proof_url } = req.body;
-    if (!taskId || !status) return res.status(400).json({ error: 'taskId and status required' });
-    console.log(`📝 [POST] /api/tasks/update-status → Task ${taskId}: ${status}`);
+app.post('/api/tasks/update-status', validate(updateStatusSchema), async (req, res) => {
+    const { taskId, status, failure_reason, proof_url } = req.validated;
+    const numericId = parseInt(taskId) || taskId;
+    console.log(`📝 [POST] /api/tasks/update-status → Task ${numericId}: ${status}`);
 
     if (status === 'LOG') {
         if (failure_reason) {
-            await supabase.from('system_logs').insert([{ log_level: 'info', source: 'extension_worker', message: `Task #${taskId}: ${failure_reason}` }]);
+            await supabase.from('system_logs').insert([{ log_level: 'info', source: 'extension_worker', message: `Task #${numericId}: ${failure_reason}` }]);
         }
         return res.json({ success: true, logged: true });
+    }
+
+    // Idempotency check: prevent duplicate updates
+    const idempotencyKey = generateIdempotencyKey(numericId, status, failure_reason);
+    if (isIdempotentDuplicate(numericId, idempotencyKey)) {
+        console.log(`[IDEMPOTENCY] Duplicate update detected for task ${numericId}, skipping`);
+        return res.json({ success: true, duplicate: true });
     }
 
     const update = { status };
     if (failure_reason) update.failure_reason = failure_reason;
     if (proof_url) update.proof_url = proof_url;
-
-    const numericId = parseInt(taskId) || taskId;
 
     // First, fetch the task to get group_id
     const { data: taskData } = await supabase.from('posts').select('group_id').eq('id', numericId).single();
@@ -1292,11 +1391,18 @@ app.post('/api/tasks/update-status', async (req, res) => {
 });
 
 // PATCH task status (called by full_app extension on SUCCESS/FAILED)
-app.patch('/api/tasks/:id/status', async (req, res) => {
+app.patch('/api/tasks/:id/status', validate(patchStatusSchema), async (req, res) => {
     const { id } = req.params;
-    const { status, failure_reason, error: bodyError, completed_at, proof_url } = req.body;
+    const { status, failure_reason, error: bodyError, completed_at, proof_url } = req.validated;
     const failReason = failure_reason || bodyError;
     console.log(`📝 [PATCH] /api/tasks/${id}/status → ${status} (${failReason || 'No error'})`);
+
+    // Idempotency check: prevent duplicate updates
+    const idempotencyKey = generateIdempotencyKey(id, status, failReason);
+    if (isIdempotentDuplicate(id, idempotencyKey)) {
+        console.log(`[IDEMPOTENCY] Duplicate PATCH detected for task ${id}, skipping`);
+        return res.json({ success: true, duplicate: true });
+    }
 
     // SPECIAL: If status is 'LOG', don't update post status, just insert into system_logs
     if (status === 'LOG') {
