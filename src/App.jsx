@@ -232,17 +232,6 @@ export default function App() {
     const [theme, setTheme]             = useState(localStorage.getItem('theme') || 'dark');
     const [workerStopped, setWorkerStopped] = useState(false);
 
-    useEffect(() => {
-        document.documentElement.classList.toggle('dark', theme === 'dark');
-        localStorage.setItem('theme', theme);
-    }, [theme]);
-
-    useEffect(() => {
-        if (currentUser) {
-            localStorage.setItem('safepost_currentUser', currentUser);
-        }
-    }, [currentUser]);
-
     // Selection & processing
     const [selectedTaskIds, setSelectedTaskIds] = useState([]);
     const [processingIds, setProcessingIds]     = useState(new Set());
@@ -259,6 +248,17 @@ export default function App() {
     // Facebook User Isolation
     const [currentUser, setCurrentUser]       = useState(localStorage.getItem('safepost_currentUser') || '');
     const [uniqueUsers, setUniqueUsers]       = useState([]);
+
+    useEffect(() => {
+        document.documentElement.classList.toggle('dark', theme === 'dark');
+        localStorage.setItem('theme', theme);
+    }, [theme]);
+
+    useEffect(() => {
+        if (currentUser) {
+            localStorage.setItem('safepost_currentUser', currentUser);
+        }
+    }, [currentUser]);
 
     // Modals
     const [editingTask, setEditingTask]         = useState(null);
