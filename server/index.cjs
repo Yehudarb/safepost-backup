@@ -286,17 +286,20 @@ async function updateTaskStatus(taskId, status, message = null, metadata = null)
 // --- API ROUTES ---
 
 app.get('/api/groups', async (req, res) => {
-    let query = supabase.from('groups').select('*');
-
-    // Filter by facebook_user if provided
-    if (req.query.user) {
-        query = query.eq('facebook_user', req.query.user);
-    }
-
-    const { data, error } = await query.order('name', { ascending: true });
+    const { data, error } = await supabase
+        .from('groups')
+        .select('*')
+        .order('name', { ascending: true });
 
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ groups: data });
+
+    // Filter by facebook_user if provided
+    let filtered = data || [];
+    if (req.query.user && data) {
+        filtered = data.filter(g => g.facebook_user === req.query.user);
+    }
+
+    res.json({ groups: filtered });
 });
 
 app.post('/api/groups', async (req, res) => {
@@ -326,12 +329,18 @@ app.post('/api/groups/sync', async (req, res) => {
     }
 
     // UPSERT newly scraped groups (preserves existing IDs and prevents SET NULL on posts)
-    const toUpsert = groups.map(g => ({
-        id: g.id,
-        name: g.name,
-        url: g.url,
-        facebook_user: facebook_user || null
-    }));
+    const toUpsert = groups.map(g => {
+        const item = {
+            id: g.id,
+            name: g.name,
+            url: g.url
+        };
+        // Only add facebook_user if it's provided (will be ignored if column doesn't exist)
+        if (facebook_user) {
+            item.facebook_user = facebook_user;
+        }
+        return item;
+    });
     const { error: upsertError } = await supabase
         .from('groups')
         .upsert(toUpsert, { onConflict: 'id' });
@@ -897,16 +906,20 @@ app.post('/api/posts', async (req, res) => {
             console.log(`   Content + media = ${finalContent.length} chars`);
         }
 
-        tasks.push({
+        const task = {
             group_id: gid,
             content: finalContent,
             media_url: media_url || null,           // Legacy field
             media_paths: mediaPaths || null,        // New field: array of Supabase Storage paths
             status: 'PENDING',
             scheduled_time: nextScheduleTime.toISOString(),
-            app_source: 'backup',
-            facebook_user: facebook_user || null    // Isolate posts by Facebook account
-        });
+            app_source: 'backup'
+        };
+        // Only add facebook_user if provided (will be ignored if column doesn't exist)
+        if (facebook_user) {
+            task.facebook_user = facebook_user;
+        }
+        tasks.push(task);
     });
 
     console.log(`   Creating ${tasks.length} tasks...`);
