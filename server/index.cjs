@@ -663,6 +663,65 @@ app.get('/api/analytics', async (req, res) => {
     });
 });
 
+// GET detailed report of successes and failures
+app.get('/api/report/tasks', async (req, res) => {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    const [{ data: posts }, { data: groups }] = await Promise.all([
+        supabase.from('posts')
+            .select('id, status, group_id, content, failure_reason, created_at')
+            .eq('app_source', 'backup')
+            .gte('created_at', thirtyDaysAgo)
+            .order('created_at', { ascending: false }),
+        supabase.from('groups').select('id, name, url')
+    ]);
+
+    if (!posts) return res.status(500).json({ error: 'Failed to fetch posts' });
+
+    const groupMap = {};
+    (groups || []).forEach(g => { groupMap[g.id] = g; });
+
+    const successes = posts.filter(p => ['SUCCESS', 'COMPLETED'].includes(p.status)).map(p => ({
+        id: p.id,
+        status: p.status,
+        group: groupMap[p.group_id]?.name || p.group_id,
+        groupUrl: groupMap[p.group_id]?.url || null,
+        timestamp: p.created_at,
+        contentPreview: (p.content || '').substring(0, 100)
+    }));
+
+    const failures = posts.filter(p => p.status === 'FAILED').map(p => ({
+        id: p.id,
+        status: p.status,
+        group: groupMap[p.group_id]?.name || p.group_id,
+        groupUrl: groupMap[p.group_id]?.url || null,
+        timestamp: p.created_at,
+        reason: p.failure_reason || 'Unknown error',
+        contentPreview: (p.content || '').substring(0, 100)
+    }));
+
+    // Error summary
+    const errorReasons = {};
+    failures.forEach(f => {
+        const key = (f.reason || '').trim();
+        errorReasons[key] = (errorReasons[key] || 0) + 1;
+    });
+
+    res.json({
+        summary: {
+            total: posts.length,
+            successes: successes.length,
+            failures: failures.length,
+            successRate: posts.length > 0 ? Math.round((successes.length / posts.length) * 100) : 0
+        },
+        successes: successes.slice(0, 100),
+        failures: failures.slice(0, 100),
+        errorSummary: Object.entries(errorReasons)
+            .sort((a, b) => b[1] - a[1])
+            .map(([reason, count]) => ({ reason, count }))
+    });
+});
+
 // --- LOGS STORAGE (in-memory for simplicity, persists within session) ---
 const eventLogs = [];
 const MAX_LOGS = 500; // Keep last 500 events

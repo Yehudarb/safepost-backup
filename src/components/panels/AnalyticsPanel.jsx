@@ -1,10 +1,61 @@
 import React, { useState } from 'react';
 import {
-    BarChart3, CheckCircle2, AlertCircle, Clock, X, TrendingUp
+    BarChart3, CheckCircle2, AlertCircle, Clock, X, TrendingUp, Download
 } from 'lucide-react';
 
 const AnalyticsPanel = ({ data, onClose }) => {
     const [filterTab, setFilterTab] = useState('success');
+    const [reportLoading, setReportLoading] = useState(false);
+
+    const downloadReport = async (format = 'csv') => {
+        setReportLoading(true);
+        try {
+            const res = await fetch('https://safepost-backup.onrender.com/api/report/tasks');
+            const report = await res.json();
+
+            if (format === 'csv') {
+                // Generate CSV
+                let csv = 'דוח הצלחות וכשלונות\n\n';
+                csv += `יום ${new Date().toLocaleDateString('he-IL')}\n\n`;
+                csv += `סה"כ: ${report.summary.total}, הצלחות: ${report.summary.successes}, כשלונות: ${report.summary.failures}, שיעור הצלחה: ${report.summary.successRate}%\n\n`;
+
+                csv += '=== כשלונות ===\n';
+                csv += 'ID,קבוצה,סיבה,תאריך\n';
+                report.failures.forEach(f => {
+                    csv += `${f.id},"${f.group}","${f.reason}","${new Date(f.timestamp).toLocaleString('he-IL')}"\n`;
+                });
+
+                csv += '\n=== סיכום שגיאות ===\n';
+                csv += 'סיבה,כמות\n';
+                report.errorSummary.forEach(e => {
+                    csv += `"${e.reason}",${e.count}\n`;
+                });
+
+                csv += '\n=== הצלחות ===\n';
+                csv += 'ID,קבוצה,תאריך\n';
+                report.successes.forEach(s => {
+                    csv += `${s.id},"${s.group}","${new Date(s.timestamp).toLocaleString('he-IL')}"\n`;
+                });
+
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `report-${new Date().toISOString().slice(0, 10)}.csv`;
+                link.click();
+            } else {
+                // Download JSON
+                const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `report-${new Date().toISOString().slice(0, 10)}.json`;
+                link.click();
+            }
+        } catch (err) {
+            console.error('Report download failed:', err);
+        } finally {
+            setReportLoading(false);
+        }
+    };
 
     const summary = data?.summary || {
         total: 0,
@@ -38,13 +89,28 @@ const AnalyticsPanel = ({ data, onClose }) => {
                             <p className="text-[10px] text-gray-500 uppercase tracking-widest font-black">30 הימים האחרונים • SafePost Backup</p>
                         </div>
                     </div>
-                    <button
-                        onClick={onClose}
-                        aria-label="סגור"
-                        className="p-2 rounded-full hover:bg-[#21262d] text-gray-400 hover:text-white transition-colors"
-                    >
-                        <X className="w-5 h-5" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <div className="relative group">
+                            <button
+                                onClick={() => downloadReport('csv')}
+                                disabled={reportLoading}
+                                className="p-2 rounded-full hover:bg-[#21262d] text-gray-400 hover:text-emerald-400 transition-colors disabled:opacity-50"
+                                title="Download CSV Report"
+                            >
+                                <Download className="w-5 h-5" />
+                            </button>
+                            <div className="absolute top-full mt-2 right-0 hidden group-hover:block bg-[#1c2128] border border-[#30363d] rounded text-[10px] text-gray-400 px-2 py-1 whitespace-nowrap z-10">
+                                הורד דוח CSV
+                            </div>
+                        </div>
+                        <button
+                            onClick={onClose}
+                            aria-label="סגור"
+                            className="p-2 rounded-full hover:bg-[#21262d] text-gray-400 hover:text-white transition-colors"
+                        >
+                            <X className="w-5 h-5" />
+                        </button>
+                    </div>
                 </div>
 
                 {/* CONTENT GRID */}
