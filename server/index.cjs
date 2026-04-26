@@ -1581,4 +1581,41 @@ server.listen(PORT, '0.0.0.0', async () => {
     } catch (e) {
         console.error('[Startup] Could not init processing map:', e.message);
     }
+
+    // Automatic cleanup: fix stuck tasks every 60 seconds
+    setInterval(async () => {
+        try {
+            const fourMinutesAgo = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+            const { data: stuckTasks, error: fetchError } = await supabase
+                .from('posts')
+                .select('id, status, group_id')
+                .in('status', ['PROCESSING', 'SENT'])
+                .lt('created_at', fourMinutesAgo)
+                .eq('app_source', 'backup');
+
+            if (!fetchError && stuckTasks && stuckTasks.length > 0) {
+                console.log(`🔧 [AUTO-CLEANUP] Found ${stuckTasks.length} stuck task(s), marking as FAILED...`);
+                const { error: updateError } = await supabase
+                    .from('posts')
+                    .update({ status: 'FAILED', failure_reason: 'Auto-timeout: task stuck > 4 minutes' })
+                    .in('status', ['PROCESSING', 'SENT'])
+                    .lt('created_at', fourMinutesAgo)
+                    .eq('app_source', 'backup');
+
+                if (!updateError) {
+                    console.log(`✅ [AUTO-CLEANUP] Fixed ${stuckTasks.length} stuck task(s)`);
+                    // Log each one
+                    stuckTasks.forEach(t => {
+                        logEvent(t.id, 'STUCK_AUTO_CLEANUP', `Auto-cleaned stuck task (${t.status} > 4min)`);
+                    });
+                    // Notify dashboard via Socket.io
+                    io.emit('tasks_cleanup', { fixed: stuckTasks.length, timestamp: new Date().toISOString() });
+                } else {
+                    console.error('[AUTO-CLEANUP] Update failed:', updateError.message);
+                }
+            }
+        } catch (e) {
+            console.error('[AUTO-CLEANUP] Error:', e.message);
+        }
+    }, 60 * 1000); // Run every 60 seconds
 });

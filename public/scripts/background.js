@@ -71,18 +71,28 @@ async function checkJobs() {
             if (tabId === tab.id && info.status === 'complete') {
                 chrome.tabs.onUpdated.removeListener(listener);
                 setTimeout(() => {
-                    chrome.tabs.sendMessage(tabId, { action: 'EXECUTE_POST', job: job }, (response) => {
-                        if (chrome.runtime.lastError) {
-                            console.error("[Background] ❌ sendMessage failed:", chrome.runtime.lastError.message);
-                            // Content script not ready — report FAILED and release lock
-                            fetch(`${API_BASE}/api/tasks/update-status`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ taskId: job.id, status: 'FAILED', failure_reason: `Content script unavailable: ${chrome.runtime.lastError.message}` })
-                            }).catch(() => {});
-                            releaseJobLock();
-                        }
-                    });
+                    try {
+                        chrome.tabs.sendMessage(tabId, { action: 'EXECUTE_POST', job: job }, (response) => {
+                            if (chrome.runtime.lastError) {
+                                console.error("[Background] ❌ sendMessage failed:", chrome.runtime.lastError.message);
+                                // Content script not ready — report FAILED and release lock
+                                fetch(`${API_BASE}/api/tasks/update-status`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ taskId: job.id, status: 'FAILED', failure_reason: `Content script unavailable: ${chrome.runtime.lastError.message}` })
+                                }).catch(() => {});
+                                releaseJobLock();
+                            }
+                        });
+                    } catch (err) {
+                        console.error("[Background] ❌ sendMessage threw error:", err.message);
+                        fetch(`${API_BASE}/api/tasks/update-status`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ taskId: job.id, status: 'FAILED', failure_reason: `sendMessage error: ${err.message}` })
+                        }).catch(() => {});
+                        releaseJobLock();
+                    }
                 }, 4000); // Wait for page to stabilize
             }
         });
@@ -106,10 +116,11 @@ function releaseJobLock() {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'REPORT_STATUS') {
         const status = request.payload?.status;
+        const taskId = request.payload?.taskId;
 
         // When job finishes (any terminal state), close the tab and release the lock
         if (status === 'SUCCESS' || status === 'FAILED') {
-            console.log(`[Background] ✅ Job done (${status}) — releasing lock`);
+            console.log(`[Background] ✅ Job done (${status}, #${taskId}) — releasing lock`);
             releaseJobLock();
         }
 
@@ -117,7 +128,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(request.payload)
-        }).catch(err => console.error('[BG] Status update error:', err));
+        }).catch(err => {
+            console.error('[BG] Status update error:', err);
+            // Even if server update fails, still release the lock to avoid deadlock
+            if (status === 'SUCCESS' || status === 'FAILED') {
+                releaseJobLock();
+            }
+        });
         return false;
     }
 
