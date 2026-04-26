@@ -379,7 +379,7 @@ export default function App() {
         } finally {
             if (!silent) setLoading(false);
         }
-    }, []);
+    }, [currentUser]);
 
     const handleSaveTemplate = async (name, content, mediaUrl) => {
         try {
