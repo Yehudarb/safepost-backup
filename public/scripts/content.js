@@ -104,10 +104,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 async function performPost(job) {
-    logRemote("🤖 Starting Execution Sequence", { jobId: job.id });
+    logRemote("🤖 Starting Execution Sequence", { jobId: job.id, url: window.location.href });
 
     window.hud.mount();
     window.hud.updateText("מתחיל עבודה", "טוען נתוני פוסט...");
+
+    // Debug: Check if we're on Facebook
+    const pageTitle = document.title;
+    const hasFbClass = document.body.className.includes('fb') || document.body.getAttribute('class')?.includes('fb');
+    logRemote("📄 Page state", { title: pageTitle, url: window.location.href, hasFbClass });
 
     // 1. Trigger "Create Post" Modal
     const triggers = ["What's on your mind", "Write something", "Create a public post", "כתוב משהו", "כאן כותבים", "צור פוסט ציבורי", "הבעת דעה"];
@@ -433,18 +438,27 @@ function isElementVisibleAndEnabled(el) {
 }
 
 async function findElementRobust(phrases) {
+    logRemote("🔍 Starting trigger search", { phrases });
+
     for (let i = 0; i < 15; i++) {
         for (let phrase of phrases) {
-            // Stronger XPath that looks for text inside ANY descendant
             const xpath = `//div[@role="button"][contains(., "${phrase}")] | //button[contains(., "${phrase}")] | //div[@aria-label="${phrase}"] | //span[contains(text(), "${phrase}")]`;
             const res = document.evaluate(xpath, document, null, 9, null).singleNodeValue;
             if (res) {
                 const btn = res.closest('[role="button"]') || res.closest('button') || res;
-                if (isElementVisibleAndEnabled(btn)) return btn;
+                if (isElementVisibleAndEnabled(btn)) {
+                    logRemote("✅ Found trigger button", { phrase, attempt: i });
+                    return btn;
+                }
             }
+        }
+        if (i === 0) {
+            logRemote("⚠️ Trigger not found on first attempt", { url: window.location.href, title: document.title });
         }
         await sleep(500);
     }
+
+    logRemote("❌ Trigger not found after all attempts", { url: window.location.href, title: document.title, isLoggedIn: !!document.querySelector('[aria-label*="Profile"]') });
     return null;
 }
 
