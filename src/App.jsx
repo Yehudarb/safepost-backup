@@ -488,6 +488,28 @@ export default function App() {
     const handleLoadFolder  = set => { setSelectedGroups(set.group_ids); setShowFoldersPanel(false); };
     const handleDeleteFolder = async id => { await ApiService.deleteGroupSet(id); fetchAllData(true); };
 
+    // --- CLEAR ALL GROUPS ---
+    const handleClearAllGroups = async () => {
+        if (!confirm('⚠️ זה ימחק את כל הקבוצות מהמערכת. לא ניתן לשחזר!\n\nתרצה להמשיך?')) return;
+        if (!confirm('בטוח? סנכרן מחדש אחרי זה.')) return;
+
+        setLoading(true);
+        try {
+            // Delete all groups via direct API call
+            const response = await fetch(`${API_BASE}/groups`, { method: 'DELETE' });
+            if (!response.ok) throw new Error('Failed to delete groups');
+
+            alert('✅ כל הקבוצות נמחקו. סנכרן מחדש מFacebook עכשיו.');
+            setSelectedGroups([]);
+            await fetchAllData(true);
+        } catch (e) {
+            alert(`❌ שגיאה: ${e.message}`);
+            console.error('Clear groups error:', e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     // --- GROUP ORDERING ---
     const orderedGroups = React.useMemo(() => {
         if (!customGroupOrder.length) return groups;
@@ -975,6 +997,14 @@ export default function App() {
                                         className="text-[9px] font-black uppercase flex items-center gap-1 px-2 py-0.5 rounded border transition text-green-400 border-green-800/50 hover:bg-green-900/20 disabled:opacity-50">
                                         <RefreshCw size={10} className={isSyncingGroups ? 'animate-spin' : ''} />
                                         {isSyncingGroups ? 'מסנכרן...' : 'FB'}
+                                    </button>
+                                    <button
+                                        onClick={handleClearAllGroups}
+                                        disabled={loading || groups.length === 0}
+                                        title="מחק את כל הקבוצות וסנכרן מחדש"
+                                        className="text-[9px] font-black uppercase flex items-center gap-1 px-2 py-0.5 rounded border transition text-red-400 border-red-800/50 hover:bg-red-900/20 disabled:opacity-50">
+                                        <Trash2 size={10} />
+                                        Wipe
                                     </button>
                                     <button
                                         onClick={() => setShowFoldersPanel(p => !p)}

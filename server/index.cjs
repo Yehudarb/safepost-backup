@@ -302,6 +302,15 @@ app.get('/api/groups', async (req, res) => {
     res.json({ groups: filtered });
 });
 
+app.delete('/api/groups', async (req, res) => {
+    console.log('🗑️ [GROUPS] Deleting all groups...');
+    const { error } = await supabase.from('groups').delete().neq('id', '');
+
+    if (error) return res.status(500).json({ error: error.message });
+    console.log('✅ [GROUPS] All groups deleted');
+    res.json({ success: true, message: 'All groups deleted' });
+});
+
 app.post('/api/groups', async (req, res) => {
     const { groups } = req.body;
     if (!groups || !Array.isArray(groups)) return res.status(400).json({ error: "Invalid data" });
