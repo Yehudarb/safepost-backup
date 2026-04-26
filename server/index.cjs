@@ -1262,6 +1262,10 @@ app.post('/api/tasks/update-status', async (req, res) => {
     if (proof_url) update.proof_url = proof_url;
 
     const numericId = parseInt(taskId) || taskId;
+
+    // First, fetch the task to get group_id
+    const { data: taskData } = await supabase.from('posts').select('group_id').eq('id', numericId).single();
+
     const { error } = await supabase.from('posts').update(update).eq('id', numericId);
     if (error) {
         console.error('Status update error:', error.message);
@@ -1280,7 +1284,8 @@ app.post('/api/tasks/update-status', async (req, res) => {
         sentTaskTimestamps.delete(numericId);
     }
 
-    io.emit('status_update', { taskId: numericId, status });
+    // Emit with group_id for real-time dashboard update
+    io.emit('status_update', { taskId: numericId, status, group_id: taskData?.group_id });
     // Delayed queue_updated to let status_update settle in frontend first
     setTimeout(() => io.emit('queue_updated'), 500);
     res.json({ success: true });
@@ -1304,6 +1309,9 @@ app.patch('/api/tasks/:id/status', async (req, res) => {
         }
         return res.json({ success: true, logged: true });
     }
+
+    // Fetch task data including group_id before updating
+    const { data: taskData } = await supabase.from('posts').select('group_id').eq('id', id).single();
 
     const update = { status };
     if (failReason) update.failure_reason = failReason;
@@ -1339,7 +1347,8 @@ app.patch('/api/tasks/:id/status', async (req, res) => {
         sentTaskTimestamps.delete(parseInt(id) || id);
     }
 
-    io.emit('status_update', { taskId: parseInt(id) || id, status });
+    // Emit with group_id for real-time dashboard update
+    io.emit('status_update', { taskId: parseInt(id) || id, status, group_id: taskData?.group_id });
     io.emit('queue_updated');
     res.json({ success: true });
 });

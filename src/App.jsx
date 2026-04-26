@@ -448,34 +448,62 @@ export default function App() {
         return () => clearInterval(iv);
     }, [fetchAllData]);
 
-    // --- SOCKET LISTENERS ---
+    // --- SOCKET LISTENERS (Real-time updates) ---
     useEffect(() => {
-        const refresh = () => fetchAllData(true);
-        socket.on('status_update', ({ taskId, status }) => {
+        // Direct state update when task status changes
+        socket.on('status_update', ({ taskId, status, group_id }) => {
             const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
             const tid = Number(taskId);
+
+            // Update timestamps
             setStatusTimestamps(prev => ({
                 ...prev,
                 [tid]: { ...(prev[tid] || {}), [status]: now }
             }));
+
+            // Update queue
             setQueue(prev => prev.map(q => q.id === tid ? { ...q, status } : q));
+
+            // Update groups stats (if group_id is provided)
+            if (group_id) {
+                setGroups(prev => prev.map(g => {
+                    if (g.id !== group_id) return g;
+
+                    // Decrement old status count
+                    const oldTask = queue.find(q => q.id === tid);
+                    if (oldTask) {
+                        const oldStatus = oldTask.status.toLowerCase();
+                        if (g[oldStatus] !== undefined) g[oldStatus] = Math.max(0, g[oldStatus] - 1);
+                    }
+
+                    // Increment new status count
+                    const newStatus = status.toLowerCase();
+                    if (g[newStatus] !== undefined) g[newStatus] = (g[newStatus] || 0) + 1;
+
+                    return g;
+                }));
+            }
         });
-        socket.on('queue_updated', refresh);
-        socket.on('data_updated', refresh);
-        socket.on('groups_updated', () => { setIsSyncingGroups(false); refresh(); });
+
+        // Fallback refreshes (less frequent)
+        const handleRefresh = () => fetchAllData(true);
+        socket.on('queue_updated', handleRefresh);
+        socket.on('data_updated', handleRefresh);
+        socket.on('groups_updated', () => { setIsSyncingGroups(false); fetchAllData(true); });
         socket.on('groups_sync_failed', ({ error }) => { setIsSyncingGroups(false); alert(`❌ סנכרון נכשל: ${error}`); });
-        socket.on('worker_stop_signal', () => { setWorkerStopped(true); refresh(); });
-        socket.on('worker_resumed',      () => { setWorkerStopped(false); refresh(); });
+        socket.on('worker_stop_signal', () => { setWorkerStopped(true); fetchAllData(true); });
+        socket.on('worker_resumed',      () => { setWorkerStopped(false); fetchAllData(true); });
+
         return () => {
             socket.off('status_update');
-            socket.off('queue_updated', refresh);
-            socket.off('data_updated', refresh);
+            socket.off('queue_updated', handleRefresh);
+            socket.off('data_updated', handleRefresh);
             socket.off('groups_updated');
             socket.off('groups_sync_failed');
             socket.off('worker_stop_signal');
             socket.off('worker_resumed');
         };
-    }, [fetchAllData]);
+    }, [fetchAllData, queue]);
 
     // --- SELECTION ---
     const toggleSingle = id =>
