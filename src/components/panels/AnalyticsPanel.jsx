@@ -70,6 +70,11 @@ const AnalyticsPanel = ({ data, onClose }) => {
     const problemGroups = data?.problemGroups || [];
     const pendingGroups = data?.pendingGroups || [];
 
+    // Calculate task counts from group data
+    const totalSuccessTasks = topGroups.reduce((sum, g) => sum + (g.success || 0), 0);
+    const totalFailedTasks = problemGroups.reduce((sum, g) => sum + (g.failed || 0), 0);
+    const totalPendingTasks = pendingGroups.reduce((sum, g) => sum + (g.pending || 0), 0);
+
     const successRate = summary.total > 0
         ? Math.round((summary.success / summary.total) * 100)
         : 0;
@@ -230,7 +235,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
 
                     {/* Groups List with Tabs (full width) */}
                     <div className="md:col-span-4 bg-[#161b22] border border-[#30363d] rounded-2xl p-4">
-                        {/* Tabs */}
+                        {/* Tabs - Show Task Counts */}
                         <div className="flex gap-2 mb-4 border-b border-[#30363d] pb-3">
                             <button
                                 onClick={() => setFilterTab('success')}
@@ -240,7 +245,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                         : 'text-gray-500 hover:text-gray-300'
                                 }`}
                             >
-                                הצלחות ({topGroups.length})
+                                הצלחות ({totalSuccessTasks})
                             </button>
                             <button
                                 onClick={() => setFilterTab('failed')}
@@ -250,7 +255,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                         : 'text-gray-500 hover:text-gray-300'
                                 }`}
                             >
-                                כשלונות ({problemGroups.length})
+                                כשלונות ({totalFailedTasks})
                             </button>
                             <button
                                 onClick={() => setFilterTab('pending')}
@@ -260,7 +265,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                         : 'text-gray-500 hover:text-gray-300'
                                 }`}
                             >
-                                ממתינים ({pendingGroups.length})
+                                ממתינים ({totalPendingTasks})
                             </button>
                         </div>
 
