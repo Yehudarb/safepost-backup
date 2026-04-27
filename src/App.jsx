@@ -533,24 +533,23 @@ export default function App() {
 
     // --- CLEAR ALL GROUPS ---
     const handleClearAllGroups = async () => {
-        if (!confirm('⚠️ זה ימחק את כל הקבוצות מהמערכת. לא ניתן לשחזר!\n\nתרצה להמשיך?')) return;
-        if (!confirm('בטוח? סנכרן מחדש אחרי זה.')) return;
+        showConfirm('⚠️ זה ימחק את כל הקבוצות מהמערכת. לא ניתן לשחזר!\n\nבטוח? סנכרן מחדש אחרי זה.', async () => {
+            setLoading(true);
+            try {
+                // Delete all groups via direct API call
+                const response = await fetch(`${API_BASE}/groups`, { method: 'DELETE' });
+                if (!response.ok) throw new Error('Failed to delete groups');
 
-        setLoading(true);
-        try {
-            // Delete all groups via direct API call
-            const response = await fetch(`${API_BASE}/groups`, { method: 'DELETE' });
-            if (!response.ok) throw new Error('Failed to delete groups');
-
-            showToast('כל הקבוצות נמחקו. סנכרן מחדש מFacebook עכשיו.', 'success');
-            setSelectedGroups([]);
-            await fetchAllData(true);
-        } catch (e) {
-            showToast(`שגיאה: ${e.message}`, 'error');
-            console.error('Clear groups error:', e);
-        } finally {
-            setLoading(false);
-        }
+                showToast('כל הקבוצות נמחקו. סנכרן מחדש מFacebook עכשיו.', 'success');
+                setSelectedGroups([]);
+                await fetchAllData(true);
+            } catch (e) {
+                showToast(`שגיאה: ${e.message}`, 'error');
+                console.error('Clear groups error:', e);
+            } finally {
+                setLoading(false);
+            }
+        });
     };
 
     // --- GROUP ORDERING ---
@@ -646,39 +645,42 @@ export default function App() {
     };
 
     const handleBulkDelete = async () => {
-        if (!confirm(`Delete ${selectedTaskIds.length} selected tasks?`)) return;
-        const orig = [...queue];
-        setQueue(p => p.filter(q => !selectedTaskIds.includes(q.id)));
-        setLoading(true);
-        try { await ApiService.bulkDelete(selectedTaskIds); setSelectedTaskIds([]); }
-        catch (e) { setQueue(orig); showToast(`${e.message}`, 'error'); }
-        finally { setLoading(false); }
+        showConfirm(`Delete ${selectedTaskIds.length} selected tasks?`, async () => {
+            const orig = [...queue];
+            setQueue(p => p.filter(q => !selectedTaskIds.includes(q.id)));
+            setLoading(true);
+            try { await ApiService.bulkDelete(selectedTaskIds); setSelectedTaskIds([]); }
+            catch (e) { setQueue(orig); showToast(`${e.message}`, 'error'); }
+            finally { setLoading(false); }
+        });
     };
 
     const handleCancelAll = async () => {
         const count = queue.filter(q => q.status === 'PENDING').length;
         if (count === 0) { showToast('No PENDING tasks to cancel.', 'info'); return; }
-        if (!confirm(`Cancel all ${count} pending operations? Their status will be set to CANCELLED.`)) return;
-        setIsCancelling(true);
-        try { await ApiService.cancelAllPending(); fetchAllData(true); }
-        catch (e) { showToast(`${e.message}`, 'error'); }
-        finally { setIsCancelling(false); }
+        showConfirm(`Cancel all ${count} pending operations? Their status will be set to CANCELLED.`, async () => {
+            setIsCancelling(true);
+            try { await ApiService.cancelAllPending(); fetchAllData(true); }
+            catch (e) { showToast(`${e.message}`, 'error'); }
+            finally { setIsCancelling(false); }
+        });
     };
 
     const handleResetStuckTasks = async () => {
         const stuckCount = queue.filter(q => q.status === 'PROCESSING' || q.status === 'SENT').length;
         if (stuckCount === 0) { showToast('No stuck tasks found (no PROCESSING/SENT tasks).', 'info'); return; }
-        if (!confirm(`Reset stuck tasks (PROCESSING/SENT >4min)?\nThey will return to PENDING with new schedule.`)) return;
-        setIsResettingStuck(true);
-        try {
-            const res = await fetch(`${API_BASE}/tasks/reset-stuck`, { method: 'POST' });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error);
-            showToast(`Reset ${data.reset_count} stuck task(s): ${data.task_ids.join(', ')}`, 'success');
-            fetchAllData(true);
-        }
-        catch (e) { showToast(`${e.message}`, 'error'); }
-        finally { setIsResettingStuck(false); }
+        showConfirm(`Reset stuck tasks (PROCESSING/SENT >4min)?\nThey will return to PENDING with new schedule.`, async () => {
+            setIsResettingStuck(true);
+            try {
+                const res = await fetch(`${API_BASE}/tasks/reset-stuck`, { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                showToast(`Reset ${data.reset_count} stuck task(s): ${data.task_ids.join(', ')}`, 'success');
+                fetchAllData(true);
+            }
+            catch (e) { showToast(`${e.message}`, 'error'); }
+            finally { setIsResettingStuck(false); }
+        });
     };
 
     const handleStopWorker = async () => {
@@ -695,18 +697,18 @@ export default function App() {
     };
 
     const handleFixStuckTasks = async () => {
-        if (!confirm('⚠️ זה יסמן את משימות תקועות כ-FAILED. תרצה להמשיך?')) return;
+        showConfirm('⚠️ זה יסמן את משימות תקועות כ-FAILED. תרצה להמשיך?', async () => {
+            try {
+                const response = await fetch(`${API_BASE}/tasks/fix-stuck`, { method: 'POST' });
+                if (!response.ok) throw new Error('Failed to fix stuck tasks');
 
-        try {
-            const response = await fetch(`${API_BASE}/tasks/fix-stuck`, { method: 'POST' });
-            if (!response.ok) throw new Error('Failed to fix stuck tasks');
-
-            const data = await response.json();
-            showToast(`תוקנו ${data.fixed} משימות תקועות`, 'success');
-            await fetchAllData(true);
-        } catch (e) {
-            showToast(`שגיאה: ${e.message}`, 'error');
-        }
+                const data = await response.json();
+                showToast(`תוקנו ${data.fixed} משימות תקועות`, 'success');
+                await fetchAllData(true);
+            } catch (e) {
+                showToast(`שגיאה: ${e.message}`, 'error');
+            }
+        });
     };
 
     const handleSyncGroups = async () => {
