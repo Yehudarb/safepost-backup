@@ -197,7 +197,15 @@ const io = new Server(server, {
 // Validates the access token if present and joins the client to its workspace
 // room. Stays permissive (never rejects) so anonymous/legacy clients keep working
 // until the auth cutover; emits are tightened to rooms alongside route scoping.
-const { resolveUser } = require('./middleware/auth.cjs');
+const {
+    resolveUser,
+    requireAuth,
+    requireWorkspaceAccess,
+    scopeToWorkspace,
+    workspaceFields,
+} = require('./middleware/auth.cjs');
+// Convenience: dashboard routes require auth + a resolved workspace.
+const dashboardAuth = [requireAuth, requireWorkspaceAccess];
 io.use(async (socket, next) => {
     try {
         const token = socket.handshake.auth?.token || null;
@@ -342,7 +350,7 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString(), supabase: !!supabase });
 });
 
-app.get('/api/debug/state', (req, res) => {
+app.get('/api/debug/state', requireAuth, (req, res) => {
     res.json({
         workerStopSignal,
         workerStopUntil,
@@ -416,10 +424,10 @@ async function updateTaskStatus(taskId, status, message = null, metadata = null)
 
 // --- API ROUTES ---
 
-app.get('/api/groups', async (req, res) => {
-    const { data, error } = await supabase
+app.get('/api/groups', ...dashboardAuth, async (req, res) => {
+    const { data, error } = await scopeToWorkspace(supabase
         .from('groups')
-        .select('*')
+        .select('*'), req)
         .order('name', { ascending: true });
 
     if (error) return res.status(500).json({ error: error.message });
@@ -433,9 +441,9 @@ app.get('/api/groups', async (req, res) => {
     res.json({ groups: filtered });
 });
 
-app.delete('/api/groups', async (req, res) => {
+app.delete('/api/groups', ...dashboardAuth, async (req, res) => {
     console.log('🗑️ [GROUPS] Deleting all groups...');
-    const { error } = await supabase.from('groups').delete().neq('id', '');
+    const { error } = await scopeToWorkspace(supabase.from('groups').delete().neq('id', ''), req);
 
     if (error) return res.status(500).json({ error: error.message });
     console.log('✅ [GROUPS] All groups deleted');
@@ -443,16 +451,16 @@ app.delete('/api/groups', async (req, res) => {
 });
 
 // Fix stuck tasks - mark PROCESSING tasks older than 4 minutes as FAILED
-app.post('/api/tasks/fix-stuck', async (req, res) => {
+app.post('/api/tasks/fix-stuck', ...dashboardAuth, async (req, res) => {
     const fourMinutesAgo = new Date(Date.now() - 4 * 60 * 1000).toISOString();
 
     console.log('🔧 [TASKS] Fixing stuck tasks (PROCESSING > 4 min)...');
 
-    const { data: stuckTasks, error: fetchError } = await supabase
+    const { data: stuckTasks, error: fetchError } = await scopeToWorkspace(supabase
         .from('posts')
         .select('id')
         .eq('status', 'PROCESSING')
-        .lt('created_at', fourMinutesAgo);
+        .lt('created_at', fourMinutesAgo), req);
 
     if (fetchError) return res.status(500).json({ error: fetchError.message });
 
@@ -460,11 +468,11 @@ app.post('/api/tasks/fix-stuck', async (req, res) => {
         return res.json({ success: true, fixed: 0 });
     }
 
-    const { error: updateError } = await supabase
+    const { error: updateError } = await scopeToWorkspace(supabase
         .from('posts')
         .update({ status: 'FAILED', failure_reason: 'Task timeout - stuck in PROCESSING > 4min' })
         .eq('status', 'PROCESSING')
-        .lt('created_at', fourMinutesAgo);
+        .lt('created_at', fourMinutesAgo), req);
 
     if (updateError) return res.status(500).json({ error: updateError.message });
 
@@ -472,7 +480,7 @@ app.post('/api/tasks/fix-stuck', async (req, res) => {
     res.json({ success: true, fixed: stuckTasks.length });
 });
 
-app.post('/api/groups', async (req, res) => {
+app.post('/api/groups', ...dashboardAuth, async (req, res) => {
     const { groups } = req.body;
     if (!groups || !Array.isArray(groups)) return res.status(400).json({ error: "Invalid data" });
 
@@ -482,7 +490,8 @@ app.post('/api/groups', async (req, res) => {
         .upsert(groups.map(g => ({
             id: g.id,
             name: g.name,
-            url: g.url
+            url: g.url,
+            ...workspaceFields(req)
         })));
 
     if (error) return res.status(500).json({ error: error.message });
@@ -543,44 +552,44 @@ app.post('/api/groups/sync-failed', (req, res) => {
 });
 
 // --- GROUP SETS (FOLDERS) ---
-app.get('/api/group-sets', async (req, res) => {
-    const { data, error } = await supabase
+app.get('/api/group-sets', ...dashboardAuth, async (req, res) => {
+    const { data, error } = await scopeToWorkspace(supabase
         .from('group_sets')
-        .select('*')
+        .select('*'), req)
         .order('created_at', { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
     res.json({ sets: data });
 });
 
-app.post('/api/group-sets', async (req, res) => {
+app.post('/api/group-sets', ...dashboardAuth, async (req, res) => {
     const { name, group_ids } = req.body;
     if (!name || !Array.isArray(group_ids) || group_ids.length === 0)
         return res.status(400).json({ error: 'Missing name or group_ids' });
     const { data, error } = await supabase
         .from('group_sets')
-        .insert([{ name, group_ids }])
+        .insert([{ name, group_ids, ...workspaceFields(req) }])
         .select()
         .single();
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true, set: data });
 });
 
-app.delete('/api/group-sets/:id', async (req, res) => {
+app.delete('/api/group-sets/:id', ...dashboardAuth, async (req, res) => {
     const id = req.params.id;
     if (!/^[0-9a-f-]{8,}$/i.test(id)) return res.status(400).json({ error: 'Invalid ID format' });
-    const { error } = await supabase
+    const { error } = await scopeToWorkspace(supabase
         .from('group_sets')
         .delete()
-        .eq('id', id);
+        .eq('id', id), req);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
 });
 
 // --- POST TEMPLATES ---
-app.get('/api/templates', async (req, res) => {
-    const { data, error } = await supabase
+app.get('/api/templates', ...dashboardAuth, async (req, res) => {
+    const { data, error } = await scopeToWorkspace(supabase
         .from('post_templates')
-        .select('*')
+        .select('*'), req)
         .order('created_at', { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
     res.json({ templates: data });
@@ -615,32 +624,32 @@ app.get('/api/extension/config', async (req, res) => {
     res.json(data.config_data);
 });
 
-app.post('/api/templates', async (req, res) => {
+app.post('/api/templates', ...dashboardAuth, async (req, res) => {
     const { name, content, media_url } = req.body;
     if (!name) return res.status(400).json({ error: 'Template name is required' });
-    
+
     const { data, error } = await supabase
         .from('post_templates')
-        .insert([{ name, content, media_url, app_source: 'backup' }])
+        .insert([{ name, content, media_url, app_source: 'backup', ...workspaceFields(req) }])
         .select()
         .single();
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true, template: data });
 });
 
-app.delete('/api/templates/:id', async (req, res) => {
+app.delete('/api/templates/:id', ...dashboardAuth, async (req, res) => {
     const id = req.params.id;
     if (!/^[0-9a-f-]{8,}$/i.test(id)) return res.status(400).json({ error: 'Invalid ID format' });
-    const { error } = await supabase
+    const { error } = await scopeToWorkspace(supabase
         .from('post_templates')
         .delete()
-        .eq('id', id);
+        .eq('id', id), req);
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true });
 });
 
 // Simplified upload endpoint - accepts multipart or JSON with base64
-app.post('/api/upload', strictLimiter, async (req, res) => {
+app.post('/api/upload', strictLimiter, requireAuth, async (req, res) => {
     try {
         let fileBuffer, fileName, mimetype;
 
@@ -702,7 +711,7 @@ app.post('/api/upload', strictLimiter, async (req, res) => {
 });
 
 // --- PRE-SIGNED URL ENDPOINT FOR DIRECT CLIENT-SIDE UPLOADS ---
-app.post('/api/upload/presigned', strictLimiter, async (req, res) => {
+app.post('/api/upload/presigned', strictLimiter, requireAuth, async (req, res) => {
     try {
         console.log('🔗 [PRESIGNED] Request received');
         console.log('   Payload:', JSON.stringify(req.body, null, 2));
@@ -771,12 +780,12 @@ app.post('/api/upload/presigned', strictLimiter, async (req, res) => {
 });
 
 // --- ANALYTICS ---
-app.get('/api/analytics', async (req, res) => {
+app.get('/api/analytics', ...dashboardAuth, async (req, res) => {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
     const [{ data: posts, error }, { data: groups }] = await Promise.all([
-        supabase.from('posts').select('id, status, group_id, created_at, failure_reason').eq('app_source', 'backup').gte('created_at', thirtyDaysAgo),
-        supabase.from('groups').select('id, name, url')
+        scopeToWorkspace(supabase.from('posts').select('id, status, group_id, created_at, failure_reason').eq('app_source', 'backup').gte('created_at', thirtyDaysAgo), req),
+        scopeToWorkspace(supabase.from('groups').select('id, name, url'), req)
     ]);
 
     if (error) return res.status(500).json({ error: error.message });
@@ -852,16 +861,16 @@ app.get('/api/analytics', async (req, res) => {
 });
 
 // GET detailed report of successes and failures
-app.get('/api/report/tasks', async (req, res) => {
+app.get('/api/report/tasks', ...dashboardAuth, async (req, res) => {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
     const [{ data: posts }, { data: groups }] = await Promise.all([
-        supabase.from('posts')
+        scopeToWorkspace(supabase.from('posts')
             .select('id, status, group_id, content, failure_reason, created_at')
             .eq('app_source', 'backup')
             .gte('created_at', thirtyDaysAgo)
-            .order('created_at', { ascending: false }),
-        supabase.from('groups').select('id, name, url')
+            .order('created_at', { ascending: false }), req),
+        scopeToWorkspace(supabase.from('groups').select('id, name, url'), req)
     ]);
 
     if (!posts) return res.status(500).json({ error: 'Failed to fetch posts' });
@@ -928,7 +937,7 @@ function logEvent(taskId, type, message, metadata = {}) {
     console.log(`[EVENT] ${type} - Task #${taskId}: ${message}`);
 }
 
-app.get('/api/logs', (req, res) => {
+app.get('/api/logs', requireAuth, (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const type = req.query.type; // Optional filter by type
 
@@ -950,7 +959,7 @@ app.get('/api/logs', (req, res) => {
 });
 
 // --- AI CONTENT GENERATION (GEMINI + CLAUDE FALLBACK) ---
-app.post('/api/ai/generate', strictLimiter, async (req, res) => {
+app.post('/api/ai/generate', strictLimiter, requireAuth, async (req, res) => {
     const { prompt, history = [] } = req.body;
     if (!prompt?.trim()) return res.status(400).json({ error: 'Prompt is required' });
 
@@ -1004,7 +1013,7 @@ app.post('/api/ai/generate', strictLimiter, async (req, res) => {
 });
 
 // --- 1. PROPER JITTER CALCULATION ---
-app.post('/api/posts', validate(postsSchema), async (req, res) => {
+app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res) => {
     const { group_ids, content, schedule, media_url, media_files, ai_spin, facebook_user } = req.validated;
 
     // Additional validation: must have content or media
@@ -1085,7 +1094,8 @@ app.post('/api/posts', validate(postsSchema), async (req, res) => {
             media_paths: mediaPaths || null,        // New field: array of Supabase Storage paths
             status: 'PENDING',
             scheduled_time: nextScheduleTime.toISOString(),
-            app_source: 'backup'
+            app_source: 'backup',
+            ...workspaceFields(req)
         };
         // Only add facebook_user if provided (will be ignored if column doesn't exist)
         if (facebook_user) {
@@ -1287,7 +1297,7 @@ setInterval(async () => {
 }, 60000);
 
 // --- SYSTEM STATUS ---
-app.get('/api/system/status', (req, res) => {
+app.get('/api/system/status', requireAuth, (req, res) => {
     const now = new Date();
     const checkinAge = lastWorkerCheckin ? (now - new Date(lastWorkerCheckin)) / 1000 : null;
     const workerActive = checkinAge !== null && checkinAge < 60; // active if checked in within 60s
@@ -1499,13 +1509,13 @@ app.patch('/api/tasks/:id/status', validate(patchStatusSchema), async (req, res)
 });
 
 // --- QUEUE (POSTS) ---
-app.get('/api/queue', async (req, res) => {
+app.get('/api/queue', ...dashboardAuth, async (req, res) => {
     console.log('📋 [QUEUE] Fetching queue...');
 
-    const { data, error } = await supabase
+    const { data, error } = await scopeToWorkspace(supabase
         .from('posts')
         .select('*, groups(name, url)')
-        .eq('app_source', 'backup')
+        .eq('app_source', 'backup'), req)
         .order('scheduled_time', { ascending: true })
         .range(0, 4999);
 
@@ -1534,13 +1544,13 @@ app.get('/api/queue', async (req, res) => {
 // --- TASK MANAGEMENT ---
 
 // Cancel a single task
-app.post('/api/tasks/:id/cancel', async (req, res) => {
+app.post('/api/tasks/:id/cancel', ...dashboardAuth, async (req, res) => {
     const { id } = req.params;
-    const { error } = await supabase
+    const { error } = await scopeToWorkspace(supabase
         .from('posts')
         .update({ status: 'CANCELLED', failure_reason: 'ביטול ידני' })
         .eq('id', id)
-        .in('status', ['PENDING']);
+        .in('status', ['PENDING']), req);
     if (error) return res.status(500).json({ error: error.message });
     logEvent(id, 'CANCELLED', 'Task manually cancelled', { reason: 'ביטול ידני' });
     io.emit('queue_updated');
@@ -1548,49 +1558,52 @@ app.post('/api/tasks/:id/cancel', async (req, res) => {
 });
 
 // Cancel all pending tasks
-app.post('/api/tasks/cancel-all-pending', async (req, res) => {
-    const { error } = await supabase
+app.post('/api/tasks/cancel-all-pending', ...dashboardAuth, async (req, res) => {
+    const { error } = await scopeToWorkspace(supabase
         .from('posts')
         .update({ status: 'CANCELLED' })
         .eq('status', 'PENDING')
-        .eq('app_source', 'backup');
+        .eq('app_source', 'backup'), req);
     if (error) return res.status(500).json({ error: error.message });
     io.emit('queue_updated');
     res.json({ success: true });
 });
 
 // Bulk delete tasks
-app.post('/api/tasks/bulk-delete', async (req, res) => {
+app.post('/api/tasks/bulk-delete', ...dashboardAuth, async (req, res) => {
     const { ids } = req.body;
     if (!ids || !Array.isArray(ids) || ids.length === 0)
         return res.status(400).json({ error: 'Missing ids' });
-    const { error } = await supabase.from('posts').delete().in('id', ids);
+    const { error } = await scopeToWorkspace(supabase.from('posts').delete().in('id', ids), req);
     if (error) return res.status(500).json({ error: error.message });
     io.emit('queue_updated');
     res.json({ success: true });
 });
 
 // Update a task
-app.patch('/api/tasks/:id', async (req, res) => {
+app.patch('/api/tasks/:id', ...dashboardAuth, async (req, res) => {
     const { id } = req.params;
-    const updates = req.body;
-    const { error } = await supabase.from('posts').update(updates).eq('id', id);
+    const updates = { ...req.body };
+    // Never allow the client to move a row between workspaces or reassign ownership.
+    delete updates.workspace_id;
+    delete updates.created_by;
+    const { error } = await scopeToWorkspace(supabase.from('posts').update(updates).eq('id', id), req);
     if (error) return res.status(500).json({ error: error.message });
     io.emit('queue_updated');
     res.json({ success: true });
 });
 
 // Delete a task
-app.delete('/api/tasks/:id', async (req, res) => {
+app.delete('/api/tasks/:id', ...dashboardAuth, async (req, res) => {
     const { id } = req.params;
-    const { error } = await supabase.from('posts').delete().eq('id', id);
+    const { error } = await scopeToWorkspace(supabase.from('posts').delete().eq('id', id), req);
     if (error) return res.status(500).json({ error: error.message });
     io.emit('queue_updated');
     res.json({ success: true });
 });
 
 // --- WORKER CONTROL ---
-app.post('/api/worker/stop', (req, res) => {
+app.post('/api/worker/stop', requireAuth, (req, res) => {
     workerStopSignal = true;
     workerStopUntil  = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h safety
     broadcastSSE({ type: 'stop_worker' });
@@ -1599,7 +1612,7 @@ app.post('/api/worker/stop', (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/worker/resume', (req, res) => {
+app.post('/api/worker/resume', requireAuth, (req, res) => {
     workerStopSignal = false;
     workerStopUntil  = null;
     io.emit('worker_resumed');
@@ -1617,17 +1630,17 @@ app.post('/api/worker/heartbeat', (req, res) => {
 });
 
 // --- MANUAL STUCK TASK RESET ---
-app.post('/api/tasks/reset-stuck', async (req, res) => {
+app.post('/api/tasks/reset-stuck', ...dashboardAuth, async (req, res) => {
     try {
         const now = Date.now();
         const FOUR_MINUTES = 4 * 60 * 1000;
 
         // Find tasks stuck in PROCESSING/SENT for >4 minutes (using created_at as proxy)
-        const { data: stuckTasks, error: fetchError } = await supabase
+        const { data: stuckTasks, error: fetchError } = await scopeToWorkspace(supabase
             .from('posts')
             .select('id, status, created_at')
             .in('status', ['PROCESSING', 'SENT'])
-            .eq('app_source', 'backup');
+            .eq('app_source', 'backup'), req);
 
         if (fetchError) throw fetchError;
 
