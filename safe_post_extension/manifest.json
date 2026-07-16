@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "SafePost Automation",
-    "version": "7.2",
-    "description": "Automated Facebook Group Posting (Supabase Storage Sync)",
+    "version": "7.3",
+    "description": "Automated Facebook Group Posting (Supabase Storage Sync). Configurable API server via popup settings.",
     "permissions": [
         "activeTab",
         "scripting",
