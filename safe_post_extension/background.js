@@ -4,7 +4,34 @@ console.log("[Background] Service Worker v7.8 — Persistent Poll");
 importScripts('extensionStorage.js');
 
 const API_PORT = 3001;
-const BASE_URL = 'https://safepost-backup.onrender.com';
+// Default backend URL. Overridden at runtime by the value saved in the
+// extension settings popup (chrome.storage.local 'apiUrl'). Kept as a mutable
+// `let` so all `${BASE_URL}` call sites pick up the configured value without
+// changing their (already async) call signatures.
+const DEFAULT_BASE_URL = 'https://safepost-backup.onrender.com';
+let BASE_URL = DEFAULT_BASE_URL;
+
+// Hydrate the configured API URL as early as possible. The immediate startup
+// poll may run with the default first; subsequent polls use the saved value.
+(async () => {
+    try {
+        const saved = await ExtStorage.getApiUrl();
+        if (saved) {
+            BASE_URL = saved;
+            console.log('[Background] Using configured API URL:', BASE_URL);
+        }
+    } catch (e) {
+        console.warn('[Background] Could not read saved API URL, using default.', e);
+    }
+})();
+
+// Live-update BASE_URL when the user changes it in the settings popup.
+chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.apiUrl) {
+        BASE_URL = changes.apiUrl.newValue || DEFAULT_BASE_URL;
+        console.log('[Background] API URL updated to:', BASE_URL);
+    }
+});
 
 // 1. Alarm Setup — MV3 service workers die after ~30s; alarm is the wakeup mechanism
 function setupAlarm() {

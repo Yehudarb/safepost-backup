@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
     "name": "SafePost Automation",
-    "version": "7.0",
-    "description": "Automates Facebook posts safely.",
+    "version": "7.3",
+    "description": "Automates Facebook posts safely. Configurable API server via popup settings.",
     "permissions": [
         "storage",
         "activeTab",

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
     BarChart3, CheckCircle2, AlertCircle, Clock, X, TrendingUp, Download
 } from 'lucide-react';
+import { API_BASE } from '@/lib/apiConfig';
 
 const AnalyticsPanel = ({ data, onClose }) => {
     const [filterTab, setFilterTab] = useState('success');
@@ -10,7 +11,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
     const downloadReport = async (format = 'csv') => {
         setReportLoading(true);
         try {
-            const res = await fetch('https://safepost-backup.onrender.com/api/report/tasks');
+            const res = await fetch(`${API_BASE}/report/tasks`);
             const report = await res.json();
 
             if (format === 'csv') {

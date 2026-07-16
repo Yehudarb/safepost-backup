@@ -1,17 +1,47 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
+
 <head>
-  <style>
-    body { width: 250px; padding: 15px; font-family: sans-serif; text-align: center; }
-    h3 { margin-top: 0; color: #007bff; }
-    .status { color: green; font-weight: bold; margin-top: 10px; }
-  </style>
+    <meta charset="UTF-8" />
+    <style>
+        :root { color-scheme: dark; }
+        body { width: 300px; margin: 0; padding: 16px; font-family: -apple-system, "Segoe UI", sans-serif; background: #0d1117; color: #e6edf3; }
+        h3 { margin: 0 0 4px; font-size: 15px; color: #58a6ff; }
+        .status { font-size: 12px; font-weight: 600; color: #3fb950; margin-bottom: 14px; }
+        label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #8b949e; margin: 10px 0 4px; }
+        input { width: 100%; box-sizing: border-box; padding: 7px 9px; font-size: 13px; border: 1px solid #30363d; border-radius: 6px; background: #161b22; color: #e6edf3; }
+        .row { display: flex; gap: 8px; margin-top: 10px; }
+        button { flex: 1; padding: 8px; font-size: 12px; font-weight: 600; border: 1px solid #30363d; border-radius: 6px; background: #21262d; color: #e6edf3; cursor: pointer; }
+        button.primary { background: #238636; border-color: #238636; }
+        button:hover { filter: brightness(1.1); }
+        .test-result { font-size: 11px; margin-top: 8px; min-height: 14px; }
+        .meta { margin-top: 14px; padding-top: 12px; border-top: 1px solid #21262d; font-size: 11px; color: #8b949e; }
+        .meta div { display: flex; justify-content: space-between; margin: 3px 0; }
+        .meta code { color: #c9d1d9; font-family: monospace; }
+        .ok { color: #3fb950; }
+        .err { color: #f85149; }
+    </style>
 </head>
+
 <body>
-  <h3>SafePost Automation</h3>
-  <div class="status">● System Active</div>
-  <p style="font-size: 12px; color: #666; margin-top: 10px;">
-    Background worker is polling for jobs every 6 seconds.
-  </p>
+    <h3>SafePost Automation</h3>
+    <div class="status">● System Active</div>
+
+    <label for="apiUrl">API Server URL</label>
+    <input id="apiUrl" type="url" placeholder="https://safepost-backup.onrender.com" autocomplete="off" />
+
+    <div class="row">
+        <button id="saveBtn" class="primary">Save</button>
+        <button id="testBtn">Test connection</button>
+    </div>
+    <div id="testResult" class="test-result"></div>
+
+    <div class="meta">
+        <div><span>Worker identity</span><code id="workerId">—</code></div>
+        <div><span>Extension version</span><code id="version">—</code></div>
+    </div>
+
+    <script src="popup.js"></script>
 </body>
+
 </html>
