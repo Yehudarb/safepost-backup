@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar-bento';
 import { io } from 'socket.io-client';
+import { getAuthHeaders, getAccessToken, getActiveWorkspaceId } from '@/lib/session';
 import TaskTimer from '@/components/TaskTimer';
 import Toast from '@/components/Toast';
 import SaveFolderModal from '@/components/modals/SaveFolderModal';
@@ -38,8 +39,21 @@ const socket = io(BACKEND_URL, {
     reconnectionDelay: 2000,
     reconnectionDelayMax: 30000,
     reconnectionAttempts: Infinity,
-    transports: ['websocket', 'polling']
+    transports: ['websocket', 'polling'],
+    // Auth handshake: re-evaluated on every (re)connect so the current access
+    // token + active workspace are sent once the user signs in.
+    auth: (cb) => {
+        getAccessToken()
+            .then((token) => cb({ token: token || null, workspaceId: getActiveWorkspaceId() }))
+            .catch(() => cb({ token: null, workspaceId: getActiveWorkspaceId() }));
+    },
 });
+// Reconnect with fresh auth when the session changes (login/logout).
+if (typeof window !== 'undefined') {
+    window.addEventListener('safepost:auth-changed', () => {
+        try { socket.disconnect(); socket.connect(); } catch { /* noop */ }
+    });
+}
 
 // --- SSRF GUARD ---
 const PRIVATE_IP_PATTERNS = [
@@ -67,7 +81,7 @@ class ApiService {
         const url = `${API_BASE}${endpoint}`;
         if (!url.startsWith(API_BASE) || !isSafeUrl(url))
             throw new Error('Blocked: request URL is not allowed');
-        const headers = { 'Content-Type': 'application/json', ...options.headers };
+        const headers = { 'Content-Type': 'application/json', ...(await getAuthHeaders()), ...options.headers };
         try {
             const res = await fetch(url, { ...options, headers });
             if (!res.ok) {
@@ -101,7 +115,7 @@ class ApiService {
     static async uploadFile(file) {
         const formData = new FormData();
         formData.append('file', file);
-        const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: formData });
+        const res = await fetch(`${API_BASE}/upload`, { method: 'POST', headers: await getAuthHeaders(), body: formData });
         if (!res.ok) throw new Error(`Upload Failed: ${res.status}`);
         return await res.json();
     }

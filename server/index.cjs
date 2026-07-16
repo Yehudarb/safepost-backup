@@ -193,6 +193,39 @@ const io = new Server(server, {
     maxHttpBufferSize: 50 * 1024 * 1024
 });
 
+// --- Phase 3: authenticated Socket.IO handshake (permissive during transition) ---
+// Validates the access token if present and joins the client to its workspace
+// room. Stays permissive (never rejects) so anonymous/legacy clients keep working
+// until the auth cutover; emits are tightened to rooms alongside route scoping.
+const { resolveUser } = require('./middleware/auth.cjs');
+io.use(async (socket, next) => {
+    try {
+        const token = socket.handshake.auth?.token || null;
+        const wsId = socket.handshake.auth?.workspaceId || null;
+        if (token) {
+            const user = await resolveUser(token);
+            if (user) {
+                socket.data.userId = user.id;
+                if (wsId) {
+                    const { data } = await supabase
+                        .from('workspace_members')
+                        .select('workspace_id')
+                        .eq('user_id', user.id)
+                        .eq('workspace_id', wsId)
+                        .limit(1);
+                    if (data && data.length) socket.data.workspaceId = wsId;
+                }
+            }
+        }
+    } catch (e) {
+        // Stay permissive during transition.
+    }
+    next();
+});
+io.on('connection', (socket) => {
+    if (socket.data.workspaceId) socket.join(`ws:${socket.data.workspaceId}`);
+});
+
 const PORT = 3001;
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
