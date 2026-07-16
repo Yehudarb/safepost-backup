@@ -80,6 +80,12 @@ const app = express();
 // Trust Render's reverse proxy so express-rate-limit can read real client IPs
 app.set('trust proxy', 1);
 
+// Ensure UTF-8 charset for all JSON responses
+app.use((req, res, next) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    next();
+});
+
 // Security headers — applied immediately after app creation
 app.use(helmet({
     crossOriginResourcePolicy: { policy: 'cross-origin' },

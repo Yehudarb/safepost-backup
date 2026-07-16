@@ -33,18 +33,18 @@ const SchedulerForm = ({ groups, onSubmit, disabled }) => {
     };
 
     return (
-        <div className="bg-[var(--panel-bg)] rounded-2xl shadow-[var(--card-shadow)] border border-[var(--panel-border)] p-6 backdrop-blur-xl transition-all duration-300">
-            <h2 className="text-xl font-bold text-[var(--text-primary)] mb-6 flex items-center gap-2 tracking-tight">
-                <Send className="w-5 h-5 text-indigo-500" />
+        <div className="bg-surface-container-lowest rounded-lg shadow-sm border border-outline-variant p-lg transition-all duration-300">
+            <h2 className="text-h2 font-bold text-on-surface mb-lg flex items-center gap-md tracking-tight">
+                <Send className="w-5 h-5 text-primary" />
                 Launch Campaign
             </h2>
 
-            <form onSubmit={handleSubmit} className="space-y-5">
+            <form onSubmit={handleSubmit} className="space-y-md">
                 {/* Content Input */}
                 <div>
-                    <label className="block text-[var(--text-secondary)] text-[10px] font-black uppercase tracking-[0.2em] mb-2 px-1">Deep Content Analysis</label>
+                    <label className="block text-caption text-on-surface-variant uppercase tracking-wider mb-sm px-sm">Deep Content Analysis</label>
                     <textarea
-                        className="w-full bg-black/5 dark:bg-black/20 border border-[var(--panel-border)] rounded-xl p-4 text-[var(--text-primary)] placeholder:text-[var(--text-secondary)]/40 focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all h-36 resize-none outline-none text-sm leading-relaxed"
+                        className="w-full bg-surface-container border border-outline-variant rounded-lg p-md text-on-surface placeholder:text-on-surface-variant/50 focus:ring-2 focus:ring-primary focus:border-primary transition-all h-36 resize-none outline-none text-body-md leading-relaxed"
                         placeholder="Define your broadcast parameters..."
                         value={content}
                         onChange={(e) => setContent(e.target.value)}
@@ -52,22 +52,22 @@ const SchedulerForm = ({ groups, onSubmit, disabled }) => {
                     />
                 </div>
 
-                <div className="grid grid-cols-1 gap-5">
+                <div className="grid grid-cols-1 gap-md">
                     {/* Group Selector */}
                     <div>
-                        <label className="text-[var(--text-secondary)] text-[10px] font-black uppercase tracking-[0.2em] mb-2 px-1 flex items-center gap-2">
+                        <label className="text-caption text-on-surface-variant uppercase tracking-wider mb-sm px-sm flex items-center gap-sm">
                             <Users className="w-3.5 h-3.5" />
                             Secure Node Selection
                         </label>
                         <select
-                            className="w-full bg-black/5 dark:bg-black/20 border border-[var(--panel-border)] rounded-xl p-3.5 text-[var(--text-primary)] focus:ring-2 focus:ring-indigo-500/50 outline-none text-sm font-medium appearance-none cursor-pointer"
+                            className="w-full bg-surface-container border border-outline-variant rounded-lg p-md text-on-surface focus:ring-2 focus:ring-primary outline-none text-body-md font-medium appearance-none cursor-pointer"
                             value={selectedGroup}
                             onChange={(e) => setSelectedGroup(e.target.value)}
                             required
                         >
-                            <option value="" className="bg-[var(--bg-color)]">Select Target Network...</option>
+                            <option value="">Select Target Network...</option>
                             {groups.map(group => (
-                                <option key={group.id} value={group.id} className="bg-[var(--bg-color)]">
+                                <option key={group.id} value={group.id}>
                                     {group.name}
                                 </option>
                             ))}
@@ -76,13 +76,13 @@ const SchedulerForm = ({ groups, onSubmit, disabled }) => {
 
                     {/* Date Picker */}
                     <div>
-                        <label className="text-[var(--text-secondary)] text-[10px] font-black uppercase tracking-[0.2em] mb-2 px-1 flex items-center gap-2">
+                        <label className="text-caption text-on-surface-variant uppercase tracking-wider mb-sm px-sm flex items-center gap-sm">
                             <Calendar className="w-3.5 h-3.5" />
                             Temporal scheduling
                         </label>
                         <input
                             type="datetime-local"
-                            className="w-full bg-black/5 dark:bg-black/20 border border-[var(--panel-border)] rounded-xl p-3 text-[var(--text-primary)] focus:ring-2 focus:ring-indigo-500/50 outline-none text-sm font-medium"
+                            className="w-full bg-surface-container border border-outline-variant rounded-lg p-md text-on-surface focus:ring-2 focus:ring-primary outline-none text-body-md font-medium"
                             value={scheduledAt}
                             onChange={(e) => setScheduledAt(e.target.value)}
                         />
@@ -93,13 +93,13 @@ const SchedulerForm = ({ groups, onSubmit, disabled }) => {
                 <button
                     type="submit"
                     disabled={disabled || !content || !selectedGroup}
-                    className={`w-full py-4 px-5 rounded-xl font-black uppercase tracking-widest text-[11px] flex items-center justify-center gap-3 transition-all duration-300 shadow-lg active:scale-[0.98]
+                    className={`w-full py-md px-lg rounded-lg font-bold uppercase tracking-wider text-label-sm flex items-center justify-center gap-md transition-all duration-300 shadow-sm active:scale-95
             ${disabled || !content || !selectedGroup
-                            ? 'border-[var(--panel-border)] text-[var(--text-secondary)]/30 cursor-not-allowed grayscale'
-                            : 'bg-gradient-to-r from-indigo-500 via-indigo-600 to-blue-600 hover:shadow-indigo-500/30 text-white'
+                            ? 'border border-outline-variant text-on-surface-variant/40 cursor-not-allowed opacity-50'
+                            : 'bg-primary hover:opacity-90 text-on-primary'
                         }`}
                 >
-                    <Zap className={`w-4 h-4 ${!disabled && content && selectedGroup ? 'fill-white' : ''}`} />
+                    <Zap className={`w-4 h-4 ${!disabled && content && selectedGroup ? 'fill-current' : ''}`} />
                     {scheduledAt ? 'Queue for Temporal Broadcast' : 'Execute Instant Broadcast'}
                 </button>
             </form>

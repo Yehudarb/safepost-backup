@@ -11,10 +11,10 @@ const Toast = ({ message, type = 'success', onClose }) => {
     }, [onClose]);
 
     const colorStyles = {
-        success: { border: 'border-emerald-500', text: 'text-emerald-400' },
-        error: { border: 'border-rose-500', text: 'text-rose-400' },
-        info: { border: 'border-blue-500', text: 'text-blue-400' },
-        warning: { border: 'border-amber-500', text: 'text-amber-400' },
+        success: { border: 'border-l-emerald-500', bg: 'bg-emerald-50', text: 'text-emerald-700', icon: 'text-emerald-600' },
+        error: { border: 'border-l-error', bg: 'bg-error-container', text: 'text-error', icon: 'text-error' },
+        info: { border: 'border-l-primary', bg: 'bg-primary-fixed', text: 'text-on-primary-fixed', icon: 'text-primary' },
+        warning: { border: 'border-l-amber-500', bg: 'bg-amber-50', text: 'text-amber-700', icon: 'text-amber-600' },
     };
 
     const icons = {
@@ -28,13 +28,13 @@ const Toast = ({ message, type = 'success', onClose }) => {
     const colors = colorStyles[type] || colorStyles.info;
 
     return (
-        <div className={`fixed bottom-8 right-8 flex items-center gap-4 px-6 py-4 rounded-2xl shadow-2xl bg-[#1c2128] border border-[#30363d] border-l-[6px] transition-all duration-300 animate-slide-in z-[100] ${colors.border}`}>
-            <div className={`p-1.5 rounded-lg bg-current bg-opacity-10`}>
-                <Icon className={`w-5 h-5 ${colors.text}`} />
+        <div className={`fixed bottom-8 right-8 flex items-center gap-4 px-lg py-md rounded-lg border-l-4 transition-all duration-300 animate-slide-in z-[100] shadow-sm ${colors.bg} ${colors.border}`}>
+            <div className={`p-sm rounded-md`}>
+                <Icon className={`w-5 h-5 ${colors.icon}`} />
             </div>
-            <span className={`font-bold text-sm text-white`}>{message}</span>
-            <button onClick={onClose} className="ml-4 p-1 hover:bg-white/10 rounded-lg transition-colors flex-shrink-0">
-                <X className="w-4 h-4 text-gray-400 hover:text-white" />
+            <span className={`font-label-sm ${colors.text}`}>{message}</span>
+            <button onClick={onClose} className="ml-4 p-sm hover:bg-black/5 rounded-md transition-colors flex-shrink-0">
+                <X className={`w-4 h-4 ${colors.text}`} />
             </button>
         </div>
     );

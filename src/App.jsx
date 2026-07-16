@@ -343,7 +343,12 @@ export default function App() {
                 ApiService.getTemplates()
             ]);
 
-            setGroups(gData.groups);
+            // Normalize UTF-8 encoding for group names and metadata
+            const normalizedGroups = gData.groups.map(g => ({
+                ...g,
+                name: g.name ? (typeof g.name === 'string' ? g.name : String(g.name)) : 'Unnamed Group'
+            }));
+            setGroups(normalizedGroups);
 
             // Extract unique facebook_user values from ALL groups (not just filtered)
             if (!currentUser) {
