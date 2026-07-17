@@ -4,7 +4,7 @@ import { useAuth } from '@/context/AuthContext';
 
 // Login / Register / Reset in one screen. Shown when no session exists.
 export default function AuthScreen() {
-    const { isConfigured, signIn, signUp, resetPassword } = useAuth();
+    const { isConfigured, signIn, signUp, resetPassword, demoEnabled, signInDemo } = useAuth();
     const [mode, setMode] = useState('login'); // 'login' | 'register' | 'reset'
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -19,6 +19,18 @@ export default function AuthScreen() {
         if (/already registered/i.test(msg)) return 'That email is already registered.';
         if (/rate limit/i.test(msg)) return 'Too many attempts — please wait a moment.';
         return msg;
+    };
+
+    const tryDemo = async () => {
+        setError(''); setNotice(''); setBusy(true);
+        try {
+            const { error } = await signInDemo();
+            if (error) throw error;
+        } catch (err) {
+            setError(friendly(err.message));
+        } finally {
+            setBusy(false);
+        }
     };
 
     const submit = async (e) => {
@@ -101,6 +113,21 @@ export default function AuthScreen() {
                         {mode === 'reset' && 'Send reset link'}
                     </button>
                 </form>
+
+                {demoEnabled && mode === 'login' && (
+                    <>
+                        <div className="my-4 flex items-center gap-3 text-[10px] uppercase tracking-widest text-gray-600">
+                            <span className="h-px flex-1 bg-[#30363d]" /> or <span className="h-px flex-1 bg-[#30363d]" />
+                        </div>
+                        <button
+                            onClick={tryDemo} disabled={busy}
+                            className="w-full py-2 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] disabled:opacity-50 text-gray-200 text-sm font-semibold rounded-lg transition"
+                        >
+                            Try the demo — no signup
+                        </button>
+                        <p className="mt-2 text-center text-[10px] text-gray-600">Synthetic data only. No real posts are published.</p>
+                    </>
+                )}
 
                 <div className="mt-5 flex flex-col gap-2 text-center text-xs text-gray-500">
                     {mode === 'login' && (

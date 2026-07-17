@@ -67,7 +67,7 @@ async function requireWorkspaceAccess(req, res, next) {
 
     let query = supabase
         .from('workspace_members')
-        .select('workspace_id, role')
+        .select('workspace_id, role, workspaces(is_demo)')
         .eq('user_id', req.user.id);
     if (requested) query = query.eq('workspace_id', requested);
 
@@ -86,6 +86,16 @@ async function requireWorkspaceAccess(req, res, next) {
 
     req.workspaceId = data[0].workspace_id;
     req.membershipRole = data[0].role;
+    req.isDemo = data[0].workspaces?.is_demo === true;
+    next();
+}
+
+// Block real-effect actions in a demo workspace with a clear message.
+// Must run after requireWorkspaceAccess.
+function denyDemo(req, res, next) {
+    if (req.isDemo) {
+        return res.status(403).json({ error: 'Demo mode — this action is disabled. No real posts are published.', demo: true });
+    }
     next();
 }
 
@@ -110,6 +120,7 @@ module.exports = {
     requireAuth,
     optionalAuth,
     requireWorkspaceAccess,
+    denyDemo,
     getBearerToken,
     resolveUser,
     scopeToWorkspace,

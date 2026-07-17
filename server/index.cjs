@@ -201,9 +201,11 @@ const {
     resolveUser,
     requireAuth,
     requireWorkspaceAccess,
+    denyDemo,
     scopeToWorkspace,
     workspaceFields,
 } = require('./middleware/auth.cjs');
+const { resetDemoWorkspace } = require('./demo/seed.cjs');
 // Convenience: dashboard routes require auth + a resolved workspace.
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
 io.use(async (socket, next) => {
@@ -536,11 +538,25 @@ app.post('/api/groups/sync', async (req, res) => {
 });
 
 // Dashboard requests extension to sync groups via SSE
-app.post('/api/groups/request-sync', (req, res) => {
+app.post('/api/groups/request-sync', ...dashboardAuth, denyDemo, (req, res) => {
     console.log("📡 Dashboard requested group sync from extension");
     pendingSyncCommand = true;
     broadcastSSE({ type: 'sync_groups' });
     res.json({ success: true });
+});
+
+// --- DEMO: reset synthetic data (demo workspaces only) ---
+app.post('/api/demo/reset', ...dashboardAuth, async (req, res) => {
+    if (!req.isDemo) return res.status(403).json({ error: 'Reset is only available in demo mode.' });
+    try {
+        await resetDemoWorkspace(req.workspaceId, req.user.id);
+        io.emit('queue_updated');
+        io.emit('data_updated');
+        res.json({ success: true, message: 'Demo data reset.' });
+    } catch (e) {
+        console.error('[DEMO] reset error:', e.message);
+        res.status(500).json({ error: 'Demo reset failed.' });
+    }
 });
 
 // Sync failed — tell dashboard to stop spinner
@@ -649,7 +665,7 @@ app.delete('/api/templates/:id', ...dashboardAuth, async (req, res) => {
 });
 
 // Simplified upload endpoint - accepts multipart or JSON with base64
-app.post('/api/upload', strictLimiter, requireAuth, async (req, res) => {
+app.post('/api/upload', strictLimiter, ...dashboardAuth, denyDemo, async (req, res) => {
     try {
         let fileBuffer, fileName, mimetype;
 
@@ -711,7 +727,7 @@ app.post('/api/upload', strictLimiter, requireAuth, async (req, res) => {
 });
 
 // --- PRE-SIGNED URL ENDPOINT FOR DIRECT CLIENT-SIDE UPLOADS ---
-app.post('/api/upload/presigned', strictLimiter, requireAuth, async (req, res) => {
+app.post('/api/upload/presigned', strictLimiter, ...dashboardAuth, denyDemo, async (req, res) => {
     try {
         console.log('🔗 [PRESIGNED] Request received');
         console.log('   Payload:', JSON.stringify(req.body, null, 2));
@@ -1094,7 +1110,9 @@ app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res)
             media_paths: mediaPaths || null,        // New field: array of Supabase Storage paths
             status: 'PENDING',
             scheduled_time: nextScheduleTime.toISOString(),
-            app_source: 'backup',
+            // Demo workspaces produce app_source='demo' posts, which the worker
+            // (jobs/next filters app_source='backup') never claims/publishes.
+            app_source: req.isDemo ? 'demo' : 'backup',
             ...workspaceFields(req)
         };
         // Only add facebook_user if provided (will be ignored if column doesn't exist)
@@ -1603,7 +1621,7 @@ app.delete('/api/tasks/:id', ...dashboardAuth, async (req, res) => {
 });
 
 // --- WORKER CONTROL ---
-app.post('/api/worker/stop', requireAuth, (req, res) => {
+app.post('/api/worker/stop', ...dashboardAuth, denyDemo, (req, res) => {
     workerStopSignal = true;
     workerStopUntil  = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h safety
     broadcastSSE({ type: 'stop_worker' });
@@ -1612,7 +1630,7 @@ app.post('/api/worker/stop', requireAuth, (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/worker/resume', requireAuth, (req, res) => {
+app.post('/api/worker/resume', ...dashboardAuth, denyDemo, (req, res) => {
     workerStopSignal = false;
     workerStopUntil  = null;
     io.emit('worker_resumed');

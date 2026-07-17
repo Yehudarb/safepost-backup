@@ -15,12 +15,12 @@ export function AuthProvider({ children }) {
         if (!supabase || !uid) { setWorkspaces([]); return; }
         const { data, error } = await supabase
             .from('workspace_members')
-            .select('role, workspaces ( id, name, is_personal )')
+            .select('role, workspaces ( id, name, is_personal, is_demo )')
             .eq('user_id', uid);
         if (error) { console.error('[auth] load workspaces failed', error); return; }
         const list = (data || [])
             .filter(r => r.workspaces)
-            .map(r => ({ id: r.workspaces.id, name: r.workspaces.name, isPersonal: r.workspaces.is_personal, role: r.role }));
+            .map(r => ({ id: r.workspaces.id, name: r.workspaces.name, isPersonal: r.workspaces.is_personal, isDemo: r.workspaces.is_demo === true, role: r.role }));
         setWorkspaces(list);
         // Pick a default active workspace if none selected or the stored one is gone.
         const current = getActiveWorkspaceId();
@@ -53,6 +53,11 @@ export function AuthProvider({ children }) {
         if (typeof window !== 'undefined') window.dispatchEvent(new Event('safepost:auth-changed'));
     }, []);
 
+    const demoEmail = import.meta.env.VITE_DEMO_EMAIL;
+    const demoPassword = import.meta.env.VITE_DEMO_PASSWORD;
+    const demoEnabled = Boolean(demoEmail && demoPassword);
+    const isDemoWorkspace = workspaces.some(w => w.id === activeWorkspace && w.isDemo);
+
     const value = {
         isConfigured: isSupabaseConfigured,
         loading,
@@ -61,6 +66,9 @@ export function AuthProvider({ children }) {
         workspaces,
         activeWorkspace,
         selectWorkspace,
+        demoEnabled,
+        isDemoWorkspace,
+        signInDemo: () => supabase.auth.signInWithPassword({ email: demoEmail, password: demoPassword }),
         signIn: (email, password) => supabase.auth.signInWithPassword({ email, password }),
         signUp: (email, password, fullName) =>
             supabase.auth.signUp({ email, password, options: { data: { full_name: fullName } } }),
