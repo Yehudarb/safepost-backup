@@ -800,7 +800,7 @@ app.get('/api/analytics', ...dashboardAuth, async (req, res) => {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
     const [{ data: posts, error }, { data: groups }] = await Promise.all([
-        scopeToWorkspace(supabase.from('posts').select('id, status, group_id, created_at, failure_reason').eq('app_source', 'backup').gte('created_at', thirtyDaysAgo), req),
+        scopeToWorkspace(supabase.from('posts').select('id, status, group_id, created_at, failure_reason').in('app_source', ['backup', 'demo']).gte('created_at', thirtyDaysAgo), req),
         scopeToWorkspace(supabase.from('groups').select('id, name, url'), req)
     ]);
 
@@ -883,7 +883,7 @@ app.get('/api/report/tasks', ...dashboardAuth, async (req, res) => {
     const [{ data: posts }, { data: groups }] = await Promise.all([
         scopeToWorkspace(supabase.from('posts')
             .select('id, status, group_id, content, failure_reason, created_at')
-            .eq('app_source', 'backup')
+            .in('app_source', ['backup', 'demo'])
             .gte('created_at', thirtyDaysAgo)
             .order('created_at', { ascending: false }), req),
         scopeToWorkspace(supabase.from('groups').select('id, name, url'), req)
@@ -1533,7 +1533,7 @@ app.get('/api/queue', ...dashboardAuth, async (req, res) => {
     const { data, error } = await scopeToWorkspace(supabase
         .from('posts')
         .select('*, groups(name, url)')
-        .eq('app_source', 'backup'), req)
+        .in('app_source', ['backup', 'demo']), req)
         .order('scheduled_time', { ascending: true })
         .range(0, 4999);
 

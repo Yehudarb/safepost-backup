@@ -60,7 +60,8 @@ async function makeUser(tag) {
     const anon = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } });
     const { data, error: signInErr } = await anon.auth.signInWithPassword({ email, password });
     if (signInErr) throw new Error(`signIn ${tag}: ${signInErr.message}`);
-    // Their auto-provisioned personal workspace:
+    // Warm-up call: triggers backend workspace provisioning on first access.
+    await fetch(`${API_URL}/api/queue`, { headers: { 'Authorization': `Bearer ${data.session.access_token}` } }).catch(() => {});
     const { data: mem } = await admin.from('workspace_members').select('workspace_id').eq('user_id', data.user.id).limit(1);
     return { email, token: data.session.access_token, userId: data.user.id, workspaceId: mem?.[0]?.workspace_id };
 }

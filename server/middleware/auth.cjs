@@ -51,6 +51,30 @@ async function optionalAuth(req, res, next) {
     next();
 }
 
+// Ensure a user has a personal workspace, creating one on first access.
+// Backend-side provisioning (uses the service key) so we don't depend on a DB
+// trigger on auth.users, which newer Supabase projects don't permit.
+async function provisionUserWorkspace(user) {
+    try {
+        await supabase.from('profiles').upsert(
+            { id: user.id, email: user.email, full_name: (user.user_metadata && user.user_metadata.full_name) || user.email },
+            { onConflict: 'id' }
+        );
+        const wsName = ((user.email || 'my').split('@')[0]) + "'s workspace";
+        const { data: ws, error } = await supabase
+            .from('workspaces')
+            .insert({ name: wsName, is_personal: true, created_by: user.id })
+            .select('id')
+            .single();
+        if (error || !ws) { console.error('[provision] workspace insert failed:', error && error.message); return null; }
+        await supabase.from('workspace_members').insert({ workspace_id: ws.id, user_id: user.id, role: 'owner' });
+        return ws;
+    } catch (e) {
+        console.error('[provision] failed:', e.message);
+        return null;
+    }
+}
+
 // Resolve and authorize the active workspace. Workspace id comes from
 // `x-workspace-id` (or ?workspace_id); if absent we fall back to the user's
 // first membership. Sets req.workspaceId + req.membershipRole. When
@@ -79,8 +103,22 @@ async function requireWorkspaceAccess(req, res, next) {
         return next();
     }
     if (!data || data.length === 0) {
-        if (AUTH_ENFORCED) return res.status(403).json({ error: 'No access to the requested workspace.' });
-        req.workspaceId = null;
+        // Asked for a specific workspace they don't belong to → deny.
+        if (requested) {
+            if (AUTH_ENFORCED) return res.status(403).json({ error: 'No access to the requested workspace.' });
+            req.workspaceId = null;
+            return next();
+        }
+        // First-time user with no workspace → provision a personal one.
+        const ws = await provisionUserWorkspace(req.user);
+        if (!ws) {
+            if (AUTH_ENFORCED) return res.status(500).json({ error: 'Failed to provision workspace.' });
+            req.workspaceId = null;
+            return next();
+        }
+        req.workspaceId = ws.id;
+        req.membershipRole = 'owner';
+        req.isDemo = false;
         return next();
     }
 
@@ -120,6 +158,7 @@ module.exports = {
     requireAuth,
     optionalAuth,
     requireWorkspaceAccess,
+    provisionUserWorkspace,
     denyDemo,
     getBearerToken,
     resolveUser,

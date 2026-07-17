@@ -46,12 +46,20 @@ const { resetDemoWorkspace } = require('../server/demo/seed.cjs');
     if (!userId) throw new Error('Could not resolve demo user id.');
     console.log('Demo user:', DEMO_EMAIL, userId);
 
-    // 2. Find the user's workspace and flag it as demo.
-    const { data: mem } = await admin.from('workspace_members').select('workspace_id').eq('user_id', userId).limit(1);
-    const wsId = mem?.[0]?.workspace_id;
-    if (!wsId) throw new Error('Demo user has no workspace (is the signup trigger installed?).');
-
-    await admin.from('workspaces').update({ name: 'Demo Workspace', is_demo: true }).eq('id', wsId);
+    // 2. Find the user's workspace (or create one — no trigger dependency).
+    let { data: mem } = await admin.from('workspace_members').select('workspace_id').eq('user_id', userId).limit(1);
+    let wsId = mem?.[0]?.workspace_id;
+    if (!wsId) {
+        const { data: ws, error: wErr } = await admin
+            .from('workspaces')
+            .insert({ name: 'Demo Workspace', is_personal: false, is_demo: true, created_by: userId })
+            .select('id').single();
+        if (wErr) throw wErr;
+        wsId = ws.id;
+        await admin.from('workspace_members').insert({ workspace_id: wsId, user_id: userId, role: 'owner' });
+    } else {
+        await admin.from('workspaces').update({ name: 'Demo Workspace', is_demo: true }).eq('id', wsId);
+    }
     console.log('Demo workspace flagged:', wsId);
 
     // 3. Seed synthetic data.
