@@ -21,6 +21,11 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !DEMO_EMAIL || !DEMO_PASSWORD) {
     console.error('Missing SUPABASE_URL / SUPABASE_ANON_KEY / DEMO_EMAIL / DEMO_PASSWORD.');
     process.exit(2);
 }
+// SAFETY: never run demo tests against the production project.
+if ((SUPABASE_URL || '').includes('namyhsldzufeoycleqxf')) {
+    console.error('❌ REFUSING: SUPABASE_URL points at the PRODUCTION project. Use the dev project.');
+    process.exit(3);
+}
 
 let passed = 0, failed = 0;
 const assert = (n, c) => { c ? (passed++, console.log(`  ✅ ${n}`)) : (failed++, console.log(`  ❌ ${n}`)); };
