@@ -147,9 +147,9 @@ const QueueTable = ({ jobs, onDelete, onBulkDelete, selectedIds, setSelectedIds,
                                                 <span className="text-body-md font-bold text-on-surface group-hover:text-primary transition-colors">
                                                     {job.group_name || 'Generic Group'}
                                                 </span>
-                                                {job.proof_url && (
+                                                {(job.external_post_url || job.proof_url) && (
                                                     <a
-                                                        href={job.proof_url}
+                                                        href={job.external_post_url || job.proof_url}
                                                         target="_blank"
                                                         rel="noopener noreferrer"
                                                         className="p-xs rounded-full bg-primary-fixed text-primary hover:bg-primary hover:text-on-primary transition-all duration-300 transform hover:scale-110"

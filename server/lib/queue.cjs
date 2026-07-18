@@ -87,11 +87,11 @@ async function reportJobStatus({ jobId, workspaceId, status, errorCode, failureR
     const now = new Date().toISOString();
 
     if (status === 'SUCCESS') {
-        await supabase.from('posts').update({
+        const { error } = await supabase.from('posts').update({
             status: 'SUCCESS', external_post_url: externalUrl || null,
-            proof_url: externalUrl || job.proof_url || null,
             ended_at: now, lock_expires_at: null, worker_id: null, error_code: null,
         }).eq('id', jobId);
+        if (error) { console.error('[queue] success update failed:', error.message); return { ok: false, code: 500 }; }
         return { ok: true, final: 'SUCCESS' };
     }
 
