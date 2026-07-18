@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "SafePost Automation",
-    "version": "7.4",
+    "version": "7.5",
     "description": "Automates Facebook posts safely. Configurable API server via popup settings.",
     "permissions": [
         "storage",
@@ -23,6 +23,7 @@
                 "https://www.facebook.com/*"
             ],
             "js": [
+                "scripts/fbUtils.js",
                 "scripts/content.js"
             ]
         }
