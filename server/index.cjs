@@ -206,6 +206,12 @@ const {
     workspaceFields,
 } = require('./middleware/auth.cjs');
 const { resetDemoWorkspace } = require('./demo/seed.cjs');
+const {
+    generateDeviceToken,
+    hashToken,
+    generatePairingCode,
+    requireWorker,
+} = require('./middleware/worker.cjs');
 // Convenience: dashboard routes require auth + a resolved workspace.
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
 io.use(async (socket, next) => {
@@ -557,6 +563,151 @@ app.post('/api/demo/reset', ...dashboardAuth, async (req, res) => {
         console.error('[DEMO] reset error:', e.message);
         res.status(500).json({ error: 'Demo reset failed.' });
     }
+});
+
+// ===================== PHASE 5: EXTENSION PAIRING / WORKERS =====================
+
+// Dashboard: generate a short-lived, single-use pairing code (demo blocked).
+app.post('/api/workers/pairing-code', ...dashboardAuth, denyDemo, async (req, res) => {
+    const code = generatePairingCode();
+    const expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min
+    const { error } = await supabase.from('pairing_codes').insert({
+        code, workspace_id: req.workspaceId, user_id: req.user.id, expires_at,
+    });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ code, expires_at, expires_in_seconds: 600 });
+});
+
+// Extension: exchange a pairing code for a scoped device token (public).
+app.post('/api/workers/pair', async (req, res) => {
+    const { code, worker_name, extension_version, browser_version } = req.body || {};
+    if (!code) return res.status(400).json({ error: 'Missing pairing code.' });
+
+    const { data: pc } = await supabase
+        .from('pairing_codes').select('*')
+        .eq('code', String(code).toUpperCase().trim()).maybeSingle();
+
+    if (!pc) return res.status(404).json({ error: 'Invalid pairing code.' });
+    if (pc.used_at) return res.status(409).json({ error: 'Pairing code already used.' });
+    if (new Date(pc.expires_at).getTime() < Date.now()) return res.status(410).json({ error: 'Pairing code expired.' });
+
+    // Single-use: atomically claim the code.
+    const { data: claimed } = await supabase
+        .from('pairing_codes').update({ used_at: new Date().toISOString() })
+        .eq('id', pc.id).is('used_at', null).select('id').maybeSingle();
+    if (!claimed) return res.status(409).json({ error: 'Pairing code already used.' });
+
+    const token = generateDeviceToken();
+    const { data: worker, error } = await supabase.from('browser_workers').insert({
+        workspace_id: pc.workspace_id,
+        user_id: pc.user_id,
+        worker_name: worker_name || 'Chrome Extension',
+        device_token_hash: hashToken(token),
+        extension_version: extension_version || null,
+        browser_version: browser_version || null,
+        status: 'online',
+        last_seen_at: new Date().toISOString(),
+    }).select('id, workspace_id').single();
+
+    if (error) return res.status(500).json({ error: error.message });
+    // Plaintext token returned ONCE; server keeps only the hash.
+    res.json({ worker_id: worker.id, workspace_id: worker.workspace_id, device_token: token });
+});
+
+// Worker: heartbeat (device-token auth).
+app.post('/api/workers/:workerId/heartbeat', requireWorker, async (req, res) => {
+    const { extension_version, browser_version, status } = req.body || {};
+    await supabase.from('browser_workers').update({
+        last_seen_at: new Date().toISOString(),
+        status: status || 'online',
+        extension_version: extension_version != null ? extension_version : req.worker.extension_version,
+        browser_version: browser_version != null ? browser_version : req.worker.browser_version,
+    }).eq('id', req.worker.id);
+    res.json({ success: true });
+});
+
+// Worker: claim the next job in THIS worker's workspace only.
+app.post('/api/workers/:workerId/jobs/claim', requireWorker, async (req, res) => {
+    const { data: job } = await supabase
+        .from('posts').select('*, groups(name, url)')
+        .eq('workspace_id', req.workspaceId)
+        .eq('app_source', 'backup')
+        .eq('status', 'SENT')
+        .order('scheduled_time', { ascending: true })
+        .limit(1).maybeSingle();
+
+    if (!job) {
+        await supabase.from('browser_workers').update({ last_seen_at: new Date().toISOString(), status: 'online' }).eq('id', req.worker.id);
+        return res.json({ job: null });
+    }
+    // Guarded claim: only if still SENT.
+    await supabase.from('posts').update({ status: 'PROCESSING' }).eq('id', job.id).eq('status', 'SENT');
+    await supabase.from('browser_workers').update({
+        current_job_id: job.id, status: 'busy', last_seen_at: new Date().toISOString(),
+    }).eq('id', req.worker.id);
+    res.json({ job });
+});
+
+// Worker: report job status (must belong to the worker's workspace).
+app.post('/api/workers/:workerId/jobs/:jobId/status', requireWorker, async (req, res) => {
+    const jobId = req.params.jobId;
+    const { status, failure_reason, proof_url } = req.body || {};
+    const { data: job } = await supabase.from('posts').select('id, workspace_id').eq('id', jobId).maybeSingle();
+    if (!job || job.workspace_id !== req.workspaceId) {
+        return res.status(403).json({ error: 'Job not in your workspace.' });
+    }
+    const update = { status };
+    if (failure_reason) update.failure_reason = failure_reason;
+    if (proof_url) update.proof_url = proof_url;
+    if (status && status !== 'PROCESSING') update.ended_at = new Date().toISOString();
+    await supabase.from('posts').update(update).eq('id', jobId);
+    await supabase.from('browser_workers').update({ current_job_id: null, status: 'online', last_seen_at: new Date().toISOString() }).eq('id', req.worker.id);
+    io.to(`ws:${req.workspaceId}`).emit('queue_updated');
+    res.json({ success: true });
+});
+
+// Worker: append a log (scoped to the worker's workspace).
+app.post('/api/workers/:workerId/logs', requireWorker, async (req, res) => {
+    const { level, message } = req.body || {};
+    await supabase.from('system_logs').insert({
+        log_level: level || 'info', source: 'worker', message: message || '', workspace_id: req.workspaceId,
+    });
+    res.json({ success: true });
+});
+
+// Dashboard: list workers in the active workspace.
+app.get('/api/workers', ...dashboardAuth, async (req, res) => {
+    const { data, error } = await scopeToWorkspace(supabase
+        .from('browser_workers')
+        .select('id, worker_name, status, last_seen_at, extension_version, browser_version, current_job_id, revoked_at, created_at'), req)
+        .order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ workers: data || [] });
+});
+
+// Dashboard: revoke a worker (own workspace only).
+app.post('/api/workers/:workerId/revoke', ...dashboardAuth, async (req, res) => {
+    const { data: w } = await supabase.from('browser_workers').select('id, workspace_id').eq('id', req.params.workerId).maybeSingle();
+    if (!w || w.workspace_id !== req.workspaceId) return res.status(403).json({ error: 'Not your worker.' });
+    await supabase.from('browser_workers').update({ revoked_at: new Date().toISOString(), status: 'offline' }).eq('id', w.id);
+    res.json({ success: true });
+});
+
+// Dashboard: rename a worker (own workspace only).
+app.patch('/api/workers/:workerId', ...dashboardAuth, async (req, res) => {
+    const { worker_name } = req.body || {};
+    const { data: w } = await supabase.from('browser_workers').select('id, workspace_id').eq('id', req.params.workerId).maybeSingle();
+    if (!w || w.workspace_id !== req.workspaceId) return res.status(403).json({ error: 'Not your worker.' });
+    await supabase.from('browser_workers').update({ worker_name: worker_name || 'Chrome Extension' }).eq('id', w.id);
+    res.json({ success: true });
+});
+
+// Dashboard: remove a worker (own workspace only).
+app.delete('/api/workers/:workerId', ...dashboardAuth, async (req, res) => {
+    const { data: w } = await supabase.from('browser_workers').select('id, workspace_id').eq('id', req.params.workerId).maybeSingle();
+    if (!w || w.workspace_id !== req.workspaceId) return res.status(403).json({ error: 'Not your worker.' });
+    await supabase.from('browser_workers').delete().eq('id', w.id);
+    res.json({ success: true });
 });
 
 // Sync failed — tell dashboard to stop spinner
