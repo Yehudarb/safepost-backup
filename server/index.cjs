@@ -212,6 +212,13 @@ const {
     generatePairingCode,
     requireWorker,
 } = require('./middleware/worker.cjs');
+const {
+    claimNextJob,
+    extendLock,
+    reportJobStatus,
+    sweepExpiredLocks,
+    sweepMissedSchedules,
+} = require('./lib/queue.cjs');
 // Convenience: dashboard routes require auth + a resolved workspace.
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
 io.use(async (socket, next) => {
@@ -623,47 +630,35 @@ app.post('/api/workers/:workerId/heartbeat', requireWorker, async (req, res) => 
         extension_version: extension_version != null ? extension_version : req.worker.extension_version,
         browser_version: browser_version != null ? browser_version : req.worker.browser_version,
     }).eq('id', req.worker.id);
+    // Extend the lock on any job this worker is still processing.
+    await extendLock(req.worker.id);
     res.json({ success: true });
 });
 
-// Worker: claim the next job in THIS worker's workspace only.
+// Worker: claim the next job in THIS worker's workspace only (locked, atomic).
 app.post('/api/workers/:workerId/jobs/claim', requireWorker, async (req, res) => {
-    const { data: job } = await supabase
-        .from('posts').select('*, groups(name, url)')
-        .eq('workspace_id', req.workspaceId)
-        .eq('app_source', 'backup')
-        .eq('status', 'SENT')
-        .order('scheduled_time', { ascending: true })
-        .limit(1).maybeSingle();
-
+    const job = await claimNextJob({ workspaceId: req.workspaceId, workerId: req.worker.id });
     if (!job) {
         await supabase.from('browser_workers').update({ last_seen_at: new Date().toISOString(), status: 'online' }).eq('id', req.worker.id);
         return res.json({ job: null });
     }
-    // Guarded claim: only if still SENT.
-    await supabase.from('posts').update({ status: 'PROCESSING' }).eq('id', job.id).eq('status', 'SENT');
     await supabase.from('browser_workers').update({
         current_job_id: job.id, status: 'busy', last_seen_at: new Date().toISOString(),
     }).eq('id', req.worker.id);
     res.json({ job });
 });
 
-// Worker: report job status (must belong to the worker's workspace).
+// Worker: report job status (retry/backoff + idempotency; workspace-scoped).
 app.post('/api/workers/:workerId/jobs/:jobId/status', requireWorker, async (req, res) => {
-    const jobId = req.params.jobId;
-    const { status, failure_reason, proof_url } = req.body || {};
-    const { data: job } = await supabase.from('posts').select('id, workspace_id').eq('id', jobId).maybeSingle();
-    if (!job || job.workspace_id !== req.workspaceId) {
-        return res.status(403).json({ error: 'Job not in your workspace.' });
-    }
-    const update = { status };
-    if (failure_reason) update.failure_reason = failure_reason;
-    if (proof_url) update.proof_url = proof_url;
-    if (status && status !== 'PROCESSING') update.ended_at = new Date().toISOString();
-    await supabase.from('posts').update(update).eq('id', jobId);
+    const { status, failure_reason, proof_url, error_code } = req.body || {};
+    const result = await reportJobStatus({
+        jobId: req.params.jobId, workspaceId: req.workspaceId,
+        status, errorCode: error_code, failureReason: failure_reason, externalUrl: proof_url,
+    });
+    if (!result.ok) return res.status(result.code || 400).json({ error: 'Status update rejected.' });
     await supabase.from('browser_workers').update({ current_job_id: null, status: 'online', last_seen_at: new Date().toISOString() }).eq('id', req.worker.id);
     io.to(`ws:${req.workspaceId}`).emit('queue_updated');
-    res.json({ success: true });
+    res.json({ success: true, ...result });
 });
 
 // Worker: append a log (scoped to the worker's workspace).
@@ -1864,6 +1859,15 @@ app.use((err, req, res, next) => {
     }
     res.status(500).json({ error: err.message || "Server error" });
 });
+
+// Phase 6: periodic queue maintenance — recovers jobs whose worker lock expired
+// (worker/browser/server crash) and handles schedules missed during downtime.
+// Persistent (DB-backed), so it survives restarts.
+const QUEUE_SWEEP_MS = 60 * 1000;
+setInterval(() => {
+    sweepExpiredLocks().catch(e => console.error('[sweep] locks:', e.message));
+    sweepMissedSchedules().catch(e => console.error('[sweep] missed:', e.message));
+}, QUEUE_SWEEP_MS);
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log(`🔥 SafePost OS Server running on http://localhost:${PORT} (Supabase Backend)`);
