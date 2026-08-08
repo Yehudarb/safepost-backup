@@ -794,8 +794,14 @@ export default function App() {
         return true;
     });
 
+    // Groups awaiting moderator approval in Facebook cannot receive new posts.
+    // Filter them out from selection entirely so tasks never queue against a
+    // group that will hang forever waiting for approval.
+    const activeGroups = orderedGroups.filter(g => !g.requires_moderation);
+    const blockedGroups = orderedGroups.filter(g => g.requires_moderation);
+
     const filteredGroups = React.useMemo(() => {
-        let base = orderedGroups;
+        let base = activeGroups;
         if (groupSearch) {
             const terms = groupSearch.toLowerCase().split(/\s+/).filter(Boolean);
             base = base.filter(g => {
@@ -812,7 +818,7 @@ export default function App() {
             });
         }
         return base;
-    }, [orderedGroups, groupSearch, sortSelectedFirst, selectedGroups]);
+    }, [activeGroups, groupSearch, sortSelectedFirst, selectedGroups]);
 
     const handleBulkSelectFiltered = (count) => {
         const toAdd = count === 'all'
@@ -957,6 +963,14 @@ export default function App() {
                                 className="w-full h-28 bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-3 text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 outline-none transition resize-none"
                                 placeholder="Construct post content..."
                                 value={postContent} onChange={e => setPostContent(e.target.value)} />
+
+                            {/* Placeholder tokens — resolved server-side in POST /api/posts */}
+                            <p className="text-[9px] text-gray-400 dark:text-gray-500 -mt-1">
+                                Available tokens: <code className="font-mono">{'{{GROUP_NAME}}'}</code>{' '}
+                                <code className="font-mono">{'{{GROUP_URL}}'}</code>{' '}
+                                <code className="font-mono">{'{{DATE}}'}</code>{' '}
+                                <code className="font-mono">{'{{FB_USER}}'}</code>
+                            </p>
 
                             {/* Content Editing Toolbar */}
                             {postContent.trim() && (
@@ -1182,6 +1196,14 @@ export default function App() {
                                 )}
                             </div>
 
+                            {blockedGroups.length > 0 && (
+                                <div className="bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded-lg p-2.5 mb-2">
+                                    <p className="text-[10px] text-orange-700 dark:text-orange-300 font-medium">
+                                        ⏳ {blockedGroups.length} group{blockedGroups.length > 1 ? 's are' : ' is'} waiting on Facebook admin approval and can't receive new posts.
+                                    </p>
+                                </div>
+                            )}
+
                             {/* Group List with Drag-and-Drop */}
                             <div className="max-h-48 overflow-y-auto pr-1 custom-scrollbar">
                                 {filteredGroups.length === 0
@@ -1215,6 +1237,19 @@ export default function App() {
                                                 <span className={`text-[13px] leading-snug font-semibold truncate block transition-colors ${selectedGroups.includes(g.id) ? 'text-blue-100' : 'text-slate-800 dark:text-gray-100 group-hover/item:text-white'}`}
                                                     title={g.name}>{g.name}</span>
                                             </div>
+                                            {/* Health score — derived from posts history server-side; null = no history yet, badge hidden */}
+                                            {typeof g.health_score === 'number' && (
+                                                <span
+                                                    onClick={e => e.stopPropagation()}
+                                                    title={`Health score: ${g.health_score}/100`}
+                                                    className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded ${
+                                                        g.health_score >= 70 ? 'bg-emerald-500/10 text-emerald-500'
+                                                        : g.health_score >= 40 ? 'bg-amber-500/10 text-amber-500'
+                                                        : 'bg-rose-500/10 text-rose-500'
+                                                    }`}>
+                                                    {g.health_score}
+                                                </span>
+                                            )}
                                             {/* Checkbox */}
                                             <div className="ml-1 shrink-0">
                                                 {selectedGroups.includes(g.id)

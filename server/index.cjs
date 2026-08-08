@@ -52,6 +52,60 @@ function spinText(text, useAutoSynonyms = true) {
     return spun;
 }
 
+// Resolves {{TOKEN}} placeholders using data already fetched for the campaign.
+// Must run BEFORE spinText: spinText's spintax regex /\{([^{}]*)\}/g matches
+// the INNER {GROUP_NAME} of an unresolved {{GROUP_NAME}} first (since [^{}]*
+// stops before the second brace), treats "GROUP_NAME" as a single spintax
+// choice, and collapses the token to a single-brace {GROUP_NAME} — permanently
+// corrupting it before placeholder resolution ever runs. Resolve first, spin second.
+function resolvePlaceholders(text, group, facebookUser) {
+    if (!text) return text;
+    return text
+        .replace(/\{\{\s*GROUP_NAME\s*\}\}/gi, group?.name || '')
+        .replace(/\{\{\s*GROUP_URL\s*\}\}/gi, group?.url || '')
+        .replace(/\{\{\s*DATE\s*\}\}/gi, new Date().toLocaleDateString('he-IL'))
+        .replace(/\{\{\s*FB_USER\s*\}\}/gi, facebookUser || '');
+}
+
+// Reduces a flat posts array into per-group {success, failed, cancelled,
+// consecutiveFailures}. consecutiveFailures counts FAILED/CANCELLED rows from
+// the most recent post backwards, stopping at the first SUCCESS — a "cold
+// streak" signal shared by the health score and the throttle suggestion.
+function buildGroupHealthStats(posts) {
+    const stats = {};
+    (posts || []).forEach(p => {
+        if (!stats[p.group_id]) stats[p.group_id] = { success: 0, failed: 0, cancelled: 0, posts: [] };
+        const s = stats[p.group_id];
+        if (['SUCCESS', 'COMPLETED'].includes(p.status)) s.success++;
+        else if (p.status === 'FAILED') s.failed++;
+        else if (p.status === 'CANCELLED') s.cancelled++;
+        s.posts.push(p);
+    });
+    Object.values(stats).forEach(s => {
+        const sorted = [...s.posts].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        let streak = 0;
+        for (const p of sorted) {
+            if (p.status === 'FAILED' || p.status === 'CANCELLED') streak++;
+            else if (['SUCCESS', 'COMPLETED'].includes(p.status)) break;
+        }
+        s.consecutiveFailures = streak;
+        delete s.posts;
+    });
+    return stats;
+}
+
+// Derives a 0-100 health score from one group's aggregated stats, or null if
+// the group has no post history yet (don't fabricate a score from nothing).
+function computeGroupHealth(stats) {
+    const total = (stats?.success || 0) + (stats?.failed || 0) + (stats?.cancelled || 0);
+    if (total === 0) return null;
+    const successRate = stats.success / total;
+    const modPenalty = stats.cancelled > 0 ? 0.3 : 0;
+    const failPenalty = Math.min(stats.failed / total, 0.5);
+    const streakPenalty = (stats.consecutiveFailures || 0) >= 3 ? 0.2 : 0;
+    return Math.round(Math.max(0, successRate - modPenalty - failPenalty - streakPenalty) * 100);
+}
+
 // Ensure uploads directory exists
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -234,6 +288,11 @@ let pendingSyncCommand = false;
 let workerThrottleUntil = null;
 const sentTaskTimestamps = new Map();
 const processingStartTimestamps = new Map();
+// Moderation-resume attempt counter, keyed by post id. In-memory (not a DB
+// column — this schema predates attempt_count) so it resets on restart; that's
+// an acceptable trade-off since the 48h cooldown between attempts keeps this
+// low-frequency regardless.
+const moderationResumeAttempts = new Map();
 
 // --- ULTRA-EARLY REQUEST LOGGER (MORGAN STYLE) ---
 app.use((req, res, next) => {
@@ -391,11 +450,32 @@ app.get('/api/groups', async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
+    // Groups with pending-moderation failures — shouldn't be re-used without
+    // admin action (accepting the pending post in Facebook, or disabling group
+    // moderation). Marked so the UI can warn or filter them out.
+    const { data: moderationBuggers } = await supabase
+        .from('posts')
+        .select('distinct group_id')
+        .like('failure_reason', '%ממתין לאישור מנהל%');
+    const modGroupIds = new Set((moderationBuggers || []).map(r => r.group_id).filter(Boolean));
+
+    // Group Health Score — derived from full posts history per group.
+    const { data: healthPosts } = await supabase
+        .from('posts')
+        .select('group_id, status, created_at');
+    const healthStats = buildGroupHealthStats(healthPosts);
+
     // Filter by facebook_user if provided
     let filtered = data || [];
     if (req.query.user && data) {
         filtered = data.filter(g => g.facebook_user === req.query.user);
     }
+
+    filtered = filtered.map(g => ({
+        ...g,
+        requires_moderation: modGroupIds.has(g.id),
+        health_score: computeGroupHealth(healthStats[g.id])
+    }));
 
     res.json({ groups: filtered });
 });
@@ -742,7 +822,7 @@ app.get('/api/analytics', async (req, res) => {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
     const [{ data: posts, error }, { data: groups }] = await Promise.all([
-        supabase.from('posts').select('id, status, group_id, created_at, failure_reason').eq('app_source', 'backup').gte('created_at', thirtyDaysAgo),
+        supabase.from('posts').select('id, status, group_id, created_at, ended_at, failure_reason').eq('app_source', 'backup').gte('created_at', thirtyDaysAgo),
         supabase.from('groups').select('id, name, url')
     ]);
 
@@ -750,6 +830,9 @@ app.get('/api/analytics', async (req, res) => {
 
     const groupMap = {};
     (groups || []).forEach(g => { groupMap[g.id] = { name: g.name, url: g.url }; });
+
+    // Shared with GET /api/groups' health score — same posts array, no extra query.
+    const healthStats = buildGroupHealthStats(posts);
 
     const total     = posts.length;
     const success   = posts.filter(p => ['SUCCESS', 'COMPLETED'].includes(p.status)).length;
@@ -782,6 +865,8 @@ app.get('/api/analytics', async (req, res) => {
         if (['SUCCESS', 'COMPLETED'].includes(p.status)) groupStats[p.group_id].success++;
         if (p.status === 'FAILED') groupStats[p.group_id].failed++;
     });
+    // Fold in the health score computed above (same helper GET /api/groups uses).
+    Object.entries(groupStats).forEach(([gid, s]) => { s.health_score = computeGroupHealth(healthStats[gid]); });
 
     const allGroups = Object.values(groupStats);
     const topGroups     = [...allGroups].sort((a, b) => b.success - a.success).slice(0, 6);
@@ -805,7 +890,45 @@ app.get('/api/analytics', async (req, res) => {
     const topErrors = Object.entries(errorMap)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 6)
-        .map(([message, count]) => ({ message, count }));
+        .map(([message, count]) => ({ message, count, percent: failed > 0 ? Math.round(count / failed * 100) : 0 }));
+
+    // Queue-to-completion timing. Only created_at→ended_at is reliably populated
+    // for SUCCESS/FAILED — measures queue wait + execution + report latency, not
+    // pure Facebook post-execution duration.
+    const timedDurationsSec = posts
+        .filter(p => ['SUCCESS', 'COMPLETED', 'FAILED'].includes(p.status) && p.ended_at && p.created_at)
+        .map(p => (new Date(p.ended_at) - new Date(p.created_at)) / 1000)
+        .filter(sec => sec >= 0)
+        .sort((a, b) => a - b);
+    const timing = {
+        sampleSize: timedDurationsSec.length,
+        avgQueueToCompletionSeconds: timedDurationsSec.length
+            ? Math.round(timedDurationsSec.reduce((a, b) => a + b, 0) / timedDurationsSec.length) : null,
+        medianQueueToCompletionSeconds: timedDurationsSec.length
+            ? Math.round(timedDurationsSec[Math.floor(timedDurationsSec.length / 2)]) : null,
+        note: 'Measures created_at → ended_at (queue wait + execution + report latency), not pure Facebook post-execution time. SUCCESS/FAILED only.'
+    };
+
+    // Throttle suggestion — a heuristic on this operator's own posting history,
+    // not machine learning. Nothing here is auto-applied to POST /api/posts'
+    // jitter; it's surfaced for the operator to act on manually.
+    const moderationFailures = posts.filter(p => (p.failure_reason || '').includes('ממתין לאישור מנהל')).length;
+    const handshakeTimeoutFailures = posts.filter(p => (p.failure_reason || '').toLowerCase().includes('handshake')).length;
+    const throttleFailRate = total > 0 ? (moderationFailures + handshakeTimeoutFailures) / total : 0;
+    const THROTTLE_FAIL_RATE_THRESHOLD = 0.15;
+    const groupsWithFailureStreaks = Object.entries(healthStats)
+        .filter(([, s]) => (s.consecutiveFailures || 0) >= 3)
+        .map(([gid, s]) => ({ group_id: gid, name: groupMap[gid]?.name || gid, consecutiveFailures: s.consecutiveFailures }));
+    const throttleSuggestion = {
+        currentSpacingSeconds: { min: 150, max: 210 }, // matches the literal jitter in POST /api/posts
+        sampleSize: total,
+        moderationRate: total > 0 ? Math.round(moderationFailures / total * 100) : 0,
+        handshakeTimeoutRate: total > 0 ? Math.round(handshakeTimeoutFailures / total * 100) : 0,
+        groupsWithFailureStreaks,
+        suggestion: throttleFailRate > THROTTLE_FAIL_RATE_THRESHOLD ? 'increase_spacing' : 'ok',
+        suggestedSpacingSeconds: throttleFailRate > THROTTLE_FAIL_RATE_THRESHOLD ? { min: 210, max: 280 } : null,
+        note: 'Heuristic derived from your own posting history — not machine learning. Nothing is auto-applied; the jitter in POST /api/posts is unchanged.'
+    };
 
     res.json({
         summary: { total, success, failed, cancelled, pending, successRate },
@@ -814,7 +937,9 @@ app.get('/api/analytics', async (req, res) => {
         problemGroups,
         pendingGroups,
         activeGroups,
-        topErrors
+        topErrors,
+        timing,
+        throttleSuggestion
     });
 });
 
@@ -1027,6 +1152,16 @@ app.post('/api/posts', validate(postsSchema), async (req, res) => {
 
     const mediaUrls = mediaPaths ? mediaPaths.map(getMediaPublicUrl) : null;
 
+    // Fetch {id, name, url} for the target groups once, so {{GROUP_NAME}} /
+    // {{GROUP_URL}} placeholders can be resolved per group below.
+    const groupMap = new Map();
+    try {
+        const { data: groupRows } = await supabase.from('groups').select('id, name, url').in('id', group_ids);
+        (groupRows || []).forEach(g => groupMap.set(g.id, g));
+    } catch (e) {
+        console.error('❌ [POSTS] Error fetching group names for placeholders:', e.message);
+    }
+
     const tasks = [];
     group_ids.forEach((gid, index) => {
         // First post: within 30s. Subsequent posts: 150–210s (2.5–3.5 min) jitter
@@ -1035,7 +1170,11 @@ app.post('/api/posts', validate(postsSchema), async (req, res) => {
             : Math.floor(Math.random() * (210000 - 150000 + 1)) + 150000; // 150–210 seconds
         nextScheduleTime = new Date(nextScheduleTime.getTime() + jitter);
 
-        let finalContent = ai_spin ? spinText(content) : content;
+        // Resolve {{GROUP_NAME}} etc. BEFORE spinning — spinText's spintax regex
+        // would otherwise corrupt an unresolved {{TOKEN}} (see resolvePlaceholders
+        // comment above spinText's definition).
+        const resolvedContent = resolvePlaceholders(content, groupMap.get(gid), facebook_user);
+        let finalContent = ai_spin ? spinText(resolvedContent) : resolvedContent;
 
         // Embed media URLs in content
         if (mediaUrls && mediaUrls.length > 0) {
@@ -1223,6 +1362,34 @@ setInterval(async () => {
                         processingStartTimestamps.set(id, new Date(t.created_at).getTime());
                     }
                 }
+            }
+        }
+
+        // SCHEDULED RESUME (moderation cooldown): give moderation-blocked posts
+        // one more shot instead of leaving them CANCELLED forever. Placed BEFORE
+        // the `uniqueIds.length === 0` early return below so this still runs
+        // every tick even when nothing is currently stuck in PROCESSING/SENT.
+        const MODERATION_COOLDOWN_MS = 48 * 60 * 60 * 1000; // 48h
+        const MODERATION_RESUME_CAP = 2;
+        const modCutoff = new Date(now - MODERATION_COOLDOWN_MS).toISOString();
+        const { data: modCancelled } = await supabase
+            .from('posts').select('id, group_id')
+            .eq('status', 'CANCELLED').eq('app_source', 'backup')
+            .like('failure_reason', '%ממתין לאישור מנהל%')
+            .not('ended_at', 'is', null).lte('ended_at', modCutoff);
+
+        for (const p of modCancelled || []) {
+            const attempts = moderationResumeAttempts.get(p.id) || 0;
+            if (attempts >= MODERATION_RESUME_CAP) continue; // stays CANCELLED — operator must act manually
+            moderationResumeAttempts.set(p.id, attempts + 1);
+            const { error: resumeError } = await supabase.from('posts').update({
+                status: 'PENDING', scheduled_time: new Date(now).toISOString(), failure_reason: null
+            }).eq('id', p.id).eq('status', 'CANCELLED');
+            if (!resumeError) {
+                console.log(`[Heartbeat] Task ${p.id} (group ${p.group_id}) auto-resumed after 48h moderation cooldown (attempt ${attempts + 1}/${MODERATION_RESUME_CAP}).`);
+                logEvent(p.id, 'PENDING', `Auto-resumed after 48h moderation cooldown (attempt ${attempts + 1}/${MODERATION_RESUME_CAP})`, { group_id: p.group_id, reset_by: 'moderation_resume_sweep' });
+                io.emit('queue_updated');
+                io.emit('data_updated');
             }
         }
 
@@ -1428,6 +1595,10 @@ app.patch('/api/tasks/:id/status', validate(patchStatusSchema), async (req, res)
     const update = { status };
     if (failReason) update.failure_reason = failReason;
     if (completed_at) update.ended_at = completed_at;
+    // The content script's moderation-block path sends CANCELLED with no
+    // completed_at, so ended_at was never set for these rows — leaving nothing
+    // for the moderation-resume sweep to anchor its 48h cooldown on.
+    else if (status === 'CANCELLED') update.ended_at = new Date().toISOString();
     if (proof_url) update.proof_url = proof_url;
 
     const { error } = await supabase.from('posts').update(update).eq('id', id);

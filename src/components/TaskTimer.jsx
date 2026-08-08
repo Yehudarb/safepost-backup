@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 /**
  * TaskTimer Component
@@ -20,9 +20,17 @@ const TaskTimer = ({ targetTime, status, onComplete }) => {
         return Math.max(0, diff);
     });
 
+    // Callers may pass an inline arrow (e.g. onComplete={() => {}}), whose
+    // identity changes on every parent render. Keeping it in the effect's
+    // dependency array tears down and rebuilds every row's interval on each
+    // render — with many queued tasks that's many timers churning per render.
+    // Hold it in a ref so the effect depends only on the values that matter.
+    const onCompleteRef = useRef(onComplete);
+    useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
+
     useEffect(() => {
         const isPending = status && status.toUpperCase() === 'PENDING';
-        
+
         if (!isPending || !targetTime) {
             setTimeLeft(null);
             return;
@@ -36,8 +44,8 @@ const TaskTimer = ({ targetTime, status, onComplete }) => {
             if (difference <= 0) {
                 setTimeLeft(0);
                 // Only trigger onComplete if it's a real transition, not on every mount of a past-due task
-                if (!isInitial && onComplete) {
-                    onComplete();
+                if (!isInitial && onCompleteRef.current) {
+                    onCompleteRef.current();
                 }
                 return false;
             }
@@ -52,7 +60,7 @@ const TaskTimer = ({ targetTime, status, onComplete }) => {
         }, 1000);
 
         return () => clearInterval(timerId);
-    }, [targetTime, status, onComplete]);
+    }, [targetTime, status]);
 
     const isPending = status && status.toUpperCase() === 'PENDING';
     if (!isPending || timeLeft === null) return null;

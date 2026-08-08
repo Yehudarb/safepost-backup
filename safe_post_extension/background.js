@@ -61,12 +61,15 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 chrome.runtime.onStartup.addListener(() => { setupAlarm(); checkJobs(); sendHeartbeat(); });
 
-// 2. Alarm Listener
+// 2. Alarm Listener — the single handler for 'jobPoller'. There used to be a
+// second onAlarm listener further down this file that also ran
+// sendHeartbeat(), so every tick fired two concurrent heartbeats.
 chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === 'jobPoller') {
         console.log(`[Background] Alarm fired at ${new Date().toLocaleTimeString()}`);
         checkJobs();
         sendHeartbeat();
+        checkWatchdog();
     }
 });
 
@@ -78,11 +81,17 @@ function recordContact() {
     lastServerContact = Date.now();
 }
 
+// Used to call chrome.runtime.reload() here. That was harmful: reloading the
+// extension cannot make an unreachable server reachable, so with the backend
+// down or rate-limited it looped — reload, poll, fail, reload — every 2min,
+// tearing down the service worker mid-request (surfacing as "No SW" errors)
+// and invalidating content scripts already injected into open Facebook tabs.
+// What actually goes stale is the SSE stream, so reconnect that instead.
 function checkWatchdog() {
-    if (Date.now() - lastServerContact > WATCHDOG_LIMIT) {
-        console.error(`[Watchdog] No contact from server for ${WATCHDOG_LIMIT / 1000}s. Reloading...`);
-        chrome.runtime.reload();
-    }
+    if (Date.now() - lastServerContact <= WATCHDOG_LIMIT) return;
+    console.warn(`[Watchdog] No contact from server for ${WATCHDOG_LIMIT / 1000}s. Reconnecting SSE (not reloading).`);
+    lastServerContact = Date.now();
+    try { connectSSE(); } catch (e) { console.warn('[Watchdog] SSE reconnect failed:', e?.message || e); }
 }
 
 // SSE Real-Time Listener
@@ -127,7 +136,11 @@ async function checkJobs() {
         if (await checkSafetyCooldown()) return;
 
         const res = await fetch(`${BASE_URL}/api/jobs/next`);
-        if (res.ok) recordContact();
+        // Any HTTP response proves the server is reachable — record contact
+        // before checking res.ok. Gating this on res.ok meant a 429 (rate
+        // limited) or a transient 500 counted as "server dead" and drove the
+        // watchdog into an unnecessary reconnect cycle.
+        recordContact();
         if (!res.ok) return;
         const data = await res.json();
         if (!data || !data.job) return;
@@ -461,8 +474,9 @@ async function sendHeartbeat() {
             }),
             mode: 'cors'
         });
+        // As in checkJobs: a response of any status means the server answered.
+        recordContact();
         if (res.ok) {
-            recordContact();
             const data = await res.json();
             if (data.sync_needed) {
                 console.log("[Background] sync_needed received from server, starting group scan...");
@@ -474,12 +488,8 @@ async function sendHeartbeat() {
     } catch (e) { console.error("Heartbeat failed:", e); }
 }
 
-chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === 'jobPoller') {
-        sendHeartbeat();
-        checkWatchdog();
-    }
-});
+// (heartbeat + watchdog now run in the single 'jobPoller' listener near the top —
+// this was a duplicate onAlarm listener that double-fired sendHeartbeat() every tick)
 
 // 5. EXTERNAL DASHBOARD LISTENER
 chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {

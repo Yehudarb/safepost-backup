@@ -70,6 +70,14 @@ const AnalyticsPanel = ({ data, onClose }) => {
     const topGroups = data?.topGroups || [];
     const problemGroups = data?.problemGroups || [];
     const pendingGroups = data?.pendingGroups || [];
+    const topErrors = data?.topErrors || [];
+    const timing = data?.timing || null;
+    const throttleSuggestion = data?.throttleSuggestion || null;
+
+    const healthBadgeClass = (score) =>
+        score >= 70 ? 'bg-emerald-500/10 text-emerald-400'
+        : score >= 40 ? 'bg-amber-500/10 text-amber-400'
+        : 'bg-rose-500/10 text-rose-400';
 
     // Calculate task counts from group data
     const totalSuccessTasks = topGroups.reduce((sum, g) => sum + (g.success || 0), 0);
@@ -234,6 +242,57 @@ const AnalyticsPanel = ({ data, onClose }) => {
                         <div className="z-10 text-white text-3xl font-black">{summary.total}</div>
                     </div>
 
+                    {/* Timing — queue-to-completion, not pure post-execution time (see note) */}
+                    {timing && timing.sampleSize > 0 && (
+                        <div className="bg-[#161b22] border border-[#30363d] rounded-2xl p-4 flex items-center gap-4 border-l-4 border-l-violet-500" title={timing.note}>
+                            <div className="p-3 bg-violet-500/10 rounded-xl">
+                                <Clock className="w-5 h-5 text-violet-400" />
+                            </div>
+                            <div>
+                                <p className="text-[10px] text-gray-500 font-bold uppercase">זמן ממוצע לתור→סיום</p>
+                                <p className="text-xl font-bold text-white">{Math.round(timing.avgQueueToCompletionSeconds / 60)} דק'</p>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Top Errors */}
+                    {topErrors.length > 0 && (
+                        <div className="md:col-span-2 bg-[#161b22] border border-[#30363d] rounded-2xl p-4">
+                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-3">שגיאות נפוצות</h3>
+                            <div className="space-y-1.5">
+                                {topErrors.map((e, i) => (
+                                    <div key={i} className="flex items-center gap-2">
+                                        <span className="text-[10px] text-gray-300 flex-1 truncate" dir="rtl" title={e.message}>{e.message}</span>
+                                        <span className="text-[10px] text-rose-400 font-bold shrink-0">{e.count} ({e.percent}%)</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Throttle Suggestion — heuristic on your own history, nothing auto-applied */}
+                    {throttleSuggestion && (
+                        <div className="md:col-span-2 bg-[#161b22] border border-[#30363d] rounded-2xl p-4">
+                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">המלצת תזמון</h3>
+                            {throttleSuggestion.suggestion === 'increase_spacing' ? (
+                                <p className="text-xs text-amber-400 leading-relaxed">
+                                    ⚠️ {throttleSuggestion.moderationRate + throttleSuggestion.handshakeTimeoutRate}% מהפוסטים נכשלו (מודרציה/handshake).
+                                    שקול להגדיל את המרווח בין פוסטים ל-{throttleSuggestion.suggestedSpacingSeconds.min}-{throttleSuggestion.suggestedSpacingSeconds.max} שניות
+                                    (כרגע {throttleSuggestion.currentSpacingSeconds.min}-{throttleSuggestion.currentSpacingSeconds.max}).
+                                </p>
+                            ) : (
+                                <p className="text-xs text-emerald-400 leading-relaxed">✓ קצב הפרסום הנוכחי ({throttleSuggestion.currentSpacingSeconds.min}-{throttleSuggestion.currentSpacingSeconds.max}s) נראה תקין.</p>
+                            )}
+                            {throttleSuggestion.groupsWithFailureStreaks.length > 0 && (
+                                <p className="text-[10px] text-gray-500 mt-2">
+                                    {throttleSuggestion.groupsWithFailureStreaks.length} קבוצות עם רצף כשלונות: {throttleSuggestion.groupsWithFailureStreaks.slice(0, 3).map(g => g.name).join(', ')}
+                                    {throttleSuggestion.groupsWithFailureStreaks.length > 3 ? ` +${throttleSuggestion.groupsWithFailureStreaks.length - 3}` : ''}
+                                </p>
+                            )}
+                            <p className="text-[9px] text-gray-600 mt-2">{throttleSuggestion.note}</p>
+                        </div>
+                    )}
+
                     {/* Groups List with Tabs (full width) */}
                     <div className="md:col-span-4 bg-[#161b22] border border-[#30363d] rounded-2xl p-4">
                         {/* Tabs - Show Task Counts */}
@@ -274,23 +333,33 @@ const AnalyticsPanel = ({ data, onClose }) => {
                         <div className="space-y-2">
                             {filterTab === 'success' && topGroups.map((group, i) => (
                                 <div key={i} className="flex justify-between items-center p-2 bg-[#1c2128] rounded-lg hover:bg-[#21262d] transition">
-                                    {group.url ? (
-                                        <a href={group.url} target="_blank" rel="noreferrer" className="text-sm text-blue-400 hover:text-blue-300 hover:underline transition" dir="rtl">{group.name}</a>
-                                    ) : (
-                                        <span className="text-sm text-white" dir="rtl">{group.name}</span>
-                                    )}
-                                    <span className="text-xs text-emerald-500 font-bold">{group.success} הצלחות</span>
+                                    <div className="flex items-center gap-2 min-w-0">
+                                        {group.url ? (
+                                            <a href={group.url} target="_blank" rel="noreferrer" className="text-sm text-blue-400 hover:text-blue-300 hover:underline transition truncate" dir="rtl">{group.name}</a>
+                                        ) : (
+                                            <span className="text-sm text-white truncate" dir="rtl">{group.name}</span>
+                                        )}
+                                        {typeof group.health_score === 'number' && (
+                                            <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded ${healthBadgeClass(group.health_score)}`} title="ציון בריאות">{group.health_score}</span>
+                                        )}
+                                    </div>
+                                    <span className="text-xs text-emerald-500 font-bold shrink-0">{group.success} הצלחות</span>
                                 </div>
                             ))}
 
                             {filterTab === 'failed' && problemGroups.map((group, i) => (
                                 <div key={i} className="flex justify-between items-center p-2 bg-[#1c2128] rounded-lg hover:bg-[#21262d] transition">
-                                    {group.url ? (
-                                        <a href={group.url} target="_blank" rel="noreferrer" className="text-sm text-blue-400 hover:text-blue-300 hover:underline transition" dir="rtl">{group.name}</a>
-                                    ) : (
-                                        <span className="text-sm text-white" dir="rtl">{group.name}</span>
-                                    )}
-                                    <span className="text-xs text-rose-500 font-bold">{group.failed} כשלונות</span>
+                                    <div className="flex items-center gap-2 min-w-0">
+                                        {group.url ? (
+                                            <a href={group.url} target="_blank" rel="noreferrer" className="text-sm text-blue-400 hover:text-blue-300 hover:underline transition truncate" dir="rtl">{group.name}</a>
+                                        ) : (
+                                            <span className="text-sm text-white truncate" dir="rtl">{group.name}</span>
+                                        )}
+                                        {typeof group.health_score === 'number' && (
+                                            <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded ${healthBadgeClass(group.health_score)}`} title="ציון בריאות">{group.health_score}</span>
+                                        )}
+                                    </div>
+                                    <span className="text-xs text-rose-500 font-bold shrink-0">{group.failed} כשלונות</span>
                                 </div>
                             ))}
 
