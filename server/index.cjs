@@ -1962,6 +1962,34 @@ setInterval(async () => {
         const now = Date.now();
         const FOUR_MINUTES = 4 * 60 * 1000;
 
+        // Demo tasks are never dispatched to a real worker (jobs/next filters
+        // app_source='backup'), so nothing above ever moves them out of SENT/
+        // PROCESSING if they're seeded/left in that state — they'd sit "in
+        // progress" forever and the dashboard's countdown would show a
+        // permanently stuck clock. Self-heal by resetting the whole demo
+        // workspace back to its canonical seed state (same as /api/demo/reset).
+        try {
+            const DEMO_STUCK_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+            const { data: stuckDemoTasks } = await supabase
+                .from('posts')
+                .select('id, workspace_id, created_by, created_at')
+                .in('status', ['PROCESSING', 'SENT'])
+                .eq('app_source', 'demo')
+                .lt('created_at', new Date(now - DEMO_STUCK_THRESHOLD_MS).toISOString());
+            const staleDemoWorkspaces = new Map();
+            for (const t of stuckDemoTasks || []) {
+                if (t.workspace_id && !staleDemoWorkspaces.has(t.workspace_id)) {
+                    staleDemoWorkspaces.set(t.workspace_id, t.created_by);
+                }
+            }
+            for (const [wsId, ownerId] of staleDemoWorkspaces) {
+                console.log(`[Heartbeat] Demo workspace ${wsId} has tasks stuck > 30min — resetting to seed state.`);
+                await resetDemoWorkspace(wsId, ownerId);
+            }
+        } catch (e) {
+            console.error('[Heartbeat] Demo self-heal failed:', e.message);
+        }
+
         const staleIds = [];
         for (const [taskId, startTime] of processingStartTimestamps.entries()) {
             if (now - startTime > FOUR_MINUTES) staleIds.push(taskId);
