@@ -538,6 +538,9 @@ app.get('/api/debug/state', requireAuth, (req, res) => {
 });
 
 // --- SSE: Real-Time push to Extension ---
+// Entries are { workspaceId, send }. workspaceId is null for an unpaired
+// extension, which is the only kind that exists while the deployment is
+// single-tenant. See broadcastSSE for what that means for delivery.
 const sseClients = new Set();
 
 app.get('/api/stream/jobs', optionalWorker, (req, res) => {
@@ -549,7 +552,8 @@ app.get('/api/stream/jobs', optionalWorker, (req, res) => {
 
     const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
     send({ type: 'connected' });
-    sseClients.add(send);
+    const client = { workspaceId: req.workspaceId || null, send };
+    sseClients.add(client);
 
     // Keep the connection warm. Without periodic traffic, MV3 service workers
     // (and any intermediate proxy) can silently drop the socket, which stops
@@ -572,12 +576,36 @@ app.get('/api/stream/jobs', optionalWorker, (req, res) => {
 
     req.on('close', () => {
         clearInterval(pingId);
-        sseClients.delete(send);
+        sseClients.delete(client);
     });
 });
 
-function broadcastSSE(data) {
-    sseClients.forEach(send => { try { send(data); } catch { sseClients.delete(send); } });
+// Push an event to connected extensions.
+//
+// `workspaceId` names the tenant an event belongs to. This matters because
+// job_available carries the full post payload (content + group URL), and this
+// used to go to EVERY connected extension — so with more than one tenant, one
+// account's post text was delivered to another account's browser.
+//
+// Delivery rules:
+//   • Paired client (has a workspaceId) — only events for its own workspace,
+//     plus events sent without one (server-wide notices).
+//   • Unpaired client (workspaceId null) — receives everything while
+//     WORKER_AUTH_ENFORCED is off, which preserves today's single-tenant
+//     behaviour; once enforcement is on, an unpaired client cannot receive
+//     workspace-scoped events at all, because it has no proven tenant.
+function broadcastSSE(data, workspaceId = null) {
+    const enforced = process.env.WORKER_AUTH_ENFORCED === 'true';
+    sseClients.forEach(client => {
+        if (workspaceId) {
+            if (client.workspaceId) {
+                if (client.workspaceId !== workspaceId) return;
+            } else if (enforced) {
+                return; // unproven tenant, and we are no longer in legacy mode
+            }
+        }
+        try { client.send(data); } catch { sseClients.delete(client); }
+    });
 }
 
 // --- HELPER: Transactional Status Update ---
@@ -955,7 +983,7 @@ app.post('/api/groups/request-sync', ...dashboardAuth, (req, res) => {
     if (sseClients.size > 0) {
         // An extension is connected — deliver once, now, and do NOT leave the flag set
         // (leaving it set is what caused every later SSE reconnect to re-run the scan).
-        broadcastSSE({ type: 'sync_groups' });
+        broadcastSSE({ type: 'sync_groups' }, req.workspaceId || null);
         pendingSyncCommand = false;
         console.log(`📡 sync_groups delivered to ${sseClients.size} connected client(s)`);
     } else {
@@ -1954,10 +1982,12 @@ async function runDispatchTick() {
         // NOTE: the extension's SSE handler listens for 'job_available' (not
         // 'new_job') to trigger an immediate checkJobs(). Sending the matching
         // event gives real-time pickup instead of waiting for the ~1min MV3 alarm.
+        // Scoped to the task's own workspace: this payload contains the post
+        // content and target group, so it must reach only that tenant.
         broadcastSSE({
             type: 'job_available',
             job: { ...nextTask, group_url: group?.url, status: 'SENT' }
-        });
+        }, nextTask.workspace_id || null);
         
         await updateTaskStatus(nextTask.id, 'SENT', 'Waiting for worker handshake...');
         
@@ -2465,7 +2495,7 @@ app.delete('/api/tasks/:id', ...dashboardAuth, async (req, res) => {
 app.post('/api/worker/stop', ...dashboardAuth, denyDemo, (req, res) => {
     workerStopSignal = true;
     workerStopUntil  = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h safety
-    broadcastSSE({ type: 'stop_worker' });
+    broadcastSSE({ type: 'stop_worker' }, req.workspaceId || null);
     io.emit('worker_stop_signal');
     console.log('🛑 Worker stop signal sent');
     res.json({ success: true });
