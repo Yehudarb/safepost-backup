@@ -2164,12 +2164,22 @@ app.get('/api/system/status', requireAuth, (req, res) => {
 });
 
 // Next Job for Extension (polled by background.js every 6s)
+//
+// Scoped to the caller's workspace when it is a paired worker. Without that
+// filter this handed out whichever task was next GLOBALLY, so with more than
+// one tenant an extension could be told to publish another account's post —
+// to that account's group, from this browser's Facebook session. Unpaired
+// callers still get the global next task, which is correct while the
+// deployment is single-tenant and is closed off by WORKER_AUTH_ENFORCED.
 app.get('/api/jobs/next', optionalWorker, async (req, res) => {
-    const { data } = await supabase
+    let nextQuery = supabase
         .from('posts')
         .select('*')
         .eq('status', 'SENT')
-        .eq('app_source', 'backup')
+        .eq('app_source', 'backup');
+    if (req.workspaceId) nextQuery = nextQuery.eq('workspace_id', req.workspaceId);
+
+    const { data } = await nextQuery
         .order('scheduled_time', { ascending: true })
         .limit(1)
         .maybeSingle();
@@ -2216,23 +2226,27 @@ app.get('/api/jobs/for-url', optionalWorker, async (req, res) => {
     const normalizedUrl = url.replace(/\/$/, '');
 
     // Find group by URL. The same URL can now map to several per-user rows, so
-    // cap at one (id/name are identical across a group's copies).
-    const { data: group } = await supabase
+    // cap at one (id/name are identical across a group's copies). Scoped to the
+    // caller's workspace when paired, for the same reason as /api/jobs/next —
+    // a shared group URL otherwise resolves to whichever tenant's row came first.
+    let groupQuery = supabase
         .from('groups')
         .select('id, name')
-        .or(`url.eq.${normalizedUrl},url.eq.${normalizedUrl}/`)
-        .limit(1)
-        .maybeSingle();
+        .or(`url.eq.${normalizedUrl},url.eq.${normalizedUrl}/`);
+    if (req.workspaceId) groupQuery = groupQuery.eq('workspace_id', req.workspaceId);
+    const { data: group } = await groupQuery.limit(1).maybeSingle();
 
     if (!group) return res.json({ job: null });
 
     // Find PROCESSING task for this group
-    const { data: task } = await supabase
+    let taskQuery = supabase
         .from('posts')
         .select('*')
         .eq('status', 'PROCESSING')
         .eq('app_source', 'backup')
-        .eq('group_id', group.id)
+        .eq('group_id', group.id);
+    if (req.workspaceId) taskQuery = taskQuery.eq('workspace_id', req.workspaceId);
+    const { data: task } = await taskQuery
         .order('scheduled_time', { ascending: true })
         .limit(1)
         .maybeSingle();
@@ -2264,10 +2278,19 @@ app.post('/api/tasks/update-status', optionalWorker, validate(updateStatusSchema
     if (failure_reason) update.failure_reason = failure_reason;
     if (proof_url) update.proof_url = proof_url;
 
-    // First, fetch the task to get group_id
-    const { data: taskData } = await supabase.from('posts').select('group_id').eq('id', numericId).single();
+    // First, fetch the task to get group_id. Scoped to the caller's workspace
+    // when paired, so one tenant's worker cannot report on another's task.
+    let taskLookup = supabase.from('posts').select('group_id').eq('id', numericId);
+    if (req.workspaceId) taskLookup = taskLookup.eq('workspace_id', req.workspaceId);
+    const { data: taskData } = await taskLookup.maybeSingle();
 
-    const { error } = await supabase.from('posts').update(update).eq('id', numericId);
+    if (req.workspaceId && !taskData) {
+        return res.status(404).json({ error: 'Task not found in this workspace.' });
+    }
+
+    let updateQuery = supabase.from('posts').update(update).eq('id', numericId);
+    if (req.workspaceId) updateQuery = updateQuery.eq('workspace_id', req.workspaceId);
+    const { error } = await updateQuery;
     if (error) {
         console.error('Status update error:', error.message);
         return res.status(500).json({ error: error.message });
@@ -2318,8 +2341,15 @@ app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), 
         return res.json({ success: true, logged: true });
     }
 
-    // Fetch task data including group_id before updating
-    const { data: taskData } = await supabase.from('posts').select('group_id').eq('id', id).single();
+    // Fetch task data including group_id before updating. Scoped to the
+    // caller's workspace when paired — see /api/tasks/update-status above.
+    let taskLookup = supabase.from('posts').select('group_id').eq('id', id);
+    if (req.workspaceId) taskLookup = taskLookup.eq('workspace_id', req.workspaceId);
+    const { data: taskData } = await taskLookup.maybeSingle();
+
+    if (req.workspaceId && !taskData) {
+        return res.status(404).json({ error: 'Task not found in this workspace.' });
+    }
 
     const update = { status };
     if (failReason) update.failure_reason = failReason;
@@ -2331,7 +2361,9 @@ app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), 
     else if (status === 'CANCELLED') update.ended_at = new Date().toISOString();
     if (proof_url) update.proof_url = proof_url;
 
-    const { error } = await supabase.from('posts').update(update).eq('id', id);
+    let patchQuery = supabase.from('posts').update(update).eq('id', id);
+    if (req.workspaceId) patchQuery = patchQuery.eq('workspace_id', req.workspaceId);
+    const { error } = await patchQuery;
     if (error) console.error('Status update error:', error.message);
 
     // Automation Failure AUDIT LOG
