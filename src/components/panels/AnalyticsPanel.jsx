@@ -3,8 +3,10 @@ import {
     BarChart3, CheckCircle2, AlertCircle, Clock, X, TrendingUp, Download
 } from 'lucide-react';
 import { API_BASE } from '@/lib/apiConfig';
+import { useLanguage } from '@/lib/i18n';
 
 const AnalyticsPanel = ({ data, onClose }) => {
+    const { t } = useLanguage();
     const [filterTab, setFilterTab] = useState('success');
     const [reportLoading, setReportLoading] = useState(false);
 
@@ -16,24 +18,24 @@ const AnalyticsPanel = ({ data, onClose }) => {
 
             if (format === 'csv') {
                 // Generate CSV
-                let csv = 'דוח הצלחות וכשלונות\n\n';
-                csv += `יום ${new Date().toLocaleDateString('he-IL')}\n\n`;
-                csv += `סה"כ: ${report.summary.total}, הצלחות: ${report.summary.successes}, כשלונות: ${report.summary.failures}, שיעור הצלחה: ${report.summary.successRate}%\n\n`;
+                let csv = t('analyticsCsvReportHeader') + '\n\n';
+                csv += t('analyticsCsvDay', { date: new Date().toLocaleDateString('he-IL') }) + '\n\n';
+                csv += t('analyticsCsvSummaryLine', { total: report.summary.total, successes: report.summary.successes, failures: report.summary.failures, rate: report.summary.successRate }) + '\n\n';
 
-                csv += '=== כשלונות ===\n';
-                csv += 'ID,קבוצה,סיבה,תאריך\n';
+                csv += t('analyticsCsvFailuresHeader') + '\n';
+                csv += t('analyticsCsvFailuresColumns') + '\n';
                 report.failures.forEach(f => {
                     csv += `${f.id},"${f.group}","${f.reason}","${new Date(f.timestamp).toLocaleString('he-IL')}"\n`;
                 });
 
-                csv += '\n=== סיכום שגיאות ===\n';
-                csv += 'סיבה,כמות\n';
+                csv += '\n' + t('analyticsCsvErrorSummaryHeader') + '\n';
+                csv += t('analyticsCsvErrorSummaryColumns') + '\n';
                 report.errorSummary.forEach(e => {
                     csv += `"${e.reason}",${e.count}\n`;
                 });
 
-                csv += '\n=== הצלחות ===\n';
-                csv += 'ID,קבוצה,תאריך\n';
+                csv += '\n' + t('analyticsCsvSuccessesHeader') + '\n';
+                csv += t('analyticsCsvSuccessesColumns') + '\n';
                 report.successes.forEach(s => {
                     csv += `${s.id},"${s.group}","${new Date(s.timestamp).toLocaleString('he-IL')}"\n`;
                 });
@@ -100,8 +102,8 @@ const AnalyticsPanel = ({ data, onClose }) => {
                             <BarChart3 className="w-5 h-5 text-blue-400" />
                         </div>
                         <div>
-                            <h2 className="text-xl font-bold text-white">נתוני ביצועים (Stitch Dashboard)</h2>
-                            <p className="text-[10px] text-gray-500 uppercase tracking-widest font-black">30 הימים האחרונים • SafePost Backup</p>
+                            <h2 className="text-xl font-bold text-white">{t('analyticsTitle')}</h2>
+                            <p className="text-[10px] text-gray-500 uppercase tracking-widest font-black">{t('analyticsLast30Days')}</p>
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -115,12 +117,12 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                 <Download className="w-5 h-5" />
                             </button>
                             <div className="absolute top-full mt-2 right-0 hidden group-hover:block bg-[#1c2128] border border-[#30363d] rounded text-[10px] text-gray-400 px-2 py-1 whitespace-nowrap z-10">
-                                הורד דוח CSV
+                                {t('downloadCsvReport')}
                             </div>
                         </div>
                         <button
                             onClick={onClose}
-                            aria-label="סגור"
+                            aria-label={t('close')}
                             className="p-2 rounded-full hover:bg-[#21262d] text-gray-400 hover:text-white transition-colors"
                         >
                             <X className="w-5 h-5" />
@@ -134,7 +136,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                     {/* Bar Chart (3 columns) */}
                     <div className="md:col-span-3 bg-[#161b22] border border-[#30363d] rounded-2xl p-6 min-h-[300px] flex flex-col">
                         <div className="flex justify-between items-start mb-4">
-                            <h3 className="text-sm font-medium text-gray-400">נתוני פעילות פוסטים (7 ימים)</h3>
+                            <h3 className="text-sm font-medium text-gray-400">{t('analyticsPostActivityChart')}</h3>
                             <TrendingUp className="w-4 h-4 text-emerald-400 opacity-50" />
                         </div>
 
@@ -169,14 +171,14 @@ const AnalyticsPanel = ({ data, onClose }) => {
                         </div>
 
                         <div className="mt-8 flex justify-between text-[10px] text-gray-500 font-mono tracking-tighter">
-                            <span>אופק 7 ימים</span>
+                            <span>{t('analyticsSevenDayHorizon')}</span>
                             <span className="text-blue-400 uppercase">LIVE</span>
                         </div>
                     </div>
 
                     {/* Donut Chart (Success Rate) */}
                     <div className="bg-[#1c2128] border border-[#30363d] rounded-2xl p-6 flex flex-col items-center justify-center">
-                        <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-4">אחוזי הצלחה</h3>
+                        <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-4">{t('analyticsSuccessRate')}</h3>
                         <div className="relative w-28 h-28 flex items-center justify-center">
                             <svg className="w-full h-full transform -rotate-90">
                                 <circle
@@ -210,7 +212,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                             <CheckCircle2 className="w-5 h-5 text-emerald-500" />
                         </div>
                         <div>
-                            <p className="text-[10px] text-gray-500 font-bold uppercase">הצלחות</p>
+                            <p className="text-[10px] text-gray-500 font-bold uppercase">{t('analyticsSuccessesLabel')}</p>
                             <p className="text-xl font-bold text-white">{summary.success}</p>
                         </div>
                     </div>
@@ -221,7 +223,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                             <AlertCircle className="w-5 h-5 text-rose-500" />
                         </div>
                         <div>
-                            <p className="text-[10px] text-gray-500 font-bold uppercase">כשלונות</p>
+                            <p className="text-[10px] text-gray-500 font-bold uppercase">{t('analyticsFailuresLabel')}</p>
                             <p className="text-xl font-bold text-white">{summary.failed}</p>
                         </div>
                     </div>
@@ -232,14 +234,14 @@ const AnalyticsPanel = ({ data, onClose }) => {
                             <Clock className="w-5 h-5 text-amber-500" />
                         </div>
                         <div>
-                            <p className="text-[10px] text-gray-500 font-bold uppercase">ממתינים</p>
+                            <p className="text-[10px] text-gray-500 font-bold uppercase">{t('analyticsPendingLabel')}</p>
                             <p className="text-xl font-bold text-white">{summary.pending}</p>
                         </div>
                     </div>
 
                     {/* KPI: Total */}
                     <div className="bg-blue-600 rounded-2xl p-4 flex flex-col justify-between group cursor-pointer overflow-hidden relative shadow-lg shadow-blue-900/20 transition-all hover:-translate-y-1">
-                        <div className="z-10 text-white/70 text-[10px] font-black uppercase tracking-widest">סה"כ פוסטים</div>
+                        <div className="z-10 text-white/70 text-[10px] font-black uppercase tracking-widest">{t('analyticsTotalPosts')}</div>
                         <div className="z-10 text-white text-3xl font-black">{summary.total}</div>
                     </div>
 
@@ -250,8 +252,8 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                 <Clock className="w-5 h-5 text-violet-400" />
                             </div>
                             <div>
-                                <p className="text-[10px] text-gray-500 font-bold uppercase">זמן ממוצע לתור→סיום</p>
-                                <p className="text-xl font-bold text-white">{Math.round(timing.avgQueueToCompletionSeconds / 60)} דק'</p>
+                                <p className="text-[10px] text-gray-500 font-bold uppercase">{t('analyticsAvgQueueToCompletion')}</p>
+                                <p className="text-xl font-bold text-white">{t('analyticsMinutesValue', { minutes: Math.round(timing.avgQueueToCompletionSeconds / 60) })}</p>
                             </div>
                         </div>
                     )}
@@ -259,7 +261,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                     {/* Top Errors */}
                     {topErrors.length > 0 && (
                         <div className="md:col-span-2 bg-[#161b22] border border-[#30363d] rounded-2xl p-4">
-                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-3">שגיאות נפוצות</h3>
+                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-3">{t('analyticsTopErrors')}</h3>
                             <div className="space-y-1.5">
                                 {topErrors.map((e, i) => (
                                     <div key={i} className="flex items-center gap-2">
@@ -274,20 +276,27 @@ const AnalyticsPanel = ({ data, onClose }) => {
                     {/* Throttle Suggestion — heuristic on your own history, nothing auto-applied */}
                     {throttleSuggestion && (
                         <div className="md:col-span-2 bg-[#161b22] border border-[#30363d] rounded-2xl p-4">
-                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">המלצת תזמון</h3>
+                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('analyticsThrottleSuggestionTitle')}</h3>
                             {throttleSuggestion.suggestion === 'increase_spacing' ? (
                                 <p className="text-xs text-amber-400 leading-relaxed">
-                                    ⚠️ {throttleSuggestion.moderationRate + throttleSuggestion.handshakeTimeoutRate}% מהפוסטים נכשלו (מודרציה/handshake).
-                                    שקול להגדיל את המרווח בין פוסטים ל-{throttleSuggestion.suggestedSpacingSeconds.min}-{throttleSuggestion.suggestedSpacingSeconds.max} שניות
-                                    (כרגע {throttleSuggestion.currentSpacingSeconds.min}-{throttleSuggestion.currentSpacingSeconds.max}).
+                                    {t('analyticsThrottleIncreaseSpacing', {
+                                        failRate: throttleSuggestion.moderationRate + throttleSuggestion.handshakeTimeoutRate,
+                                        min: throttleSuggestion.suggestedSpacingSeconds.min,
+                                        max: throttleSuggestion.suggestedSpacingSeconds.max,
+                                        curMin: throttleSuggestion.currentSpacingSeconds.min,
+                                        curMax: throttleSuggestion.currentSpacingSeconds.max,
+                                    })}
                                 </p>
                             ) : (
-                                <p className="text-xs text-emerald-400 leading-relaxed">✓ קצב הפרסום הנוכחי ({throttleSuggestion.currentSpacingSeconds.min}-{throttleSuggestion.currentSpacingSeconds.max}s) נראה תקין.</p>
+                                <p className="text-xs text-emerald-400 leading-relaxed">{t('analyticsThrottleOk', { min: throttleSuggestion.currentSpacingSeconds.min, max: throttleSuggestion.currentSpacingSeconds.max })}</p>
                             )}
                             {throttleSuggestion.groupsWithFailureStreaks.length > 0 && (
                                 <p className="text-[10px] text-gray-500 mt-2">
-                                    {throttleSuggestion.groupsWithFailureStreaks.length} קבוצות עם רצף כשלונות: {throttleSuggestion.groupsWithFailureStreaks.slice(0, 3).map(g => g.name).join(', ')}
-                                    {throttleSuggestion.groupsWithFailureStreaks.length > 3 ? ` +${throttleSuggestion.groupsWithFailureStreaks.length - 3}` : ''}
+                                    {t('analyticsGroupsWithFailureStreaks', {
+                                        count: throttleSuggestion.groupsWithFailureStreaks.length,
+                                        names: throttleSuggestion.groupsWithFailureStreaks.slice(0, 3).map(g => g.name).join(', '),
+                                        extra: throttleSuggestion.groupsWithFailureStreaks.length > 3 ? ` +${throttleSuggestion.groupsWithFailureStreaks.length - 3}` : '',
+                                    })}
                                 </p>
                             )}
                             <p className="text-[9px] text-gray-600 mt-2">{throttleSuggestion.note}</p>
@@ -297,7 +306,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                     {/* A-B Variant Breakdown — only appears once migration 0009 lands and at least one campaign used content_variants */}
                     {variantStats.length > 0 && (
                         <div className="md:col-span-4 bg-[#161b22] border border-[#30363d] rounded-2xl p-4">
-                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-3">פילוח גרסאות A/B</h3>
+                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-3">{t('analyticsAbVariantBreakdown')}</h3>
                             <div className="space-y-2">
                                 {variantStats.map((v, i) => {
                                     const vRate = v.total > 0 ? Math.round(v.success / v.total * 100) : 0;
@@ -327,7 +336,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                         : 'text-gray-500 hover:text-gray-300'
                                 }`}
                             >
-                                הצלחות ({totalSuccessTasks})
+                                {t('analyticsSuccessesLabel')} ({totalSuccessTasks})
                             </button>
                             <button
                                 onClick={() => setFilterTab('failed')}
@@ -337,7 +346,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                         : 'text-gray-500 hover:text-gray-300'
                                 }`}
                             >
-                                כשלונות ({totalFailedTasks})
+                                {t('analyticsFailuresLabel')} ({totalFailedTasks})
                             </button>
                             <button
                                 onClick={() => setFilterTab('pending')}
@@ -347,7 +356,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                         : 'text-gray-500 hover:text-gray-300'
                                 }`}
                             >
-                                ממתינים ({totalPendingTasks})
+                                {t('analyticsPendingLabel')} ({totalPendingTasks})
                             </button>
                         </div>
 
@@ -362,10 +371,10 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                             <span className="text-sm text-white truncate" dir="rtl">{group.name}</span>
                                         )}
                                         {typeof group.health_score === 'number' && (
-                                            <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded ${healthBadgeClass(group.health_score)}`} title="ציון בריאות">{group.health_score}</span>
+                                            <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded ${healthBadgeClass(group.health_score)}`} title={t('analyticsHealthScore')}>{group.health_score}</span>
                                         )}
                                     </div>
-                                    <span className="text-xs text-emerald-500 font-bold shrink-0">{group.success} הצלחות</span>
+                                    <span className="text-xs text-emerald-500 font-bold shrink-0">{group.success} {t('analyticsSuccessesLabel')}</span>
                                 </div>
                             ))}
 
@@ -378,10 +387,10 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                             <span className="text-sm text-white truncate" dir="rtl">{group.name}</span>
                                         )}
                                         {typeof group.health_score === 'number' && (
-                                            <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded ${healthBadgeClass(group.health_score)}`} title="ציון בריאות">{group.health_score}</span>
+                                            <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded ${healthBadgeClass(group.health_score)}`} title={t('analyticsHealthScore')}>{group.health_score}</span>
                                         )}
                                     </div>
-                                    <span className="text-xs text-rose-500 font-bold shrink-0">{group.failed} כשלונות</span>
+                                    <span className="text-xs text-rose-500 font-bold shrink-0">{group.failed} {t('analyticsFailuresLabel')}</span>
                                 </div>
                             ))}
 
@@ -392,7 +401,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                     ) : (
                                         <span className="text-sm text-white" dir="rtl">{group.name}</span>
                                     )}
-                                    <span className="text-xs text-amber-500 font-bold">{group.pending} ממתינים</span>
+                                    <span className="text-xs text-amber-500 font-bold">{group.pending} {t('analyticsPendingLabel')}</span>
                                 </div>
                             ))}
 
@@ -400,7 +409,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                               (filterTab === 'failed' && problemGroups.length === 0) ||
                               (filterTab === 'pending' && pendingGroups.length === 0)) && (
                                 <div className="text-center py-6 text-gray-500 text-xs">
-                                    אין נתונים להצגה
+                                    {t('analyticsNoDataToShow')}
                                 </div>
                             )}
                         </div>
@@ -411,7 +420,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
                 {/* FOOTER */}
                 <div className="p-4 bg-[#1c2128] border-t border-[#30363d] text-center">
                     <p className="text-[10px] text-gray-500 font-medium tracking-tight">
-                        נתונים מבוצעים Supabase Cloud • App Source: SafePost_Backup_v2.2
+                        {t('analyticsFooterDataSource')}
                     </p>
                 </div>
 

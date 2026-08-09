@@ -25,6 +25,7 @@ import ConsentBanner, { hasAcceptedTos } from '@/components/ConsentBanner';
 import Legal from '@/pages/Legal';
 import AccessibilityWidget from '@/components/AccessibilityWidget/vee/AccessibilityWidget';
 import { API_BASE, BACKEND_URL } from '@/lib/apiConfig';
+import { useLanguage } from '@/lib/i18n';
 
 // Socket connection: in dev use localhost:3001, in prod use the backend URL
 const SOCKET_URL = BACKEND_URL || 'http://localhost:3001';
@@ -250,6 +251,7 @@ function HeroCountdown({ queue }) {
 // STATUS RING ׳’ג‚¬ג€ donut chart summarizing the whole queue at a glance.
 // ---------------------------------------------------------------------------
 function StatusRing({ stats }) {
+    const { t } = useLanguage();
     const segments = [
         { value: stats.pending,                    colorClass: 'text-amber-400' },
         { value: stats.processing,                 colorClass: 'text-blue-400' },
@@ -278,7 +280,7 @@ function StatusRing({ stats }) {
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <div dir="ltr" className="font-mono text-3xl font-bold text-gray-900 dark:text-white leading-none">{total}</div>
-                <div className="text-[9px] font-bold text-gray-500 dark:text-gray-400 tracking-widest mt-1">משימות</div>
+                <div className="text-[9px] font-bold text-gray-500 dark:text-gray-400 tracking-widest mt-1">{t('statusRingTasksLabel')}</div>
             </div>
         </div>
     );
@@ -288,6 +290,7 @@ function StatusRing({ stats }) {
 // MISSION CARD — replaces the old table row. Same fields/actions, card layout.
 // ---------------------------------------------------------------------------
 function MissionCard({ row, isCompact, selected, onToggleSelect, statusTimestamps, onEdit, onAbort, onRetry, onDelete, processing }) {
+    const { t } = useLanguage();
     const led = LED_STYLES[row.status] || LED_STYLES.PENDING;
     const pulse = ['PENDING', 'SENT', 'PROCESSING'].includes(row.status);
     const timestampsForRow = statusTimestamps[row.id];
@@ -299,7 +302,7 @@ function MissionCard({ row, isCompact, selected, onToggleSelect, statusTimestamp
 
             {/* select + LED */}
             <div className="flex items-center gap-2.5">
-                <button onClick={() => onToggleSelect(row.id)} aria-label="בחר משימה" className="shrink-0">
+                <button onClick={() => onToggleSelect(row.id)} aria-label={t('selectTaskAria')} className="shrink-0">
                     {selected ? <CheckSquare size={14} className="text-brand" /> : <Square size={14} className="text-gray-300 dark:text-gray-400" />}
                 </button>
                 <div className="relative w-2.5 h-2.5 shrink-0">
@@ -350,20 +353,21 @@ function MissionCard({ row, isCompact, selected, onToggleSelect, statusTimestamp
             {/* actions */}
             <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition">
                 {row.status === 'PENDING' && (<>
-                    <button onClick={() => onEdit(row)} aria-label="ערוך משימה" className="p-3 hover:bg-blue-500/10 text-blue-400 rounded-lg transition" title="ערוך"><Edit3 size={13} /></button>
-                    <button onClick={() => onAbort(row.id)} aria-label="בטל משימה" className="p-3 hover:bg-orange-500/10 text-orange-400 rounded-lg transition" title="בטל"><Ban size={13} /></button>
+                    <button onClick={() => onEdit(row)} aria-label={t('editTaskAria')} className="p-3 hover:bg-blue-500/10 text-blue-400 rounded-lg transition" title={t('editTitle')}><Edit3 size={13} /></button>
+                    <button onClick={() => onAbort(row.id)} aria-label={t('cancelTaskAria')} className="p-3 hover:bg-orange-500/10 text-orange-400 rounded-lg transition" title={t('cancelTitle')}><Ban size={13} /></button>
                 </>)}
                 {row.status === 'PROCESSING' && <span className="text-[9px] text-blue-500 font-bold px-1">LIVE</span>}
                 {row.status === 'FAILED' && (
-                    <button onClick={() => onRetry(row)} aria-label="נסה שוב" className="p-3 hover:bg-blue-500/10 text-blue-400 rounded-lg transition" title="נסה שוב"><RotateCcw size={13} /></button>
+                    <button onClick={() => onRetry(row)} aria-label={t('retryLabel')} className="p-3 hover:bg-blue-500/10 text-blue-400 rounded-lg transition" title={t('retryLabel')}><RotateCcw size={13} /></button>
                 )}
-                <button onClick={() => onDelete(row.id)} aria-label="מחק משימה" className="p-3 hover:bg-red-500/10 text-red-500 rounded-lg transition" title="מחק"><Trash2 size={13} /></button>
+                <button onClick={() => onDelete(row.id)} aria-label={t('deleteTaskAria')} className="p-3 hover:bg-red-500/10 text-red-500 rounded-lg transition" title={t('deleteTitle')}><Trash2 size={13} /></button>
             </div>
         </div>
     );
 }
 
 function MissionCardCompact({ row, isCompact, selected, onToggleSelect, statusTimestamps, onEdit, onAbort, onRetry, onDelete, processing }) {
+    const { t } = useLanguage();
     const led = LED_STYLES[row.status] || LED_STYLES.PENDING;
     const pulse = ['PENDING', 'SENT', 'PROCESSING'].includes(row.status);
     const timestampsForRow = statusTimestamps[row.id];
@@ -373,7 +377,7 @@ function MissionCardCompact({ row, isCompact, selected, onToggleSelect, statusTi
     return (
         <div className={`group bg-white dark:bg-[#161b22] border border-gray-100 dark:border-[#30363d] rounded-xl grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-3 transition-all ${isCompact ? 'p-2' : 'p-2.5'} ${processing ? 'opacity-50 pointer-events-none' : ''} ${row.status === 'CANCELLED' ? 'opacity-60' : ''} hover:border-gray-200 dark:hover:border-[#3d444d] hover:shadow-sm`}>
             <div className="flex items-center gap-2">
-                <button onClick={() => onToggleSelect(row.id)} aria-label="בחר משימה" className="shrink-0">
+                <button onClick={() => onToggleSelect(row.id)} aria-label={t('selectTaskAria')} className="shrink-0">
                     {selected ? <CheckSquare size={13} className="text-brand" /> : <Square size={13} className="text-gray-300 dark:text-gray-400" />}
                 </button>
                 <div className="relative w-2 h-2 shrink-0">
@@ -420,14 +424,14 @@ function MissionCardCompact({ row, isCompact, selected, onToggleSelect, statusTi
 
             <div className={`flex items-center gap-1 ${isCompact ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition`}>
                 {row.status === 'PENDING' && (<>
-                    <button onClick={() => onEdit(row)} aria-label="ערוך משימה" className="p-1 hover:bg-blue-500/10 text-blue-400 rounded-md transition" title="ערוך"><Edit3 size={12} /></button>
-                    <button onClick={() => onAbort(row.id)} aria-label="בטל משימה" className="p-1 hover:bg-orange-500/10 text-orange-400 rounded-md transition" title="בטל"><Ban size={12} /></button>
+                    <button onClick={() => onEdit(row)} aria-label={t('editTaskAria')} className="p-1 hover:bg-blue-500/10 text-blue-400 rounded-md transition" title={t('editTitle')}><Edit3 size={12} /></button>
+                    <button onClick={() => onAbort(row.id)} aria-label={t('cancelTaskAria')} className="p-1 hover:bg-orange-500/10 text-orange-400 rounded-md transition" title={t('cancelTitle')}><Ban size={12} /></button>
                 </>)}
                 {row.status === 'PROCESSING' && <span className="text-[8px] text-blue-500 font-bold px-1">LIVE</span>}
                 {row.status === 'FAILED' && (
-                    <button onClick={() => onRetry(row)} aria-label="נסה שוב" className="p-1 hover:bg-blue-500/10 text-blue-400 rounded-md transition" title="נסה שוב"><RotateCcw size={12} /></button>
+                    <button onClick={() => onRetry(row)} aria-label={t('retryLabel')} className="p-1 hover:bg-blue-500/10 text-blue-400 rounded-md transition" title={t('retryLabel')}><RotateCcw size={12} /></button>
                 )}
-                <button onClick={() => onDelete(row.id)} aria-label="מחק משימה" className="p-1 hover:bg-red-500/10 text-red-500 rounded-md transition" title="מחק"><Trash2 size={12} /></button>
+                <button onClick={() => onDelete(row.id)} aria-label={t('deleteTaskAria')} className="p-1 hover:bg-red-500/10 text-red-500 rounded-md transition" title={t('deleteTitle')}><Trash2 size={12} /></button>
             </div>
         </div>
     );
@@ -438,7 +442,8 @@ function MissionCardCompact({ row, isCompact, selected, onToggleSelect, statusTi
 // pushes into `recentEvents`; no mock/fake data).
 // ---------------------------------------------------------------------------
 function Ticker({ events }) {
-    const items = events.length > 0 ? events : ['אין פעילות אחרונה במערכת'];
+    const { t } = useLanguage();
+    const items = events.length > 0 ? events : [t('noRecentActivity')];
     const loopItems = [...items, ...items];
     return (
         <div role="region" aria-label="Recent activity" className="fixed bottom-0 left-0 right-0 h-8 bg-white dark:bg-[#161b22] border-t border-gray-200 dark:border-[#30363d] flex items-center overflow-hidden text-[11px] z-40">
@@ -481,6 +486,7 @@ function trapTabKey(e, container) {
 // COMMAND PALETTE — Ctrl/Cmd+K, wired to real handlers passed in via `items`.
 // ---------------------------------------------------------------------------
 function CommandPalette({ open, onClose, items }) {
+    const { t } = useLanguage();
     const containerRef = React.useRef(null);
 
     useEffect(() => {
@@ -500,11 +506,11 @@ function CommandPalette({ open, onClose, items }) {
     return (
         <div onClick={onClose} className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[200] flex items-start justify-center pt-24 px-4">
             <div ref={containerRef} onClick={e => e.stopPropagation()} onKeyDown={handleKeyDown}
-                role="dialog" aria-modal="true" aria-label="חיפוש פעולה"
+                role="dialog" aria-modal="true" aria-label={t('commandPaletteAria')}
                 className="w-full max-w-lg bg-white dark:bg-[#161b22] rounded-2xl overflow-hidden border border-gray-200 dark:border-[#30363d] shadow-2xl">
                 <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-gray-100 dark:border-[#30363d]">
                     <Search size={15} className="text-gray-400" />
-                    <span className="flex-1 text-sm text-gray-400">חפש פעולה...</span>
+                    <span className="flex-1 text-sm text-gray-400">{t('searchActionPlaceholder')}</span>
                     <span dir="ltr" className="text-[10px] font-mono text-gray-400 bg-gray-100 dark:bg-[#0d1117] px-1.5 py-0.5 rounded">ESC</span>
                 </div>
                 <div className="p-2">
@@ -525,12 +531,14 @@ function CommandPalette({ open, onClose, items }) {
 // ---------------------------------------------------------------------------
 // FACEBOOK ACCOUNT PILL — shows current connected FB account in header
 // ---------------------------------------------------------------------------
-function FacebookAccountPill({ accountName, accountStatus = "מחובר", onAccountChange }) {
+function FacebookAccountPill({ accountName, accountStatus, onAccountChange }) {
+    const { t } = useLanguage();
+    if (accountStatus === undefined) accountStatus = t('connectedLabel');
     const [open, setOpen] = useState(false);
     const [editMode, setEditMode] = useState(false);
     const [newAccount, setNewAccount] = useState(accountName || '');
     const normalizedAccountName = typeof accountName === 'string' ? accountName.trim() : '';
-    const hasConnectedAccount = normalizedAccountName && normalizedAccountName !== 'לא מחובר';
+    const hasConnectedAccount = normalizedAccountName && normalizedAccountName !== t('notConnectedLabel');
 
     const openFacebookProfile = () => {
         if (!hasConnectedAccount) return;
@@ -551,7 +559,7 @@ function FacebookAccountPill({ accountName, accountStatus = "מחובר", onAcco
                 onClick={() => setOpen(!open)}
                 aria-haspopup="true"
                 aria-expanded={open}
-                aria-label={`חשבון פייסבוק מחובר: ${accountName}`}
+                aria-label={t('connectedFbAccountAria', { name: accountName })}
                 style={{
                     display: "flex",
                     alignItems: "center",
@@ -613,7 +621,7 @@ function FacebookAccountPill({ accountName, accountStatus = "מחובר", onAcco
                         type="button"
                         onClick={openFacebookProfile}
                         disabled={!hasConnectedAccount}
-                        title={hasConnectedAccount ? "פתח בפייסבוק" : "אין פרופיל מחובר"}
+                        title={hasConnectedAccount ? t('openInFacebook') : t('noProfileConnected')}
                         style={{
                             width: "100%",
                             padding: "10px 12px",
@@ -647,7 +655,7 @@ function FacebookAccountPill({ accountName, accountStatus = "מחובר", onAcco
                             </div>
                         </div>
                         <div style={{ fontSize: 10, color: "#3b82f6", fontWeight: 700, whiteSpace: "nowrap" }}>
-                            פתח
+                            {t('openLabel')}
                         </div>
                     </button>
                 </div>
@@ -660,6 +668,8 @@ function FacebookAccountPill({ accountName, accountStatus = "מחובר", onAcco
 // MAIN APP
 // ---------------------------------------------------------------------------
 export default function App() {
+    const { lang, t, toggleLang } = useLanguage();
+
     // Core state
     const [groups, setGroups]           = useState([]);
     const [queue, setQueue]             = useState([]);
@@ -935,12 +945,12 @@ export default function App() {
 
     // Content Edit Actions
     const CONTENT_EDIT_ACTIONS = [
-        { id: 'emojis',   icon: <Smile size={11} />,      label: "אמוג'ים",   prompt: t => `הוסף אמוג'ים רלוונטיים לטקסט הזה, אל תשנה את התוכן עצמו:\n\n${t}` },
-        { id: 'shorten',  icon: <Scissors size={11} />,   label: 'קצר',       prompt: t => `קצר את הטקסט הזה בכ-30%, שמור על המסר המרכזי:\n\n${t}` },
-        { id: 'expand',   icon: <AlignLeft size={11} />,  label: 'הרחב',      prompt: t => `הרחב את הטקסט הזה עם פרטים ומשיכה שיווקית, שמור על אותו טון:\n\n${t}` },
-        { id: 'formal',   icon: <Megaphone size={11} />,  label: 'פורמלי',    prompt: t => `תכתוב מחדש את הטקסט הזה בסגנון פורמלי ומקצועי:\n\n${t}` },
-        { id: 'hashtags', icon: <Hash size={11} />,       label: 'האשטאגים',  prompt: t => `הוסף 3-5 האשטאגים רלוונטיים בסוף הטקסט הזה:\n\n${t}` },
-        { id: 'hebrew',   icon: <Languages size={11} />,  label: 'לעברית',    prompt: t => `תרגם את הטקסט הזה לעברית שוטפת ומדויקת:\n\n${t}` },
+        { id: 'emojis',   icon: <Smile size={11} />,      label: t('contentActionEmojis'),   prompt: t => `הוסף אמוג'ים רלוונטיים לטקסט הזה, אל תשנה את התוכן עצמו:\n\n${t}` },
+        { id: 'shorten',  icon: <Scissors size={11} />,   label: t('contentActionShorten'),  prompt: t => `קצר את הטקסט הזה בכ-30%, שמור על המסר המרכזי:\n\n${t}` },
+        { id: 'expand',   icon: <AlignLeft size={11} />,  label: t('contentActionExpand'),   prompt: t => `הרחב את הטקסט הזה עם פרטים ומשיכה שיווקית, שמור על אותו טון:\n\n${t}` },
+        { id: 'formal',   icon: <Megaphone size={11} />,  label: t('contentActionFormal'),   prompt: t => `תכתוב מחדש את הטקסט הזה בסגנון פורמלי ומקצועי:\n\n${t}` },
+        { id: 'hashtags', icon: <Hash size={11} />,       label: t('contentActionHashtags'), prompt: t => `הוסף 3-5 האשטאגים רלוונטיים בסוף הטקסט הזה:\n\n${t}` },
+        { id: 'hebrew',   icon: <Languages size={11} />,  label: t('contentActionToHebrew'), prompt: t => `תרגם את הטקסט הזה לעברית שוטפת ומדויקת:\n\n${t}` },
     ];
 
     // --- DATA FETCHING ---
@@ -1125,7 +1135,7 @@ export default function App() {
             // Update queue
             setQueue(prev => prev.map(q => q.id === tid ? { ...q, status } : q));
 
-            pushEvent(`משימה #${tid} ← ${status}`);
+            pushEvent(t('eventTaskStatus', { id: tid, status }));
 
             // Update groups stats (if group_id is provided)
             if (group_id) {
@@ -1152,10 +1162,10 @@ export default function App() {
         const handleRefresh = () => fetchAllData(true);
         s.on('queue_updated', handleRefresh);
         s.on('data_updated', handleRefresh);
-        s.on('groups_updated', () => { setIsSyncingGroups(false); pushEvent('הקבוצות סונכרנו בהצלחה'); fetchAllData(true); });
-        s.on('groups_sync_failed', ({ error }) => { setIsSyncingGroups(false); showToast(`סנכרון קבוצות נכשל: ${error}`, 'error'); pushEvent(`סנכרון קבוצות נכשל: ${error}`); });
-        s.on('worker_stop_signal', () => { setWorkerStopped(true); pushEvent('Worker הופסק'); fetchAllData(true); });
-        s.on('worker_resumed',      () => { setWorkerStopped(false); pushEvent('Worker חודש בהצלחה'); fetchAllData(true); });
+        s.on('groups_updated', () => { setIsSyncingGroups(false); pushEvent(t('eventGroupsSynced')); fetchAllData(true); });
+        s.on('groups_sync_failed', ({ error }) => { setIsSyncingGroups(false); showToast(t('groupSyncFailed', { error }), 'error'); pushEvent(t('groupSyncFailed', { error })); });
+        s.on('worker_stop_signal', () => { setWorkerStopped(true); pushEvent(t('eventWorkerStopped')); fetchAllData(true); });
+        s.on('worker_resumed',      () => { setWorkerStopped(false); pushEvent(t('eventWorkerResumed')); fetchAllData(true); });
 
         return () => {
             s.off('status_update');
@@ -1187,7 +1197,7 @@ export default function App() {
 
     // --- CLEAR ALL GROUPS ---
     const handleClearAllGroups = async () => {
-        showConfirm('⚠️ פעולה זו תמחק את כל הקבוצות שלך. לא ניתן לשחזר!\n\nהאם אתה בטוח שברצונך להמשיך.', async () => {
+        showConfirm(t('confirmClearAllGroups'), async () => {
             setLoading(true);
             try {
                 // Delete all groups via direct API call
@@ -1195,11 +1205,11 @@ export default function App() {
                 const response = await fetch(`${API_BASE}/groups`, { method: 'DELETE', headers });
                 if (!response.ok) throw new Error('Failed to delete groups');
 
-                showToast('כל הקבוצות נמחקו בהצלחה. סנכרן מחדש כדי לטעון קבוצות.', 'success');
+                showToast(t('allGroupsDeletedToast'), 'success');
                 setSelectedGroups([]);
                 await fetchAllData(true);
             } catch (e) {
-                showToast(`שגיאה: ${e.message}`, 'error');
+                showToast(t('errorWithMessage', { message: e.message }), 'error');
                 console.error('Clear groups error:', e);
             } finally {
                 setLoading(false);
@@ -1280,7 +1290,7 @@ export default function App() {
             }
             const data = await ApiService.createPosts(payload);
             showToast(`Success! Queued ${data.count} posts.`, 'success');
-            pushEvent(`פרסום נוסף ל-${data.count} קבוצות בהצלחה`);
+            pushEvent(t('postsQueuedEvent', { count: data.count }));
             setPostContent(''); setSelectedGroups([]); setScheduleTime('');
             setSelectedFile(null); setMediaPreview(null);
             setLegalAgreed(false);
@@ -1376,17 +1386,17 @@ export default function App() {
     };
 
     const handleFixStuckTasks = async () => {
-        showConfirm('⚠️ פעולה זו תסמן משימות תקועות כ-FAILED. האם להמשיך?', async () => {
+        showConfirm(t('confirmFixStuckTasks'), async () => {
             try {
                 const headers = await getAuthHeaders();
                 const response = await fetch(`${API_BASE}/tasks/fix-stuck`, { method: 'POST', headers });
                 if (!response.ok) throw new Error('Failed to fix stuck tasks');
 
                 const data = await response.json();
-                showToast(`תוקנו ${data.fixed} משימות תקועות`, 'success');
+                showToast(t('stuckTasksFixedToast', { count: data.fixed }), 'success');
                 await fetchAllData(true);
             } catch (e) {
-                showToast(`שגיאה: ${e.message}`, 'error');
+                showToast(t('errorWithMessage', { message: e.message }), 'error');
             }
         });
     };
@@ -1395,7 +1405,7 @@ export default function App() {
         setIsSyncingGroups(true);
         const safetyTimer = setTimeout(() => {
             setIsSyncingGroups(false);
-            showToast('הסנכרון לקח יותר מדי זמן. בדוק שה-extension פועל ופייסבוק פתוח.', 'warning');
+            showToast(t('syncTimeoutWarning'), 'warning');
         }, 90000);
         try {
             const headers = { 'Content-Type': 'application/json', ...(await getAuthHeaders()) };
@@ -1407,11 +1417,11 @@ export default function App() {
             const data = await res.json();
             if (!res.ok || !data.success) {
                 clearTimeout(safetyTimer);
-                throw new Error(data.error || 'הסנכרון נכשל');
+                throw new Error(data.error || t('syncFailedError'));
             }
         } catch (e) {
             clearTimeout(safetyTimer);
-            showToast(`שגיאה: ${e.message}`, 'error');
+            showToast(t('errorWithMessage', { message: e.message }), 'error');
             setIsSyncingGroups(false);
         }
     };
@@ -1528,12 +1538,12 @@ export default function App() {
 
     // Command palette actions (wired to the real handlers above)
     const paletteItems = [
-        { icon: <Plus size={14} />, label: 'משימה חדשה', shortcut: 'N', action: () => openDrawer() },
-        { icon: <StopCircle size={14} />, label: workerStopped ? 'הפעל Worker' : 'עצור Worker', shortcut: 'S', action: workerStopped ? handleResumeWorker : () => setShowStopModal(true) },
-        { icon: <Zap size={14} />, label: 'תקן משימות תקועות', shortcut: 'F', action: handleFixStuckTasks },
-        { icon: <RefreshCw size={14} />, label: 'רענן נתונים', shortcut: 'R', action: () => fetchAllData() },
-        { icon: <BarChart3 size={14} />, label: showStitchAnalytics ? 'הסתר אנליטיקה' : 'אנליטיקה', shortcut: 'A', action: () => setShowStitchAnalytics(p => !p) },
-        { icon: <MonitorSmartphone size={14} />, label: 'מכשירים מחוברים', shortcut: 'D', action: () => setShowWorkers(true) },
+        { icon: <Plus size={14} />, label: t('newTaskLabel'), shortcut: 'N', action: () => openDrawer() },
+        { icon: <StopCircle size={14} />, label: workerStopped ? t('startWorkerLabel') : t('stopWorkerLabel'), shortcut: 'S', action: workerStopped ? handleResumeWorker : () => setShowStopModal(true) },
+        { icon: <Zap size={14} />, label: t('fixStuckTasksLabel'), shortcut: 'F', action: handleFixStuckTasks },
+        { icon: <RefreshCw size={14} />, label: t('refreshDataLabel'), shortcut: 'R', action: () => fetchAllData() },
+        { icon: <BarChart3 size={14} />, label: showStitchAnalytics ? t('hideAnalyticsLabel') : t('analyticsLabel'), shortcut: 'A', action: () => setShowStitchAnalytics(p => !p) },
+        { icon: <MonitorSmartphone size={14} />, label: t('connectedDevicesLabel'), shortcut: 'D', action: () => setShowWorkers(true) },
     ];
 
     // -----------------------------------------------------------------------
@@ -1591,15 +1601,15 @@ export default function App() {
                     <button type="button" onClick={() => setShowPalette(true)}
                         aria-haspopup="dialog" aria-expanded={showPalette}
                         className="hidden md:flex items-center gap-2 text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-gray-200 dark:border-[#30363d] bg-gray-50 dark:bg-[#0d1117] text-gray-500 dark:text-gray-400 hover:border-brand hover:text-brand transition">
-                        <Search size={12} /> חפש פעולה
+                        <Search size={12} /> {t('searchActionButton')}
                         <span dir="ltr" className="text-[9px] font-mono bg-gray-200 dark:bg-[#30363d] px-1.5 py-0.5 rounded">K</span>
                     </button>
 
                     <div className="w-px h-6 bg-gray-200 dark:bg-[#30363d] mx-0.5" />
 
                     <FacebookAccountPill
-                        accountName={currentUser || "\u05dc\u05d0 \u05de\u05d7\u05d5\u05d1\u05e8"}
-                        accountStatus={currentUser ? (currentUserId ? `\u05de\u05d7\u05d5\u05d1\u05e8 • ID ${currentUserId}` : "\u05de\u05d7\u05d5\u05d1\u05e8") : "\u05dc\u05d0 \u05de\u05d7\u05d5\u05d1\u05e8"}
+                        accountName={currentUser || t('notConnectedLabel')}
+                        accountStatus={currentUser ? (currentUserId ? `${t('connectedLabel')} • ID ${currentUserId}` : t('connectedLabel')) : t('notConnectedLabel')}
                     />
 
                     <div className="w-px h-6 bg-gray-200 dark:bg-[#30363d] mx-0.5" />
@@ -1618,8 +1628,15 @@ export default function App() {
                             </button>
                         </>
                     )}
+                    <button onClick={toggleLang}
+                        aria-label={t('toggleLanguage')}
+                        dir="ltr"
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-full transition text-[11px] font-bold tracking-wide text-slate-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-[#242c38] border border-gray-200 dark:border-[#30363d]">
+                        <Languages size={14} />
+                        <span>{lang === 'he' ? 'EN' : 'עב'}</span>
+                    </button>
                     <button onClick={() => setTheme(p => p === 'dark' ? 'light' : 'dark')}
-                        aria-label="החלף ערכת נושא"
+                        aria-label={t('toggleTheme')}
                         className="p-3 hover:bg-gray-200 dark:hover:bg-[#242c38] rounded-full transition text-slate-500 dark:text-gray-400">
                         {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
                     </button>
@@ -1639,7 +1656,7 @@ export default function App() {
                     <div role="alert" aria-live="assertive" className="mt-5 flex items-center justify-between px-4 py-2.5 bg-red-900/20 border border-red-800/50 rounded-xl text-xs">
                         <div className="flex items-center gap-2 text-red-400 font-bold">
                             <StopCircle size={14} />
-                            <span>⏸ Worker מושבת כרגע — לא יבוצעו משימות עד להפעלה מחדש</span>
+                            <span>{t('workerStoppedBanner')}</span>
                         </div>
                         <button type="button" onClick={handleResumeWorker}
                             className="px-3 py-1 bg-green-900/30 border border-green-700/50 text-green-400 rounded font-bold text-[10px] uppercase hover:bg-green-900/50 transition flex items-center gap-1">
@@ -1657,18 +1674,18 @@ export default function App() {
                                     <Sparkles size={14} />
                                 </div>
                                 <div className="min-w-0">
-                                    <div className="text-sm font-bold text-slate-900 dark:text-white">Quick actions</div>
-                                    <div className="text-[11px] text-gray-500 dark:text-gray-400">פעולות מהירות לניהול התור והמערכת שלך</div>
+                                    <div className="text-sm font-bold text-slate-900 dark:text-white">{t('quickActionsTitle')}</div>
+                                    <div className="text-[11px] text-gray-500 dark:text-gray-400">{t('quickActionsSubtitle')}</div>
                                 </div>
                                 <div className="inline-flex items-center gap-2 rounded-full border border-emerald-200 dark:border-emerald-500/25 bg-emerald-50/80 dark:bg-emerald-500/10 px-3 py-1.5">
                                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                                    <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">חשבון מחובר</span>
+                                    <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">{t('connectedAccountLabel')}</span>
                                     <span
                                         dir="ltr"
                                         className="max-w-[220px] truncate text-[11px] font-semibold text-slate-800 dark:text-slate-100"
-                                        title={currentUser || 'לא מחובר'}
+                                        title={currentUser || t('notConnectedLabel')}
                                     >
-                                        {currentUser || 'לא מחובר'}
+                                        {currentUser || t('notConnectedLabel')}
                                     </span>
                                 </div>
                             </div>
@@ -1686,7 +1703,7 @@ export default function App() {
                                         : 'bg-white dark:bg-transparent text-gray-600 dark:text-gray-400 border-gray-200 dark:border-[#30363d] hover:border-indigo-400 hover:text-indigo-600'
                                 }`}>
                                 <BarChart3 size={14} />
-                                {showStitchAnalytics ? 'הסתר אנליטיקה' : 'אנליטיקה'}
+                                {showStitchAnalytics ? t('hideAnalyticsLabel') : t('analyticsLabel')}
                             </button>
 
                             <button
@@ -1711,7 +1728,7 @@ export default function App() {
                         <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 border border-white/20">
                             <Radio size={15} />
                         </span>
-                        <span className="text-[12px] font-extrabold whitespace-nowrap tracking-wide">סנכרון קבוצות</span>
+                        <span className="text-[12px] font-extrabold whitespace-nowrap tracking-wide">{t('syncGroupsButton')}</span>
                         <ChevronLeft size={15} className="opacity-90 group-hover:translate-x-0.5 transition-transform ml-auto" />
                     </button>
 
@@ -1724,7 +1741,7 @@ export default function App() {
                             <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 border border-white/20">
                                 <Send size={15} />
                             </span>
-                            <span className="text-[12px] font-extrabold whitespace-nowrap tracking-wide">פוסט חדש</span>
+                            <span className="text-[12px] font-extrabold whitespace-nowrap tracking-wide">{t('newPostButton')}</span>
                             <ChevronLeft size={15} className="opacity-90 group-hover:translate-x-0.5 transition-transform ml-auto" />
                         </button>
                     )}
@@ -1738,10 +1755,10 @@ export default function App() {
                             <StatusRing stats={stats} />
                             <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2 px-3 w-full">
                                 {[
-                                    { label: 'ממתין',   value: stats.pending,               dot: 'bg-amber-400' },
-                                    { label: 'בעיבוד',   value: stats.processing,            dot: 'bg-blue-400' },
-                                    { label: 'הושלם',   value: stats.completed,             dot: 'bg-emerald-400' },
-                                    { label: 'נכשל',    value: stats.failed + stats.cancelled, dot: 'bg-rose-400' },
+                                    { label: t('statusPending'),   value: stats.pending,               dot: 'bg-amber-400' },
+                                    { label: t('statusProcessing'),   value: stats.processing,            dot: 'bg-blue-400' },
+                                    { label: t('statusCompleted'),   value: stats.completed,             dot: 'bg-emerald-400' },
+                                    { label: t('statusFailed'),    value: stats.failed + stats.cancelled, dot: 'bg-rose-400' },
                                 ].map(s => (
                                     <div key={s.label} className="flex items-center gap-1.5">
                                         <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.dot}`} />
@@ -1754,8 +1771,8 @@ export default function App() {
 
                         <div className="flex flex-col justify-center gap-0 p-2" aria-live="polite">
                             {[
-                                { icon: <Radio size={11} />,   label: 'Mothership', val: serverStatus ? 'מחובר' : 'מנותק', ok: serverStatus },
-                                { icon: <Zap size={11} />,     label: 'Worker',     val: workerStopped ? 'מושבת' : (workerStatus.status === 'ACTIVE' ? 'פעיל' : workerStatus.message), ok: !workerStopped && workerStatus.status === 'ACTIVE' },
+                                { icon: <Radio size={11} />,   label: 'Mothership', val: serverStatus ? t('connectedLabel') : t('disconnectedLabel'), ok: serverStatus },
+                                { icon: <Zap size={11} />,     label: 'Worker',     val: workerStopped ? t('stoppedLabel') : (workerStatus.status === 'ACTIVE' ? t('activeLabel') : workerStatus.message), ok: !workerStopped && workerStatus.status === 'ACTIVE' },
                                 { icon: <Shield size={11} />,  label: 'Extension',  val: `v${integrity.version}`, ltr: true, ok: integrity.status !== 'MISMATCH' },
                             ].map(h => (
                                 <div key={h.label} className="flex items-center gap-1.5 px-1.5 py-0 text-[9px]">
@@ -1776,9 +1793,9 @@ export default function App() {
                             <div className="flex items-center gap-2.5">
                                 <Layers size={15} className="text-brand dark:text-brand-dark shrink-0 mt-0.5" />
                                 <div>
-                                    <div className="text-[14px] font-bold text-gray-900 dark:text-white leading-tight">ניהול המשימות</div>
+                                    <div className="text-[14px] font-bold text-gray-900 dark:text-white leading-tight">{t('taskManagementHeading')}</div>
                                     <div className="text-[10px] text-gray-500 dark:text-gray-400" aria-live="polite">
-                                        {filteredQueue.length} מתוך {queue.length} משימות
+                                        {t('queueCountSummary', { filtered: filteredQueue.length, total: queue.length })}
                                     </div>
                                 </div>
                             </div>
@@ -1805,15 +1822,15 @@ export default function App() {
                                     <input
                                         value={queueSearch}
                                         onChange={(e) => setQueueSearch(e.target.value)}
-                                        aria-label="חיפוש משימות לפי תוכן, קבוצה או סטטוס"
-                                        placeholder="חיפוש לפי תוכן, קבוצה או סטטוס"
+                                        aria-label={t('queueSearchAria')}
+                                        placeholder={t('queueSearchPlaceholder')}
                                         className="w-full sm:w-[220px] xl:w-[240px] pl-3 pr-8 py-1.5 rounded-full border border-gray-200 dark:border-[#30363d] bg-white dark:bg-[#161b22] text-[11px] text-gray-700 dark:text-gray-300 placeholder:text-gray-400 outline-none focus:ring-2 focus:ring-brand"
                                     />
                                     {queueSearch && (
                                         <button
                                             type="button"
                                             onClick={() => setQueueSearch('')}
-                                            aria-label="נקה חיפוש משימות"
+                                            aria-label={t('clearQueueSearchAria')}
                                             className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                                         >
                                             <X size={10} />
@@ -1822,10 +1839,10 @@ export default function App() {
                                 </div>
 
                                 {[
-                                    { key: 'all',    label: `הכל (${queue.length})` },
-                                    { key: 'active', label: `פעיל (${stats.pending + stats.processing})` },
-                                    { key: 'done',   label: `הושלם (${stats.completed})` },
-                                    { key: 'failed', label: `נכשל (${stats.failed + stats.cancelled})` },
+                                    { key: 'all',    label: t('filterAll', { count: queue.length }) },
+                                    { key: 'active', label: t('filterActive', { count: stats.pending + stats.processing }) },
+                                    { key: 'done',   label: t('filterDone', { count: stats.completed }) },
+                                    { key: 'failed', label: t('filterFailed', { count: stats.failed + stats.cancelled }) },
                                 ].map(({ key, label }) => (
                                     <button key={key} onClick={() => setQueueFilter(key)}
                                         className={`text-[10px] font-semibold px-2.5 py-1.5 rounded-full border transition ${queueFilter === key ? 'bg-brand text-white border-brand' : 'bg-white dark:bg-transparent text-gray-600 dark:text-gray-400 border-gray-200 dark:border-[#30363d] hover:border-brand hover:text-brand'}`}>
@@ -1839,33 +1856,33 @@ export default function App() {
                                     <button onClick={handleCancelAll} disabled={isCancelling}
                                         className="flex items-center gap-1.5 bg-orange-500/10 border border-orange-500/30 text-orange-500 px-2.5 py-1.5 rounded-full text-[10px] font-bold hover:bg-orange-500 hover:text-white transition disabled:opacity-50">
                                         {isCancelling ? <RefreshCw size={10} className="animate-spin" /> : <Ban size={10} />}
-                                        בטל {cancellablePending}
+                                        {t('cancelCountButton', { count: cancellablePending })}
                                     </button>
                                 )}
                                 {stats.processing > 0 && (
                                     <button onClick={handleResetStuckTasks} disabled={isResettingStuck}
                                         className="flex items-center gap-1.5 bg-rose-500/10 border border-rose-500/30 text-rose-500 px-2.5 py-1.5 rounded-full text-[10px] font-bold hover:bg-rose-500 hover:text-white transition disabled:opacity-50">
                                         {isResettingStuck ? <RefreshCw size={10} className="animate-spin" /> : <AlertTriangle size={10} />}
-                                        שחרר {stats.processing}
+                                        {t('releaseCountButton', { count: stats.processing })}
                                     </button>
                                 )}
                                 <button onClick={toggleAll}
                                     className="text-[10px] font-bold px-2.5 py-1.5 rounded-full border transition bg-transparent text-slate-500 border-gray-300 dark:border-gray-600 dark:text-gray-400 hover:border-brand hover:text-brand">
-                                    {selectedTaskIds.length > 0 && selectedTaskIds.length === filteredQueue.length ? 'בטל בחירה' : 'בחר הכל'}
+                                    {selectedTaskIds.length > 0 && selectedTaskIds.length === filteredQueue.length ? t('deselectAllButton') : t('selectAllButton')}
                                 </button>
                                 <button onClick={toggleCompact}
                                     className={`text-[10px] font-bold px-2.5 py-1.5 rounded-full border transition ${isCompact ? 'bg-brand text-white border-brand' : 'bg-transparent text-slate-500 border-gray-300 dark:border-gray-600 dark:text-gray-400'}`}>
-                                    {isCompact ? 'תצוגה מלאה' : 'תצוגה קומפקטית'}
+                                    {isCompact ? t('fullViewButton') : t('compactViewButton')}
                                 </button>
                                 <button type="button" onClick={toggleQueueCollapsed}
                                     aria-expanded={!isQueueCollapsed}
                                     className={`text-[10px] font-bold px-2.5 py-1.5 rounded-full border transition ${isQueueCollapsed ? 'bg-slate-900 text-white border-slate-900 dark:bg-white dark:text-slate-900 dark:border-white' : 'bg-transparent text-slate-500 border-gray-300 dark:border-gray-600 dark:text-gray-400 hover:border-brand hover:text-brand'}`}>
-                                    {isQueueCollapsed ? 'הצג תור' : 'כווץ תור'}
+                                    {isQueueCollapsed ? t('showQueueButton') : t('collapseQueueButton')}
                                 </button>
                                 {selectedTaskIds.length > 0 && (
                                     <button onClick={handleBulkDelete}
                                         className="bg-red-500/10 border border-red-500/30 text-red-500 px-2.5 py-1.5 rounded-full text-[10px] font-bold hover:bg-red-500 hover:text-white transition">
-                                        מחק {selectedTaskIds.length}
+                                        {t('deleteCountButton', { count: selectedTaskIds.length })}
                                     </button>
                                 )}
                             </div>
@@ -1904,7 +1921,7 @@ export default function App() {
                 role="dialog"
                 aria-modal={showDrawer}
                 aria-hidden={!showDrawer}
-                aria-label="משימה חדשה"
+                aria-label={t('newTaskLabel')}
                 onKeyDown={(e) => {
                     if (!showDrawer) return;
                     if (e.key === 'Escape') { e.stopPropagation(); closeDrawer(); return; }
@@ -1915,9 +1932,9 @@ export default function App() {
                     <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-[#30363d]">
                         <div className="flex items-center gap-2">
                             <Rocket size={16} className="text-brand dark:text-brand-dark" />
-                            <span className="font-bold text-slate-900 dark:text-white text-[15px]">משימה חדשה</span>
+                            <span className="font-bold text-slate-900 dark:text-white text-[15px]">{t('newTaskLabel')}</span>
                         </div>
-                        <button type="button" onClick={closeDrawer} aria-label="סגור" className="p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242c38] text-gray-400 transition">
+                        <button type="button" onClick={closeDrawer} aria-label={t('closeAria')} className="p-3 rounded-lg hover:bg-gray-100 dark:hover:bg-[#242c38] text-gray-400 transition">
                             <X size={16} />
                         </button>
                     </div>
@@ -1928,14 +1945,14 @@ export default function App() {
                         <div className="bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-2xl p-5 space-y-3">
                             <div className="flex justify-between items-center">
                                 <label htmlFor="post-content-textarea" className="text-[10px] font-bold text-gray-700 dark:text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                                    <span className="w-1 h-1 bg-brand rounded-full" /> תוכן הפוסט
+                                    <span className="w-1 h-1 bg-brand rounded-full" /> {t('postContentLabel')}
                                 </label>
                                 <div className="flex items-center gap-2">
                                     <button
                                         type="button"
                                         onClick={() => setUseVariants(p => !p)}
                                         aria-pressed={useVariants}
-                                        title="שלח גרסאות תוכן שונות לקבוצות שונות (round-robin) ופלח את התוצאות באנליטיקס"
+                                        title={t('variantsToggleTitle')}
                                         className={`text-[10px] font-bold uppercase flex items-center gap-1 px-2 py-0.5 rounded border transition ${useVariants ? 'bg-sky-600 text-white border-sky-600' : 'text-sky-400 border-sky-800/50 hover:bg-sky-900/20'}`}>
                                         A/B {useVariants && `(${variants.length})`}
                                     </button>
@@ -1948,7 +1965,7 @@ export default function App() {
                                     <button
                                         type="button"
                                         onClick={() => setShowLibraryPanel(p => !p)}
-                                        aria-label="תבניות שמורות"
+                                        aria-label={t('savedTemplatesAria')}
                                         aria-expanded={showLibraryPanel}
                                         className={`text-[10px] font-bold uppercase flex items-center gap-1 px-2 py-0.5 rounded border transition ${showLibraryPanel ? 'bg-amber-600 text-white border-amber-600' : 'text-amber-400 border-amber-800/50 hover:bg-amber-900/20'}`}>
                                         <Layers size={11} /> Library {postTemplates.length > 0 && `(${postTemplates.length})`}
@@ -1960,15 +1977,15 @@ export default function App() {
                             {showLibraryPanel && (
                                 <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-lg p-2 space-y-1">
                                     {postTemplates.length === 0
-                                        ? <p className="text-[10px] text-gray-700 dark:text-gray-400 text-center py-2">אין תבניות שמורות עדיין.</p>
-                                        : postTemplates.map(t => (
-                                            <div key={t.id} className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-gray-50 dark:hover:bg-white/5 group">
-                                                <button type="button" onClick={() => handleLoadTemplate(t)} className="flex items-center gap-2 flex-1 text-left overflow-hidden">
+                                        ? <p className="text-[10px] text-gray-700 dark:text-gray-400 text-center py-2">{t('noTemplatesSavedYet')}</p>
+                                        : postTemplates.map(tpl => (
+                                            <div key={tpl.id} className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-gray-50 dark:hover:bg-white/5 group">
+                                                <button type="button" onClick={() => handleLoadTemplate(tpl)} className="flex items-center gap-2 flex-1 text-left overflow-hidden">
                                                     <Layers size={12} className="text-amber-400 shrink-0" />
-                                                    <span className="text-xs text-gray-700 dark:text-gray-300 font-medium truncate">{t.name}</span>
+                                                    <span className="text-xs text-gray-700 dark:text-gray-300 font-medium truncate">{tpl.name}</span>
                                                 </button>
-                                                <button type="button" onClick={(e) => handleDeleteTemplate(t.id, e)}
-                                                    aria-label={`מחק תבנית ${t.name}`}
+                                                <button type="button" onClick={(e) => handleDeleteTemplate(tpl.id, e)}
+                                                    aria-label={t('deleteTemplateAria', { name: tpl.name })}
                                                     className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-500/10 rounded transition">
                                                     <Trash2 size={11} />
                                                 </button>
@@ -1989,7 +2006,7 @@ export default function App() {
 
                                     {/* Placeholder tokens — resolved server-side in POST /api/posts (resolvePlaceholders) */}
                                     <p className="text-[9px] text-gray-400 dark:text-gray-500 -mt-1">
-                                        תגיות זמינות: <code className="font-mono">{'{{GROUP_NAME}}'}</code>{' '}
+                                        {t('availableTagsLabel')} <code className="font-mono">{'{{GROUP_NAME}}'}</code>{' '}
                                         <code className="font-mono">{'{{GROUP_URL}}'}</code>{' '}
                                         <code className="font-mono">{'{{DATE}}'}</code>{' '}
                                         <code className="font-mono">{'{{FB_USER}}'}</code>
@@ -1998,7 +2015,7 @@ export default function App() {
                             ) : (
                                 <div className="space-y-2.5">
                                     <p className="text-[9px] text-gray-400 dark:text-gray-500">
-                                        כל קבוצה תקבל אחת מהגרסאות למטה, לפי סבב (round-robin). התוצאות יפולחו לפי גרסה באנליטיקס.
+                                        {t('variantsExplanation')}
                                     </p>
                                     {variants.map((v, i) => (
                                         <div key={i} className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-lg p-2.5 space-y-1.5">
@@ -2008,10 +2025,10 @@ export default function App() {
                                                     value={v.label}
                                                     onChange={e => setVariants(p => p.map((x, xi) => xi === i ? { ...x, label: e.target.value } : x))}
                                                     className="text-[10px] font-bold uppercase bg-transparent border-b border-gray-300 dark:border-gray-600 text-sky-500 dark:text-sky-400 w-20 outline-none focus:border-sky-500"
-                                                    aria-label={`שם גרסה ${i + 1}`} />
+                                                    aria-label={t('variantNameAria', { n: i + 1 })} />
                                                 {variants.length > 1 && (
                                                     <button type="button" onClick={() => setVariants(p => p.filter((_, xi) => xi !== i))}
-                                                        aria-label={`הסר גרסה ${v.label}`}
+                                                        aria-label={t('removeVariantAria', { label: v.label })}
                                                         className="text-gray-400 hover:text-red-500 transition">
                                                         <Trash2 size={12} />
                                                     </button>
@@ -2019,7 +2036,7 @@ export default function App() {
                                             </div>
                                             <textarea
                                                 className="w-full h-20 bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-lg p-2.5 text-sm text-slate-800 dark:text-white focus:ring-2 focus:ring-sky-500 focus:ring-offset-0 outline-none transition resize-none"
-                                                placeholder={`תוכן גרסה ${v.label}...`}
+                                                placeholder={t('variantContentPlaceholder', { label: v.label })}
                                                 value={v.content}
                                                 onChange={e => setVariants(p => p.map((x, xi) => xi === i ? { ...x, content: e.target.value } : x))} />
                                         </div>
@@ -2027,7 +2044,7 @@ export default function App() {
                                     <button type="button"
                                         onClick={() => setVariants(p => [...p, { label: String.fromCharCode(65 + p.length), content: '' }])}
                                         className="text-[10px] font-bold uppercase text-sky-500 dark:text-sky-400 hover:underline">
-                                        + הוסף גרסה
+                                        {t('addVariantButton')}
                                     </button>
                                 </div>
                             )}
@@ -2067,7 +2084,7 @@ export default function App() {
                                 </div>
                                 <button
                                     onClick={() => setUseAiSpin(!useAiSpin)}
-                                    aria-label={useAiSpin ? 'כבה AI Smart Spin' : 'הפעל AI Smart Spin'}
+                                    aria-label={useAiSpin ? t('disableAiSpinAria') : t('enableAiSpinAria')}
                                     aria-pressed={useAiSpin}
                                     className={`relative inline-flex h-5 w-10 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-brand focus:ring-offset-0 ${useAiSpin ? 'bg-brand' : 'bg-gray-300 dark:bg-gray-700'}`}
                                 >
@@ -2080,11 +2097,11 @@ export default function App() {
                         <div className="bg-gray-50 dark:bg-[#0d1117] border border-gray-200 dark:border-[#30363d] rounded-2xl p-5 space-y-3">
                             <div className="flex justify-between items-center">
                                 <label className="text-[10px] font-bold text-gray-700 dark:text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                                    <span className="w-1 h-1 bg-brand rounded-full" /> קובץ מדיה
+                                    <span className="w-1 h-1 bg-brand rounded-full" /> {t('mediaFileLabel')}
                                 </label>
                                 {selectedFile && (
                                     <button onClick={clearMedia} className="text-[10px] text-red-500 hover:text-red-400 font-bold uppercase flex items-center gap-1 transition">
-                                        <X size={12} /> הסר
+                                        <X size={12} /> {t('removeLabel')}
                                     </button>
                                 )}
                             </div>
@@ -2092,7 +2109,7 @@ export default function App() {
                                 <label className="cursor-pointer flex items-center gap-2 px-3 py-2.5 bg-white dark:bg-[#161b22] border border-dashed border-gray-300 dark:border-[#30363d] rounded-lg hover:border-brand transition group w-full">
                                     <Paperclip size={16} className="text-gray-400 group-hover:text-brand transition" />
                                     <span className="text-xs text-gray-500 group-hover:text-brand transition font-medium">
-                                        לחץ להעלאת קובץ מדיה
+                                        {t('uploadMediaPrompt')}
                                     </span>
                                     <input type="file" className="hidden" accept="image/*,video/*" onChange={handleFileSelect} />
                                 </label>
@@ -2115,14 +2132,14 @@ export default function App() {
                             {/* Facebook User Selector */}
                             <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-800/40 rounded-lg p-3">
                                 <label htmlFor="current-fb-user" className="text-[9px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-widest block mb-2">
-                                    👤 Facebook Account (בחר את חשבון הפייסבוק לפרסום)
+                                    {t('fbAccountSelectorLabel')}
                                 </label>
                                 <input
                                     id="current-fb-user"
                                     type="text"
                                     value={currentUser}
                                     onChange={(e) => setCurrentUser(e.target.value)}
-                                    placeholder="כתוב שם יוזר (למשל: alice, bob)"
+                                    placeholder={t('fbUsernamePlaceholder')}
                                     className="w-full px-3 py-2 rounded-lg text-[12px] border border-amber-300 dark:border-amber-800/50 bg-white dark:bg-[#161b22] text-gray-800 dark:text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-amber-500"
                                 />
                                 {currentUser && (
@@ -2131,7 +2148,7 @@ export default function App() {
                                             onClick={() => setCurrentUser('')}
                                             className="px-2 py-1 bg-red-500 text-white text-[9px] rounded hover:bg-red-600 transition"
                                         >
-                                            נקה
+                                            {t('clearLabel')}
                                         </button>
                                     </div>
                                 )}
@@ -2140,55 +2157,55 @@ export default function App() {
                             {blockedGroups.length > 0 && (
                                 <div className="bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded-lg p-2.5 mb-2.5">
                                     <p className="text-[10px] text-orange-700 dark:text-orange-300 font-medium">
-                                        ⏳ <strong>{blockedGroups.length} קבוצה{blockedGroups.length > 1 ? 'ות' : ''}</strong> מחכ{blockedGroups.length > 1 ? 'ות' : 'ה'} לאישור מנהל בפייסבוק
+                                        ⏳ <strong>{blockedGroups.length} {blockedGroups.length > 1 ? t('groupWordPlural') : t('groupWordSingular')}</strong> {blockedGroups.length > 1 ? t('waitingPlural') : t('waitingSingular')} {t('forAdminApprovalOnFacebook')}
                                     </p>
                                     <p className="text-[9px] text-orange-600 dark:text-orange-400 mt-1">
-                                        {blockedGroups.length === 1 ? `"${blockedGroups[0].name}"` : `כולל: ${blockedGroups.slice(0, 3).map(g => `"${g.name}"`).join(', ')}${blockedGroups.length > 3 ? ` ועוד ${blockedGroups.length - 3}` : ''}`}
+                                        {blockedGroups.length === 1 ? `"${blockedGroups[0].name}"` : `${t('includingLabel')} ${blockedGroups.slice(0, 3).map(g => `"${g.name}"`).join(', ')}${blockedGroups.length > 3 ? ` ${t('andMoreCount', { count: blockedGroups.length - 3 })}` : ''}`}
                                     </p>
                                     <p className="text-[9px] text-orange-600 dark:text-orange-400 mt-1.5">
-                                        אתה לא יכול לשלוח אליהן משימות חדשות עד שמנהלי הקבוצה יאשרו או יכבו את ה-moderation.
+                                        {t('blockedGroupsExplanation')}
                                     </p>
                                 </div>
                             )}
 
                             <div className="flex justify-between items-center flex-wrap gap-1.5">
                                 <label className="text-[10px] font-bold text-gray-700 dark:text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                                    <span className="w-1 h-1 bg-brand rounded-full" /> בחר קבוצות ({selectedGroups.length})
+                                    <span className="w-1 h-1 bg-brand rounded-full" /> {t('selectGroupsLabel', { count: selectedGroups.length })}
                                 </label>
                                 <div className="flex items-center gap-1.5 flex-wrap">
                                     <button
                                         onClick={() => setSortSelectedFirst(p => !p)}
-                                        title="הצג נבחרות ראשונות"
+                                        title={t('showSelectedFirstTitle')}
                                         className={`text-[9px] font-black uppercase px-2 py-0.5 rounded border transition ${sortSelectedFirst ? 'bg-brand text-white border-brand' : 'text-brand dark:text-brand-dark border-brand/30 hover:bg-brand-soft dark:hover:bg-brand/10'}`}>
-                                        ★ נבחרות
+                                        {t('selectedStarButton')}
                                     </button>
                                     {customGroupOrder.length > 0 && (
                                         <button onClick={resetGroupOrder}
-                                            title="הצג נבחרות ראשונות"
+                                            title={t('showSelectedFirstTitle')}
                                             className="text-[9px] font-black uppercase px-2 py-0.5 rounded border text-gray-500 border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition">
-                                        ↺ אפס
+                                        {t('resetOrderButton')}
                                         </button>
                                     )}
                                     <button
                                         onClick={handleSyncGroups}
                                         disabled={isSyncingGroups}
-                                        title="הצג נבחרות ראשונות"
+                                        title={t('showSelectedFirstTitle')}
                                         className="text-[9px] font-black uppercase flex items-center gap-1 px-2 py-0.5 rounded border transition text-green-600 dark:text-green-400 border-green-300 dark:border-green-800/50 hover:bg-green-50 dark:hover:bg-green-900/20 disabled:opacity-50">
                                         <RefreshCw size={10} className={isSyncingGroups ? 'animate-spin' : ''} />
-                                        {isSyncingGroups ? 'מסנכרן...' : 'FB'}
+                                        {isSyncingGroups ? t('syncingEllipsis') : 'FB'}
                                     </button>
                                     <button
                                         onClick={handleClearAllGroups}
                                         disabled={loading || groups.length === 0}
-                                        title="מחק את כל הקבוצות וסנכרן מחדש"
+                                        title={t('deleteAllGroupsTitle')}
                                         className="text-[9px] font-black uppercase flex items-center gap-1 px-2 py-0.5 rounded border transition text-red-500 border-red-300 dark:border-red-800/50 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50">
                                         <Trash2 size={10} />
-                                        מחק הכל
+                                        {t('deleteAllButton')}
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => setShowFoldersPanel(p => !p)}
-                                        aria-label="תיקיות שמורות"
+                                        aria-label={t('savedFoldersAria')}
                                         aria-expanded={showFoldersPanel}
                                         className={`text-[9px] font-black uppercase flex items-center gap-1 px-2 py-0.5 rounded border transition ${showFoldersPanel ? 'bg-brand text-white border-brand' : 'text-brand dark:text-brand-dark border-brand/30 hover:bg-brand-soft dark:hover:bg-brand/10'}`}>
                                         <Folder size={10} /> {groupSets.length > 0 && `(${groupSets.length})`}
@@ -2196,7 +2213,7 @@ export default function App() {
                                     <button
                                         onClick={() => selectedGroups.length === groups.length ? setSelectedGroups([]) : setSelectedGroups(groups.map(g => g.id))}
                                         className="text-[9px] text-brand dark:text-brand-dark font-black hover:underline uppercase transition">
-                                        {selectedGroups.length === groups.length ? 'נקה' : 'הכל'}
+                                        {selectedGroups.length === groups.length ? t('clearLabel') : t('allLabel')}
                                     </button>
                                 </div>
                             </div>
@@ -2205,7 +2222,7 @@ export default function App() {
                             {showFoldersPanel && (
                                 <div className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-lg p-2 space-y-1">
                                     {groupSets.length === 0
-                                        ? <p className="text-[10px] text-gray-700 dark:text-gray-400 text-center py-2">אין תיקיות שמורות עדיין.</p>
+                                        ? <p className="text-[10px] text-gray-700 dark:text-gray-400 text-center py-2">{t('noFoldersSavedYet')}</p>
                                         : groupSets.map(set => (
                                             <div key={set.id} className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-gray-50 dark:hover:bg-white/5 group">
                                                 <button onClick={() => handleLoadFolder(set)} className="flex items-center gap-2 flex-1 text-left">
@@ -2214,7 +2231,7 @@ export default function App() {
                                                     <span className="text-[10px] text-gray-400 shrink-0">{set.group_ids?.length || 0}</span>
                                                 </button>
                                                 <button type="button" onClick={() => handleDeleteFolder(set.id)}
-                                                    aria-label={`מחק תיקייה ${set.name}`}
+                                                    aria-label={t('deleteFolderAria', { name: set.name })}
                                                     className="opacity-0 group-hover:opacity-100 p-1 text-red-500 hover:bg-red-500/10 rounded transition">
                                                     <Trash2 size={11} />
                                                 </button>
@@ -2228,8 +2245,8 @@ export default function App() {
                             {selectedGroups.length > 0 && (
                                 <div className="bg-brand-soft dark:bg-brand/10 border border-brand/20 rounded-lg p-2">
                                     <div className="flex items-center justify-between mb-1.5">
-                                        <span className="text-[9px] font-black text-brand dark:text-brand-dark uppercase tracking-widest">{selectedGroups.length} נבחרו</span>
-                                        <button onClick={() => setSelectedGroups([])} className="text-[9px] text-red-500 hover:text-red-400 font-bold uppercase transition">נקה הכל</button>
+                                        <span className="text-[9px] font-black text-brand dark:text-brand-dark uppercase tracking-widest">{t('selectedCountLabel', { count: selectedGroups.length })}</span>
+                                        <button onClick={() => setSelectedGroups([])} className="text-[9px] text-red-500 hover:text-red-400 font-bold uppercase transition">{t('clearAllButton')}</button>
                                     </div>
                                     <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto custom-scrollbar">
                                         {selectedGroups.map(id => {
@@ -2239,7 +2256,7 @@ export default function App() {
                                                 <span key={id} className="inline-flex items-center gap-1 bg-brand/10 border border-brand/30 text-brand dark:text-brand-dark text-[10px] px-2 py-0.5 rounded-full max-w-[140px]">
                                                     <span className="truncate" dir="rtl" title={g.name}>{g.name}</span>
                                                     <button type="button" onClick={() => setSelectedGroups(p => p.filter(x => x !== id))}
-                                                        aria-label={`הסר קבוצה ${g.name}`}
+                                                        aria-label={t('removeGroupAria', { name: g.name })}
                                                         className="shrink-0 hover:text-red-500 transition">
                                                         <X size={9} />
                                                     </button>
@@ -2254,12 +2271,12 @@ export default function App() {
                             <div className="space-y-2">
                                 <div className="relative">
                                     <Search size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                                    <input type="text" placeholder="חיפוש קבוצות..." dir="rtl"
-                                        aria-label="חיפוש קבוצות"
+                                    <input type="text" placeholder={t('searchGroupsPlaceholder')} dir="rtl"
+                                        aria-label={t('searchGroupsAria')}
                                         value={groupSearch} onChange={e => setGroupSearch(e.target.value)}
                                         className="w-full pr-7 pl-7 py-2 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-lg text-xs text-slate-700 dark:text-gray-300 placeholder-gray-400 focus:ring-2 focus:ring-brand focus:ring-offset-0 outline-none transition" />
                                     {groupSearch && (
-                                        <button onClick={() => setGroupSearch('')} aria-label="נקה חיפוש" className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition">
+                                        <button onClick={() => setGroupSearch('')} aria-label={t('clearSearchAria')} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition">
                                             <X size={11} />
                                         </button>
                                     )}
@@ -2267,7 +2284,7 @@ export default function App() {
 
                                 {groupSearch && (
                                     <div className="flex flex-wrap gap-1.5 animate-in fade-in slide-in-from-top-1 duration-200">
-                                        <button onClick={() => handleBulkSelectFiltered('all')} className="text-[9px] font-black uppercase px-2 py-1 bg-brand/10 text-brand dark:text-brand-dark border border-brand/30 rounded hover:bg-brand/20 transition">בחר הכל ({filteredGroups.length})</button>
+                                        <button onClick={() => handleBulkSelectFiltered('all')} className="text-[9px] font-black uppercase px-2 py-1 bg-brand/10 text-brand dark:text-brand-dark border border-brand/30 rounded hover:bg-brand/20 transition">{t('selectAllFilteredButton', { count: filteredGroups.length })}</button>
                                         <button onClick={() => handleBulkSelectFiltered(5)} className="text-[9px] font-black uppercase px-2 py-1 bg-gray-100 dark:bg-white/5 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-white/10 rounded hover:bg-gray-200 dark:hover:bg-white/10 transition">Top 5</button>
                                         <button onClick={() => handleBulkSelectFiltered(10)} className="text-[9px] font-black uppercase px-2 py-1 bg-gray-100 dark:bg-white/5 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-white/10 rounded hover:bg-gray-200 dark:hover:bg-white/10 transition">Top 10</button>
                                         <button onClick={() => handleBulkSelectFiltered(20)} className="text-[9px] font-black uppercase px-2 py-1 bg-gray-100 dark:bg-white/5 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-white/10 rounded hover:bg-gray-200 dark:hover:bg-white/10 transition">Top 20</button>
@@ -2279,7 +2296,7 @@ export default function App() {
                             {/* Group List with Drag-and-Drop */}
                             <div className="max-h-48 overflow-y-auto pr-1 custom-scrollbar">
                                 {filteredGroups.length === 0
-                                    ? <p className="text-[10px] text-gray-500 text-center py-4">{groupSearch ? `אין תוצאות ל- "${groupSearch}"` : 'אין קבוצות זמינות עדיין.'}</p>
+                                    ? <p className="text-[10px] text-gray-500 text-center py-4">{groupSearch ? t('noGroupsMatchSearch', { query: groupSearch }) : t('noGroupsAvailableYet')}</p>
                                     : filteredGroups.map(g => (
                                     <div key={g.id}>
                                         <button
@@ -2292,7 +2309,7 @@ export default function App() {
                                             onClick={() => setSelectedGroups(p => p.includes(g.id) ? p.filter(x => x !== g.id) : [...p, g.id])}
                                             aria-pressed={selectedGroups.includes(g.id)}
                                             aria-label={g.name}
-                                            title={g.requires_moderation ? 'קבוצה זו מחכה לאישור מנהל בפייסבוק' : undefined}
+                                            title={g.requires_moderation ? t('groupPendingApprovalTitle') : undefined}
                                             className={`group/item w-full flex items-center gap-2 px-2.5 py-2.5 rounded-xl cursor-pointer select-none transition-all duration-150 border mb-1.5 text-right ${
                                                 draggingGroupId === g.id
                                                     ? 'opacity-40 scale-95'
@@ -2315,13 +2332,13 @@ export default function App() {
                                             <span className="flex-1 min-w-0" dir="rtl">
                                                 <span className={`text-[13px] leading-snug font-semibold truncate block transition-colors ${selectedGroups.includes(g.id) ? 'text-brand dark:text-brand-dark' : g.requires_moderation ? 'text-orange-700 dark:text-orange-300' : 'text-slate-800 dark:text-gray-100 group-hover/item:text-slate-900 dark:group-hover/item:text-white'}`}
                                                     title={g.name}>{g.name}</span>
-                                                {g.requires_moderation && <span className="text-[9px] text-orange-600 dark:text-orange-400 font-medium">⏳ מחכה לאישור</span>}
+                                                {g.requires_moderation && <span className="text-[9px] text-orange-600 dark:text-orange-400 font-medium">{t('pendingApprovalBadge')}</span>}
                                             </span>
                                             {/* Health score — derived from posts history server-side (server/index.cjs computeGroupHealth); null = no history yet, badge hidden */}
                                             {typeof g.health_score === 'number' && (
                                                 <span
                                                     onClick={e => e.stopPropagation()}
-                                                    title={`ציון בריאות: ${g.health_score}/100`}
+                                                    title={t('healthScoreTitle', { score: g.health_score })}
                                                     className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded ${
                                                         g.health_score >= 70 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                                                         : g.health_score >= 40 ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
@@ -2335,7 +2352,7 @@ export default function App() {
                                                 role="button"
                                                 tabIndex={0}
                                                 onClick={e => { e.stopPropagation(); setTzInputValue(g.timezone || ''); setTzEditorGroupId(p => p === g.id ? null : g.id); }}
-                                                title={g.timezone ? `אזור זמן: ${g.timezone}` : 'תייג אזור זמן לקבוצה (ידני)'}
+                                                title={g.timezone ? t('timezoneTagTitle', { tz: g.timezone }) : t('tagTimezoneManual')}
                                                 className={`shrink-0 p-1 rounded transition ${g.timezone ? 'text-sky-500 dark:text-sky-400' : 'text-gray-300 dark:text-gray-600 hover:text-gray-500'}`}>
                                                 <Clock size={12} />
                                             </span>
@@ -2353,13 +2370,13 @@ export default function App() {
                                                     value={tzInputValue}
                                                     onChange={e => setTzInputValue(e.target.value)}
                                                     onKeyDown={e => e.key === 'Enter' && handleSaveGroupTimezone(g)}
-                                                    placeholder='לדוגמה: Asia/Jerusalem'
+                                                    placeholder={t('timezoneExamplePlaceholder')}
                                                     dir="ltr"
                                                     className="flex-1 text-[11px] bg-white dark:bg-[#161b22] border border-sky-300 dark:border-sky-700 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-sky-500" />
                                                 <button type="button" onClick={() => handleSaveGroupTimezone(g)}
-                                                    className="text-[10px] font-bold text-sky-600 dark:text-sky-400 hover:underline shrink-0">שמור</button>
+                                                    className="text-[10px] font-bold text-sky-600 dark:text-sky-400 hover:underline shrink-0">{t('saveLabel')}</button>
                                                 <button type="button" onClick={() => setTzEditorGroupId(null)}
-                                                    className="text-[10px] text-gray-400 hover:text-gray-600 shrink-0">בטל</button>
+                                                    className="text-[10px] text-gray-400 hover:text-gray-600 shrink-0">{t('cancelTitle')}</button>
                                             </div>
                                         )}
                                     </div>

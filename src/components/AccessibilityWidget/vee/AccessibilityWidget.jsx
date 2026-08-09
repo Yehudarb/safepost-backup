@@ -5,12 +5,14 @@ import AccessibilityStatement from '@/pages/AccessibilityStatement';
 
 import A11yPanel from './A11yPanel';
 import { useA11y } from './useA11y';
+import { useLanguage } from '@/lib/i18n';
 
 const FOCUSABLE_SELECTOR =
     'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), ' +
     'select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export default function AccessibilityWidget() {
+    const { t } = useLanguage();
     const a11y = useA11y();
     const [open, setOpen] = useState(false);
     const [showStatement, setShowStatement] = useState(false);
@@ -65,7 +67,7 @@ export default function AccessibilityWidget() {
     }, [open, close, showStatement]);
 
     const handleFeedback = useCallback(() => {
-        window.location.href = `mailto:support@safepost.app?subject=${encodeURIComponent('משוב נגישות - SafePost')}`;
+        window.location.href = `mailto:support@safepost.app?subject=${encodeURIComponent(t('a11yFeedbackEmailSubject'))}`;
     }, []);
 
     const handleOpenStatement = useCallback(() => {
@@ -104,7 +106,7 @@ export default function AccessibilityWidget() {
                 ref={buttonRef}
                 type="button"
                 onClick={() => (open ? close() : setOpen(true))}
-                aria-label="הגדרות נגישות"
+                aria-label={t('a11yFabLabel')}
                 aria-expanded={open}
                 aria-haspopup="dialog"
                 className="fixed rounded-full flex items-center justify-center text-white hover:brightness-110 transition"

@@ -2,6 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { generateA11yCSS, SIMPLE_FLAGS, CONTRAST_FLAGS, computeFilter, lineHeightValue, letterSpacingValue } from './a11y-css';
 import { startReadingGuide, stopReadingGuide } from './reading-guide';
+import { translations as tApp } from '@/lib/translations.app';
+import { translations as tComponents } from '@/lib/translations.components';
+
+const dict = { en: { ...tApp.en, ...tComponents.en }, he: { ...tApp.he, ...tComponents.he } };
+function t(key) {
+    const lang = (document.documentElement.lang === 'he') ? 'he' : 'en';
+    return dict[lang][key] ?? dict.en[key] ?? key;
+}
 
 export const STORAGE_KEY = 'safepost_a11y';
 const STYLE_TAG_ID = 'a11y-v-styles';
@@ -79,12 +87,12 @@ function ensureSkipLinks(active) {
     container = document.createElement('nav');
     container.id = SKIP_LINKS_ID;
     container.className = 'a11y-v-skip-links';
-    container.setAttribute('aria-label', 'קישורי דילוג לאזורי העמוד');
+    container.setAttribute('aria-label', t('a11ySkipLinksNavLabel'));
 
     const targets = [
-        { selector: 'main', label: 'דלג לתוכן הראשי' },
-        { selector: 'header', label: 'דלג לכותרת' },
-        { selector: 'footer', label: 'דלג לתחתית העמוד' },
+        { selector: 'main', label: t('a11ySkipToMainContent') },
+        { selector: 'header', label: t('a11ySkipToHeader') },
+        { selector: 'footer', label: t('a11ySkipToFooter') },
     ];
 
     targets.forEach(({ selector, label }, index) => {
@@ -232,10 +240,10 @@ export function applyA11y(settings, prevSettings) {
     }
 
     if (settings.screenReader && !prevSettings?.screenReader) {
-        announce('מצב נגישות לקורא מסך הופעל');
+        announce(t('a11yScreenReaderModeOn'));
     }
     if (!settings.screenReader && prevSettings?.screenReader) {
-        announce('מצב נגישות לקורא מסך כובה');
+        announce(t('a11yScreenReaderModeOff'));
     }
 }
 

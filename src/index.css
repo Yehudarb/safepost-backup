@@ -8,7 +8,8 @@
 @layer base {
   html {
     font-family: 'Noto Sans', 'Space Grotesk', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
-    direction: rtl;
+    /* direction intentionally not hardcoded — LanguageProvider sets the
+       html[dir] attribute at runtime and the browser follows it natively. */
   }
 
   body {

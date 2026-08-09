@@ -31,12 +31,14 @@ import {
 import A11ySection from './A11ySection';
 import A11yTile from './A11yTile';
 import { HUE_PRESETS } from './a11y-css';
+import { useLanguage } from '@/lib/i18n';
 
 const FOCUSABLE_SELECTOR =
     'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), ' +
     'select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 function A11ySlider({ label, value, min, max, step, onChange, id, unit = '%' }) {
+    const { t } = useLanguage();
     return (
         <div className="py-2 px-2">
             <div className="flex items-center justify-between mb-2">
@@ -52,7 +54,7 @@ function A11ySlider({ label, value, min, max, step, onChange, id, unit = '%' }) 
                 <button
                     type="button"
                     onClick={() => onChange(Math.max(min, value - step))}
-                    aria-label={`הקטן ${label}`}
+                    aria-label={t('a11yDecreaseLabel', { label })}
                     className="p-1.5 rounded hover:bg-[#f1f5f9] transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#2563eb]"
                 >
                     <Minus size={16} className="text-[#1e3a8a]" />
@@ -71,7 +73,7 @@ function A11ySlider({ label, value, min, max, step, onChange, id, unit = '%' }) 
                 <button
                     type="button"
                     onClick={() => onChange(Math.min(max, value + step))}
-                    aria-label={`הגדל ${label}`}
+                    aria-label={t('a11yIncreaseLabel', { label })}
                     className="p-1.5 rounded hover:bg-[#f1f5f9] transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#2563eb]"
                 >
                     <Plus size={16} className="text-[#1e3a8a]" />
@@ -89,24 +91,25 @@ const HUE_SWATCH_COLORS = {
     orange: '#ea580c',
 };
 
-const HUE_LABELS = {
-    blue: 'כחול',
-    green: 'ירוק',
-    red: 'אדום',
-    purple: 'סגול',
-    orange: 'כתום',
+const HUE_LABEL_KEYS = {
+    blue: 'a11yHueBlue',
+    green: 'a11yHueGreen',
+    red: 'a11yHueRed',
+    purple: 'a11yHuePurple',
+    orange: 'a11yHueOrange',
 };
 
 function PageStructureOverlay({ onClose }) {
+    const { t } = useLanguage();
     const dialogRef = useRef(null);
     const overlayTitleId = useId();
     const tree = useMemo(
         () =>
             Array.from(document.querySelectorAll('h1, h2, h3, h4, h5, h6')).map((element) => ({
                 level: parseInt(element.tagName[1], 10),
-                text: element.textContent.trim() || '(כותרת ריקה)',
+                text: element.textContent.trim() || t('a11yEmptyHeading'),
             })),
-        [],
+        [t],
     );
 
     useEffect(() => {
@@ -160,17 +163,17 @@ function PageStructureOverlay({ onClose }) {
                 <div className="p-4 border-b border-gray-200 dark:border-[#30363d] flex items-center justify-between">
                     <button
                         onClick={onClose}
-                        aria-label="סגור"
+                        aria-label={t('close')}
                         className="text-gray-400 hover:text-gray-700 dark:hover:text-white transition"
                     >
                         <X size={18} />
                     </button>
                     <h3 id={overlayTitleId} className="font-bold text-sm text-slate-900 dark:text-white">
-                        מבנה כותרות העמוד
+                        {t('a11yPageHeadingStructureTitle')}
                     </h3>
                 </div>
                 <div tabIndex={0} className="p-4 overflow-y-auto text-[12px] text-slate-600 dark:text-gray-400 space-y-1">
-                    {tree.length === 0 && <p>לא נמצאו כותרות בעמוד.</p>}
+                    {tree.length === 0 && <p>{t('a11yNoHeadingsFound')}</p>}
                     {tree.map((heading, index) => (
                         <div
                             key={`${heading.level}-${index}`}
@@ -196,6 +199,7 @@ export default function A11yPanel({
     onFeedback,
     closeButtonRef,
 }) {
+    const { t } = useLanguage();
     const {
         settings,
         toggleSetting,
@@ -238,7 +242,7 @@ export default function A11yPanel({
                         ref={closeButtonRef}
                         type="button"
                         onClick={onClose}
-                        aria-label="סגור הגדרות נגישות"
+                        aria-label={t('a11yCloseSettingsLabel')}
                         className="p-1.5 rounded-full hover:bg-white/10 transition"
                     >
                         <X size={20} />
@@ -246,16 +250,16 @@ export default function A11yPanel({
                     <button
                         type="button"
                         className="flex items-center gap-1.5 text-[12px] font-semibold px-2 py-1 rounded-lg hover:bg-white/10 transition"
-                        aria-label="שפת הממשק"
+                        aria-label={t('a11yInterfaceLanguageLabel')}
                     >
                         <Globe size={14} />
-                        עברית
+                        {t('a11yHebrewLabel')}
                     </button>
                     <div className="flex items-center gap-1">
-                        <button type="button" aria-label="חיפוש נגישות" className="p-1.5 rounded-full hover:bg-white/10 transition">
+                        <button type="button" aria-label={t('a11ySearchLabel')} className="p-1.5 rounded-full hover:bg-white/10 transition">
                             <Search size={16} />
                         </button>
-                        <button type="button" aria-label="ניווט חכם" className="p-1.5 rounded-full hover:bg-white/10 transition">
+                        <button type="button" aria-label={t('a11ySmartNavLabel')} className="p-1.5 rounded-full hover:bg-white/10 transition">
                             <ArrowLeftRight size={16} />
                         </button>
                     </div>
@@ -263,61 +267,61 @@ export default function A11yPanel({
                 <div className="flex justify-center pb-3 pt-2">
                     <div className="text-center">
                         <h2 id={titleId} className="px-4 py-1 rounded-full bg-white/15 text-[13px] font-bold">
-                            נגישות
+                            {t('a11yTitle')}
                         </h2>
                         <p id={subtitleId} className="mt-2 text-[11px] text-white/80">
-                            התאמת התצוגה, הקריאה והניווט לצרכים שלך
+                            {t('a11ySubtitle')}
                         </p>
                     </div>
                 </div>
             </div>
 
             <div tabIndex={0} className="flex-1 overflow-y-auto custom-scrollbar">
-                <A11ySection title="סיוע מבוסס AI" open={settingsData.sections.ai} onToggle={() => toggleSection('ai')} bodyId="a11y-v-section-ai">
-                    <p className="text-[12px] text-slate-500">בקרוב.</p>
+                <A11ySection title={t('a11yAiAssistTitle')} open={settingsData.sections.ai} onToggle={() => toggleSection('ai')} bodyId="a11y-v-section-ai">
+                    <p className="text-[12px] text-slate-500">{t('a11yComingSoonSentence')}</p>
                 </A11ySection>
 
                 <A11ySection
-                    title="פרופילי נגישות"
+                    title={t('a11yProfilesTitle')}
                     open={settingsData.sections.profiles}
                     onToggle={() => toggleSection('profiles')}
                     bodyId="a11y-v-section-profiles"
                 >
-                    <p className="text-[12px] text-slate-500">בקרוב.</p>
+                    <p className="text-[12px] text-slate-500">{t('a11yComingSoonSentence')}</p>
                 </A11ySection>
 
-                <A11ySection title="התאמות ניווט" open={settingsData.sections.nav} onToggle={() => toggleSection('nav')} bodyId="a11y-v-section-nav">
+                <A11ySection title={t('a11yNavAdjustmentsTitle')} open={settingsData.sections.nav} onToggle={() => toggleSection('nav')} bodyId="a11y-v-section-nav">
                     <div className="grid grid-cols-3 gap-2.5">
-                        <A11yTile icon={<LayoutGrid size={28} />} label="ניווט אזורים" active={settingsData.regionNav} onClick={() => toggleSetting('regionNav')} />
-                        <A11yTile icon={<Keyboard size={28} />} label="ניווט מקלדת" active={settingsData.keyboardNav} onClick={() => toggleSetting('keyboardNav')} />
-                        <A11yTile icon={<Ear size={28} />} label="קורא מסך" active={settingsData.screenReader} onClick={() => toggleSetting('screenReader')} />
-                        <A11yTile icon={<ArrowLeftRight size={28} />} label="ניווט חכם" active={settingsData.smartNav} onClick={() => toggleSetting('smartNav')} />
-                        <A11yTile icon={<Volume2 size={28} />} label="הקראת טקסט" active={settingsData.textToSpeech} onClick={() => toggleSetting('textToSpeech')} />
-                        <A11yTile icon={<Sparkles size={28} />} label="פקודות קוליות" active={settingsData.voiceCommands} onClick={() => toggleSetting('voiceCommands')} badge="בקרוב" />
+                        <A11yTile icon={<LayoutGrid size={28} />} label={t('a11yRegionNav')} active={settingsData.regionNav} onClick={() => toggleSetting('regionNav')} />
+                        <A11yTile icon={<Keyboard size={28} />} label={t('a11yKeyboardNav')} active={settingsData.keyboardNav} onClick={() => toggleSetting('keyboardNav')} />
+                        <A11yTile icon={<Ear size={28} />} label={t('a11yScreenReader')} active={settingsData.screenReader} onClick={() => toggleSetting('screenReader')} />
+                        <A11yTile icon={<ArrowLeftRight size={28} />} label={t('a11ySmartNavLabel')} active={settingsData.smartNav} onClick={() => toggleSetting('smartNav')} />
+                        <A11yTile icon={<Volume2 size={28} />} label={t('a11yTextToSpeech')} active={settingsData.textToSpeech} onClick={() => toggleSetting('textToSpeech')} />
+                        <A11yTile icon={<Sparkles size={28} />} label={t('a11yVoiceCommands')} active={settingsData.voiceCommands} onClick={() => toggleSetting('voiceCommands')} badge={t('a11yComingSoonBadge')} />
                     </div>
                 </A11ySection>
 
                 <A11ySection
-                    title="התאמות ניגודיות"
+                    title={t('a11yContrastAdjustmentsTitle')}
                     open={settingsData.sections.contrast}
                     onToggle={() => toggleSection('contrast')}
                     bodyId="a11y-v-section-contrast"
                 >
                     <div className="grid grid-cols-3 gap-2.5">
-                        <A11yTile icon={<Sun size={28} />} label="ניגודיות בהירה" active={settingsData.lightContrast} onClick={() => toggleSetting('lightContrast')} />
-                        <A11yTile icon={<Moon size={28} />} label="ניגודיות כהה" active={settingsData.darkContrast} onClick={() => toggleSetting('darkContrast')} />
-                        <A11yTile icon={<Eye size={28} />} label="מונוכרום" active={settingsData.monochrome} onClick={() => toggleSetting('monochrome')} />
-                        <A11yTile icon={<Circle size={28} />} label="חיזוק ניגודיות" active={settingsData.contrastMode} onClick={() => toggleSetting('contrastMode')} />
+                        <A11yTile icon={<Sun size={28} />} label={t('a11yLightContrast')} active={settingsData.lightContrast} onClick={() => toggleSetting('lightContrast')} />
+                        <A11yTile icon={<Moon size={28} />} label={t('a11yDarkContrast')} active={settingsData.darkContrast} onClick={() => toggleSetting('darkContrast')} />
+                        <A11yTile icon={<Eye size={28} />} label={t('a11yMonochrome')} active={settingsData.monochrome} onClick={() => toggleSetting('monochrome')} />
+                        <A11yTile icon={<Circle size={28} />} label={t('a11yContrastBoost')} active={settingsData.contrastMode} onClick={() => toggleSetting('contrastMode')} />
                         <A11yTile
                             icon={<Droplets size={28} />}
-                            label="רוויה גבוהה"
+                            label={t('a11yHighSaturation')}
                             active={settingsData.highSaturation}
                             disabled={settingsData.monochrome}
                             onClick={() => toggleSetting('highSaturation')}
                         />
                         <A11yTile
                             icon={<Droplet size={28} />}
-                            label="רוויה נמוכה"
+                            label={t('a11yLowSaturation')}
                             active={settingsData.lowSaturation}
                             disabled={settingsData.monochrome}
                             onClick={() => toggleSetting('lowSaturation')}
@@ -325,10 +329,10 @@ export default function A11yPanel({
                     </div>
                 </A11ySection>
 
-                <A11ySection title="התאמת צבעים" open={settingsData.sections.colors} onToggle={() => toggleSection('colors')} bodyId="a11y-v-section-colors">
+                <A11ySection title={t('a11yColorAdjustmentTitle')} open={settingsData.sections.colors} onToggle={() => toggleSection('colors')} bodyId="a11y-v-section-colors">
                     <p className="text-[12px] font-semibold text-[#1e3a8a] mb-2.5 flex items-center gap-1.5">
                         <span className="w-2.5 h-2.5 rounded-full bg-[#2563eb] inline-block" />
-                        שינוי גוון האתר
+                        {t('a11yChangeSiteHue')}
                     </p>
                     <div className="flex items-center gap-2.5 flex-wrap">
                         {Object.keys(HUE_PRESETS).map((preset) => (
@@ -337,8 +341,8 @@ export default function A11yPanel({
                                 type="button"
                                 onClick={() => setHuePreset(preset)}
                                 aria-pressed={settingsData.huePreset === preset}
-                                aria-label={HUE_LABELS[preset]}
-                                title={HUE_LABELS[preset]}
+                                aria-label={t(HUE_LABEL_KEYS[preset])}
+                                title={t(HUE_LABEL_KEYS[preset])}
                                 className={`w-9 h-9 rounded-full border-2 transition ${
                                     settingsData.huePreset === preset ? 'border-[#1e3a8a] scale-110' : 'border-[#e2e8f0]'
                                 }`}
@@ -348,24 +352,24 @@ export default function A11yPanel({
                     </div>
                 </A11ySection>
 
-                <A11ySection title="התאמות תוכן" open={settingsData.sections.content} onToggle={() => toggleSection('content')} bodyId="a11y-v-section-content">
+                <A11ySection title={t('a11yContentAdjustmentsTitle')} open={settingsData.sections.content} onToggle={() => toggleSection('content')} bodyId="a11y-v-section-content">
                     <div className="grid grid-cols-3 gap-2.5 mb-4">
-                        <A11yTile icon={<AArrowUp size={28} />} label="הגדלת טקסט" active={settingsData.fontSize > 100} onClick={() => adjustFontSize(20)} />
-                        <A11yTile icon={<AArrowDown size={28} />} label="הקטנת טקסט" active={settingsData.fontSize < 100} onClick={() => adjustFontSize(-20)} />
-                        <A11yTile icon={<AlignJustify size={28} />} label="מרווח שורות" active={settingsData.lineHeight > 0} onClick={() => cycleLevel('lineHeight')} />
-                        <A11yTile icon={<Space size={28} />} label="מרווח אותיות" active={settingsData.letterSpacing > 0} onClick={() => cycleLevel('letterSpacing')} />
-                        <A11yTile icon={<Heading size={28} />} label="הדגשת כותרות" active={settingsData.highlightHeadings} onClick={() => toggleSetting('highlightHeadings')} />
-                        <A11yTile icon={<Link size={28} />} label="הדגשת קישורים" active={settingsData.highlightLinks} onClick={() => toggleSetting('highlightLinks')} />
-                        <A11yTile icon={<MousePointer size={28} />} label="סמן גדול" active={settingsData.bigCursor} onClick={() => toggleSetting('bigCursor')} />
-                        <A11yTile icon={<Minus size={28} />} label="קו קריאה" active={settingsData.readingGuide} onClick={() => toggleSetting('readingGuide')} />
-                        <A11yTile icon={<Type size={28} />} label="פונט קריא" active={settingsData.readableFont} onClick={() => toggleSetting('readableFont')} />
+                        <A11yTile icon={<AArrowUp size={28} />} label={t('a11yIncreaseText')} active={settingsData.fontSize > 100} onClick={() => adjustFontSize(20)} />
+                        <A11yTile icon={<AArrowDown size={28} />} label={t('a11yDecreaseText')} active={settingsData.fontSize < 100} onClick={() => adjustFontSize(-20)} />
+                        <A11yTile icon={<AlignJustify size={28} />} label={t('a11yLineSpacing')} active={settingsData.lineHeight > 0} onClick={() => cycleLevel('lineHeight')} />
+                        <A11yTile icon={<Space size={28} />} label={t('a11yLetterSpacing')} active={settingsData.letterSpacing > 0} onClick={() => cycleLevel('letterSpacing')} />
+                        <A11yTile icon={<Heading size={28} />} label={t('a11yHighlightHeadings')} active={settingsData.highlightHeadings} onClick={() => toggleSetting('highlightHeadings')} />
+                        <A11yTile icon={<Link size={28} />} label={t('a11yHighlightLinks')} active={settingsData.highlightLinks} onClick={() => toggleSetting('highlightLinks')} />
+                        <A11yTile icon={<MousePointer size={28} />} label={t('a11yBigCursor')} active={settingsData.bigCursor} onClick={() => toggleSetting('bigCursor')} />
+                        <A11yTile icon={<Minus size={28} />} label={t('a11yReadingGuide')} active={settingsData.readingGuide} onClick={() => toggleSetting('readingGuide')} />
+                        <A11yTile icon={<Type size={28} />} label={t('a11yReadableFont')} active={settingsData.readableFont} onClick={() => toggleSetting('readableFont')} />
                     </div>
 
                     <div className="border-t border-[#e2e8f0] pt-3">
-                        <p className="text-[11px] font-semibold text-[#1e3a8a] mb-3">התאמות מדויקות</p>
-                        <A11ySlider label="בהירות" value={settingsData.brightness || 100} min={50} max={150} step={10} id="a11y-brightness" onChange={(value) => updateSetting('brightness', value)} />
+                        <p className="text-[11px] font-semibold text-[#1e3a8a] mb-3">{t('a11yPreciseAdjustments')}</p>
+                        <A11ySlider label={t('a11yBrightness')} value={settingsData.brightness || 100} min={50} max={150} step={10} id="a11y-brightness" onChange={(value) => updateSetting('brightness', value)} />
                         <A11ySlider
-                            label="ניגודיות"
+                            label={t('a11yContrast')}
                             value={settingsData.contrastLevel || 100}
                             min={80}
                             max={150}
@@ -373,7 +377,7 @@ export default function A11yPanel({
                             id="a11y-contrast"
                             onChange={(value) => updateSetting('contrastLevel', value)}
                         />
-                        <A11ySlider label="רוויה" value={settingsData.saturation || 100} min={0} max={150} step={10} id="a11y-saturation" onChange={(value) => updateSetting('saturation', value)} />
+                        <A11ySlider label={t('a11ySaturation')} value={settingsData.saturation || 100} min={0} max={150} step={10} id="a11y-saturation" onChange={(value) => updateSetting('saturation', value)} />
 
                         <div className="mt-3 px-2">
                             <button
@@ -382,7 +386,7 @@ export default function A11yPanel({
                                 className="w-full flex items-center justify-center gap-2 rounded-xl border border-[#dbe6ff] bg-[#f8fbff] px-3 py-2 text-[12px] font-semibold text-[#1e3a8a] hover:bg-[#eef5ff] transition"
                             >
                                 <ListTree size={16} />
-                                הצג מבנה כותרות בעמוד
+                                {t('a11yShowHeadingStructure')}
                             </button>
                         </div>
                     </div>
@@ -391,15 +395,15 @@ export default function A11yPanel({
 
             <div style={{ background: 'linear-gradient(180deg, #1e40af, #1d4ed8)' }} className="shrink-0 h-11 flex items-center justify-center gap-2 text-white text-[11px] font-semibold px-3">
                 <button type="button" onClick={resetAll} className="hover:underline">
-                    בטל נגישות
+                    {t('a11yResetAccessibility')}
                 </button>
                 <span aria-hidden="true" className="w-1 h-1 rounded-full bg-white/60" />
                 <button type="button" onClick={onOpenStatement} className="hover:underline">
-                    הצהרת נגישות
+                    {t('a11yAccessibilityStatement')}
                 </button>
                 <span aria-hidden="true" className="w-1 h-1 rounded-full bg-white/60" />
                 <button type="button" onClick={onFeedback} className="hover:underline">
-                    שלח משוב
+                    {t('a11ySendFeedback')}
                 </button>
             </div>
 

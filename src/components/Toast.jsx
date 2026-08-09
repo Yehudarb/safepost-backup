@@ -1,7 +1,9 @@
 import React, { useEffect } from 'react';
 import { Check, AlertCircle, X, Info, AlertTriangle } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n';
 
 const Toast = ({ message, type = 'success', onClose }) => {
+    const { t } = useLanguage();
     useEffect(() => {
         const timer = setTimeout(() => {
             onClose();
@@ -37,7 +39,7 @@ const Toast = ({ message, type = 'success', onClose }) => {
                 <Icon className={`w-5 h-5 ${colors.icon}`} />
             </div>
             <span className={`font-label-sm ${colors.text}`}>{message}</span>
-            <button type="button" onClick={onClose} aria-label="סגור הודעה" className="ml-4 p-sm hover:bg-black/5 rounded-md transition-colors flex-shrink-0">
+            <button type="button" onClick={onClose} aria-label={t('toastCloseMessage')} className="ml-4 p-sm hover:bg-black/5 rounded-md transition-colors flex-shrink-0">
                 <X className={`w-4 h-4 ${colors.text}`} />
             </button>
         </div>
