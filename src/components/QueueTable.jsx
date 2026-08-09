@@ -5,18 +5,26 @@ import { Trash2, RefreshCw, Clock, CheckCircle, XCircle, AlertCircle, Share2, Ex
 const StatusBadge = ({ status }) => {
     const styles = {
         PENDING: "bg-amber-50 text-amber-700 border-amber-200",
+        SENT: "bg-blue-50 text-blue-700 border-blue-200",
         PENDING_APPROVAL: "bg-orange-50 text-orange-700 border-orange-200",
         PROCESSING: "bg-primary-fixed text-primary border-primary-fixed-dim",
         SUCCESS: "bg-emerald-50 text-emerald-700 border-emerald-200",
         FAILED: "bg-error-container text-error border-error/20",
+        NEEDS_USER_ACTION: "bg-orange-50 text-orange-700 border-orange-300",
+        CANCELLED: "bg-gray-100 text-gray-500 border-gray-200",
+        EXPIRED: "bg-gray-100 text-gray-500 border-gray-200",
     };
 
     const icons = {
         PENDING: Clock,
+        SENT: Clock,
         PENDING_APPROVAL: Clock,
         PROCESSING: RefreshCw,
         SUCCESS: CheckCircle,
         FAILED: XCircle,
+        NEEDS_USER_ACTION: AlertCircle,
+        CANCELLED: XCircle,
+        EXPIRED: Clock,
     };
 
     const Icon = icons[status] || AlertCircle;
@@ -139,9 +147,9 @@ const QueueTable = ({ jobs, onDelete, onBulkDelete, selectedIds, setSelectedIds,
                                                 <span className="text-body-md font-bold text-on-surface group-hover:text-primary transition-colors">
                                                     {job.group_name || 'Generic Group'}
                                                 </span>
-                                                {job.proof_url && (
+                                                {(job.external_post_url || job.proof_url) && (
                                                     <a
-                                                        href={job.proof_url}
+                                                        href={job.external_post_url || job.proof_url}
                                                         target="_blank"
                                                         rel="noopener noreferrer"
                                                         className="p-xs rounded-full bg-primary-fixed text-primary hover:bg-primary hover:text-on-primary transition-all duration-300 transform hover:scale-110"
@@ -178,6 +186,15 @@ const QueueTable = ({ jobs, onDelete, onBulkDelete, selectedIds, setSelectedIds,
                                     </td>
                                     <td className="px-lg py-md">
                                         <StatusBadge status={job.status} />
+                                        {job.attempt_count > 1 && (
+                                            <div className="text-caption text-on-surface-variant mt-xs flex items-center gap-xs" title={job.error_code || ''}>
+                                                <RefreshCw className="w-2.5 h-2.5" />
+                                                Attempt {job.attempt_count}{job.max_attempts ? `/${job.max_attempts}` : ''}
+                                                {job.next_attempt_at && new Date(job.next_attempt_at) > new Date() && (
+                                                    <span> · retry {new Date(job.next_attempt_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                                )}
+                                            </div>
+                                        )}
                                         {job.failure_reason && (
                                             <div className="text-caption text-error mt-sm max-w-[150px] truncate font-medium flex items-center gap-xs" title={job.failure_reason}>
                                                 <AlertCircle className="w-2.5 h-2.5" />

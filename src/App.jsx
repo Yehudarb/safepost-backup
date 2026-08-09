@@ -5,10 +5,11 @@ import {
     Edit3, Trash2, Save, X, Sun, Moon, Paperclip, Clock,
     FolderPlus, Folder, Search, Ban, Zap, StopCircle,
     Sparkles, Info, Smile, Scissors, AlignLeft, Languages, Hash, Megaphone,
-    GripVertical, BarChart3, RotateCcw
+    GripVertical, BarChart3, RotateCcw, MonitorSmartphone
 } from 'lucide-react';
 import { Calendar } from '@/components/ui/calendar-bento';
 import { io } from 'socket.io-client';
+import { getAuthHeaders, getAccessToken, getActiveWorkspaceId } from '@/lib/session';
 import TaskTimer from '@/components/TaskTimer';
 import Toast from '@/components/Toast';
 import SaveFolderModal from '@/components/modals/SaveFolderModal';
@@ -16,6 +17,7 @@ import StopWorkerModal from '@/components/modals/StopWorkerModal';
 import SavePostTemplateModal from '@/components/modals/SavePostTemplateModal';
 import AiPostAssistantModal from '@/components/modals/AiPostAssistantModal';
 import AnalyticsPanel from '@/components/panels/AnalyticsPanel';
+import WorkersPanel from '@/components/panels/WorkersPanel';
 import ErrorBoundary from '@/components/ErrorBoundary';
 
 // Determine backend URL - production uses Render, development uses localhost
@@ -38,8 +40,21 @@ const socket = io(BACKEND_URL, {
     reconnectionDelay: 2000,
     reconnectionDelayMax: 30000,
     reconnectionAttempts: Infinity,
-    transports: ['websocket', 'polling']
+    transports: ['websocket', 'polling'],
+    // Auth handshake: re-evaluated on every (re)connect so the current access
+    // token + active workspace are sent once the user signs in.
+    auth: (cb) => {
+        getAccessToken()
+            .then((token) => cb({ token: token || null, workspaceId: getActiveWorkspaceId() }))
+            .catch(() => cb({ token: null, workspaceId: getActiveWorkspaceId() }));
+    },
 });
+// Reconnect with fresh auth when the session changes (login/logout).
+if (typeof window !== 'undefined') {
+    window.addEventListener('safepost:auth-changed', () => {
+        try { socket.disconnect(); socket.connect(); } catch { /* noop */ }
+    });
+}
 
 // --- SSRF GUARD ---
 const PRIVATE_IP_PATTERNS = [
@@ -67,7 +82,7 @@ class ApiService {
         const url = `${API_BASE}${endpoint}`;
         if (!url.startsWith(API_BASE) || !isSafeUrl(url))
             throw new Error('Blocked: request URL is not allowed');
-        const headers = { 'Content-Type': 'application/json', ...options.headers };
+        const headers = { 'Content-Type': 'application/json', ...(await getAuthHeaders()), ...options.headers };
         try {
             const res = await fetch(url, { ...options, headers });
             if (!res.ok) {
@@ -101,12 +116,18 @@ class ApiService {
     static async uploadFile(file) {
         const formData = new FormData();
         formData.append('file', file);
-        const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: formData });
+        const res = await fetch(`${API_BASE}/upload`, { method: 'POST', headers: await getAuthHeaders(), body: formData });
         if (!res.ok) throw new Error(`Upload Failed: ${res.status}`);
         return await res.json();
     }
     static generateAiContent(prompt, history = []) { return this.request('/ai/generate', { method: 'POST', body: JSON.stringify({ prompt, history }) }); }
     static getAnalytics()                           { return this.request('/analytics'); }
+    // --- Workers (extension pairing) ---
+    static getWorkers()                             { return this.request('/workers'); }
+    static createPairingCode()                      { return this.request('/workers/pairing-code', { method: 'POST' }); }
+    static renameWorker(id, worker_name)            { return this.request(`/workers/${id}`, { method: 'PATCH', body: JSON.stringify({ worker_name }) }); }
+    static revokeWorker(id)                         { return this.request(`/workers/${id}/revoke`, { method: 'POST' }); }
+    static removeWorker(id)                         { return this.request(`/workers/${id}`, { method: 'DELETE' }); }
 }
 
 // ---------------------------------------------------------------------------
@@ -282,6 +303,7 @@ export default function App() {
 
     // Analytics
     const [showAnalytics, setShowAnalytics]         = useState(false);
+    const [showWorkers, setShowWorkers]             = useState(false);
     const [analyticsData, setAnalyticsData]         = useState(null);
     const [analyticsLoading, setAnalyticsLoading]   = useState(false);
 
@@ -1326,8 +1348,12 @@ export default function App() {
                         <StatBox label="Failed/Cancelled"   value={stats.failed + stats.cancelled} icon={<XCircle className="w-5 h-5 text-rose-400" />} accent="red" />
                     </div>
 
-                    {/* Analytics Toggle Button */}
-                    <div className="flex justify-end mb-4">
+                    {/* Analytics + Devices Buttons */}
+                    <div className="flex justify-end gap-2 mb-4">
+                        <button onClick={() => setShowWorkers(true)}
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg border text-xs font-bold uppercase tracking-widest transition text-blue-400 border-blue-800/50 hover:bg-blue-900/20">
+                            <MonitorSmartphone size={13} /> Devices
+                        </button>
                         <button onClick={handleToggleAnalytics} disabled={analyticsLoading}
                             className={`flex items-center gap-2 px-4 py-2 rounded-lg border text-xs font-bold uppercase tracking-widest transition ${
                                 showAnalytics
@@ -1343,6 +1369,13 @@ export default function App() {
                     {showAnalytics && analyticsData && (
                         <ErrorBoundary>
                             <AnalyticsPanel data={analyticsData} onClose={() => setShowAnalytics(false)} />
+                        </ErrorBoundary>
+                    )}
+
+                    {/* Workers / Devices Panel */}
+                    {showWorkers && (
+                        <ErrorBoundary>
+                            <WorkersPanel api={ApiService} onClose={() => setShowWorkers(false)} />
                         </ErrorBoundary>
                     )}
 

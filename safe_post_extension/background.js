@@ -33,6 +33,17 @@ chrome.storage.onChanged.addListener((changes, area) => {
     }
 });
 
+// Pairing (Phase 5): when paired, this worker uses workspace-scoped endpoints
+// with its device token; when not paired, it falls back to the legacy global
+// endpoints so existing installs keep working.
+async function getPairing() {
+    const { pairedWorkerId, deviceToken } = await chrome.storage.local.get(['pairedWorkerId', 'deviceToken']);
+    return (pairedWorkerId && deviceToken) ? { workerId: pairedWorkerId, token: deviceToken } : null;
+}
+function workerHeaders(p) {
+    return { 'x-worker-id': p.workerId, 'x-device-token': p.token };
+}
+
 // 1. Alarm Setup — MV3 service workers die after ~30s; alarm is the wakeup mechanism
 function setupAlarm() {
     chrome.alarms.get('jobPoller', (existing) => {
@@ -135,7 +146,12 @@ async function checkJobs() {
     try {
         if (await checkSafetyCooldown()) return;
 
-        const res = await fetch(`${BASE_URL}/api/jobs/next`);
+        // Paired workers claim ONLY their own workspace's jobs; unpaired workers
+        // use the legacy global endpoint. Both return { job } (or { job: null }).
+        const pairing = await getPairing();
+        const res = pairing
+            ? await fetch(`${BASE_URL}/api/workers/${pairing.workerId}/jobs/claim`, { method: 'POST', headers: workerHeaders(pairing) })
+            : await fetch(`${BASE_URL}/api/jobs/next`);
         // Any HTTP response proves the server is reachable — record contact
         // before checking res.ok. Gating this on res.ok meant a 429 (rate
         // limited) or a transient 500 counted as "server dead" and drove the
@@ -463,17 +479,31 @@ async function scanAndSyncGroups() {
 async function sendHeartbeat() {
     try {
         const manifest = chrome.runtime.getManifest();
-        const res = await fetch(`${BASE_URL}/api/worker/heartbeat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                extension_id: chrome.runtime.id,
-                manifest_version: manifest.version,
-                origin_folder: 'safe_post_extension',
-                current_url: 'background'
-            }),
-            mode: 'cors'
-        });
+        // Paired workers report presence via their workspace-scoped worker
+        // endpoint (device token); unpaired workers use the legacy heartbeat.
+        const pairing = await getPairing();
+        const res = pairing
+            ? await fetch(`${BASE_URL}/api/workers/${pairing.workerId}/heartbeat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...workerHeaders(pairing) },
+                body: JSON.stringify({
+                    status: 'online',
+                    extension_version: manifest.version,
+                    browser_version: (navigator.userAgent.match(/Chrome\/[\d.]+/) || ['Chrome'])[0],
+                }),
+                mode: 'cors'
+            })
+            : await fetch(`${BASE_URL}/api/worker/heartbeat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    extension_id: chrome.runtime.id,
+                    manifest_version: manifest.version,
+                    origin_folder: 'safe_post_extension',
+                    current_url: 'background'
+                }),
+                mode: 'cors'
+            });
         // As in checkJobs: a response of any status means the server answered.
         recordContact();
         if (res.ok) {
