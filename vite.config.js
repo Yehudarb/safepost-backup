@@ -13,7 +13,11 @@ export default defineConfig({
         outDir: 'dist',
         rollupOptions: {
             input: {
-                dashboard: resolve(__dirname, 'index.html')
+                // Public marketing page at "/" and the React dashboard at "/app".
+                // Two separate entries so the landing page ships without the
+                // dashboard's ~600kB bundle (and vice versa).
+                landing: resolve(__dirname, 'index.html'),
+                dashboard: resolve(__dirname, 'app/index.html')
             }
         }
     }

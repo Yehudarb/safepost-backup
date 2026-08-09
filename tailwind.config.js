@@ -3,6 +3,7 @@ export default {
     darkMode: 'class',
     content: [
         "./index.html",
+        "./app/index.html",
         "./src/**/*.{js,ts,jsx,tsx}",
     ],
     theme: {
@@ -16,6 +17,13 @@ export default {
                     DEFAULT: "#2563eb",
                     soft: "#eef1fe",
                     dark: "#60a5fa",
+                },
+                // Landing-page palette only. Deliberately NOT named "primary" —
+                // that token already exists above with a different value for the
+                // dashboard, and reusing it would silently restyle the dashboard.
+                fb: {
+                    DEFAULT: "#1877F2",
+                    dark: "#165eab",
                 },
                 "on-background": "#0b1c30",
                 "inverse-surface": "#213145",
