@@ -358,6 +358,7 @@ const {
     hashToken,
     generatePairingCode,
     requireWorker,
+    optionalWorker,
 } = require('./middleware/worker.cjs');
 const {
     claimNextJob,
@@ -539,7 +540,7 @@ app.get('/api/debug/state', requireAuth, (req, res) => {
 // --- SSE: Real-Time push to Extension ---
 const sseClients = new Set();
 
-app.get('/api/stream/jobs', (req, res) => {
+app.get('/api/stream/jobs', optionalWorker, (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -621,7 +622,7 @@ async function updateTaskStatus(taskId, status, message = null, metadata = null)
 let lastFacebookProfile = null;
 let lastFacebookUser = null;
 
-app.get('/api/profile/current', (req, res) => {
+app.get('/api/profile/current', optionalWorker, (req, res) => {
     console.log(`📋 [PROFILE] GET /api/profile/current → returning: "${lastFacebookUser || '(none)'}"`);
     res.json({
         current_user: lastFacebookProfile?.facebook_user || null,
@@ -631,7 +632,7 @@ app.get('/api/profile/current', (req, res) => {
     });
 });
 
-app.post('/api/profile/sync', (req, res) => {
+app.post('/api/profile/sync', optionalWorker, (req, res) => {
     console.log('🧭 [PROFILE] POST /api/profile/sync received:', JSON.stringify(req.body));
     const facebook_user = typeof req.body?.facebook_user === 'string' ? req.body.facebook_user.trim() : '';
     if (!facebook_user) {
@@ -796,7 +797,7 @@ app.patch('/api/groups/:id/timezone', ...dashboardAuth, async (req, res) => {
 });
 
 // --- SYNC ENDPOINT ---
-app.post('/api/groups/sync', async (req, res) => {
+app.post('/api/groups/sync', optionalWorker, async (req, res) => {
     const { groups, facebook_user, facebook_user_id = null } = req.body;
     console.log(`[GROUPS] Received sync: ${groups?.length || 0} groups, facebook_user="${facebook_user || '(null)'}"`);
 
@@ -845,12 +846,40 @@ app.post('/api/groups/sync', async (req, res) => {
     //   2. The account the dashboard was showing when it requested this sync.
     //   3. The last account the content script reported to /api/profile/sync.
     //   4. '' sentinel (legacy / truly unattributed).
-    const fbUser = (facebook_user && facebook_user.trim())
-        || (pendingSyncFacebookUser && pendingSyncFacebookUser.trim())
-        || lastFacebookUser
-        || '';
+    const incomingId = typeof facebook_user_id === 'string' ? facebook_user_id.trim() : null;
+    let fbUser = (facebook_user && facebook_user.trim()) || null;
+    let attributionSource = fbUser ? 'request' : null;
+
+    if (!fbUser) {
+        const dashboardHint = pendingSyncFacebookUser && pendingSyncFacebookUser.trim();
+        if (dashboardHint) {
+            fbUser = dashboardHint;
+            attributionSource = 'dashboard_hint';
+        } else if (lastFacebookUser) {
+            // Only trust the last-known name if it isn't contradicted by the account
+            // actually active in this request — a mismatched id means the browser has
+            // since switched accounts, and reusing the old name would silently
+            // misattribute the new account's groups to the previous one.
+            const knownId = lastFacebookProfile?.facebook_user_id || null;
+            const idConflicts = incomingId && knownId && incomingId !== knownId;
+            if (!idConflicts) {
+                fbUser = lastFacebookUser;
+                attributionSource = 'last_known_profile';
+            }
+        }
+    }
+    fbUser = fbUser || '';
     pendingSyncFacebookUser = null; // consume the hint so it never leaks into a later sync
-    console.log(`[GROUPS] Effective facebook_user for this sync: "${fbUser || '(unattributed)'}"`);
+    console.log(`[GROUPS] Effective facebook_user for this sync: "${fbUser || '(unattributed)'}" (source: ${attributionSource || 'none'})`);
+
+    // This sync path (the dashboard-triggered scan) doesn't call /api/profile/sync
+    // separately, so record a fresh, request-attributed detection here too — otherwise
+    // the id-conflict check above would keep comparing against a profile from whatever
+    // account synced last via the OTHER path.
+    if (attributionSource === 'request' && incomingId) {
+        lastFacebookProfile = { facebook_user: fbUser, facebook_user_id: incomingId, source: 'groups_sync', detected_at: new Date().toISOString() };
+        lastFacebookUser = fbUser;
+    }
 
     // Preserve real names against placeholder overwrites. The extension emits
     // "קבוצה {id}" only as a last-resort placeholder when it couldn't extract
@@ -938,7 +967,7 @@ app.post('/api/groups/request-sync', ...dashboardAuth, (req, res) => {
     res.json({ success: true });
 });
 
-app.get('/api/groups/pending-sync', (req, res) => {
+app.get('/api/groups/pending-sync', optionalWorker, (req, res) => {
     const sync_needed = pendingSyncCommand;
     if (pendingSyncCommand) {
         console.log('📡 Pending group sync consumed by extension poll');
@@ -1095,7 +1124,7 @@ app.delete('/api/workers/:workerId', ...dashboardAuth, async (req, res) => {
 });
 
 // Sync failed — tell dashboard to stop spinner
-app.post('/api/groups/sync-failed', (req, res) => {
+app.post('/api/groups/sync-failed', optionalWorker, (req, res) => {
     const { error } = req.body;
     console.warn(`⚠️ Group sync failed: ${error}`);
     io.emit('groups_sync_failed', { error });
@@ -1147,7 +1176,7 @@ app.get('/api/templates', ...dashboardAuth, async (req, res) => {
 });
 
 // --- EXTENSION CONFIG: Dynamic DOM selectors as configuration ---
-app.get('/api/extension/config', async (req, res) => {
+app.get('/api/extension/config', optionalWorker, async (req, res) => {
     console.log('⚙️ [CONFIG] Fetching extension configuration from Supabase...');
 
     const { data, error } = await supabase
@@ -1800,7 +1829,7 @@ app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res)
 });
 
 // --- 2. WORKER ACKNOWLEDGEMENT ---
-app.post('/api/worker/ack', async (req, res) => {
+app.post('/api/worker/ack', optionalWorker, async (req, res) => {
     const { taskId } = req.body;
     console.log(`🤝 Handshake: Worker acknowledged task ${taskId}`);
 
@@ -2090,10 +2119,7 @@ setInterval(async () => {
 app.get('/api/system/status', requireAuth, (req, res) => {
     const now = new Date();
     const checkinAge = lastWorkerCheckin ? (now - new Date(lastWorkerCheckin)) / 1000 : null;
-    // Extension heartbeats fire on a chrome.alarms 1-minute period (MV3's minimum
-    // resolution, and its actual firing time can drift/lag when the service worker
-    // was suspended). A 60s window flaps to OFFLINE between ticks; 90s gives slack.
-    const workerActive = checkinAge !== null && checkinAge < 90;
+    const workerActive = checkinAge !== null && checkinAge < 60; // active if checked in within 60s
 
     res.json({
         worker_status: workerActive ? 'ACTIVE' : 'OFFLINE',
@@ -2108,7 +2134,7 @@ app.get('/api/system/status', requireAuth, (req, res) => {
 });
 
 // Next Job for Extension (polled by background.js every 6s)
-app.get('/api/jobs/next', async (req, res) => {
+app.get('/api/jobs/next', optionalWorker, async (req, res) => {
     const { data } = await supabase
         .from('posts')
         .select('*')
@@ -2153,7 +2179,7 @@ app.get('/api/jobs/next', async (req, res) => {
 });
 
 // Job lookup by group URL — used by content.js auto-execute fallback
-app.get('/api/jobs/for-url', async (req, res) => {
+app.get('/api/jobs/for-url', optionalWorker, async (req, res) => {
     const { url } = req.query;
     if (!url) return res.json({ job: null });
 
@@ -2185,7 +2211,7 @@ app.get('/api/jobs/for-url', async (req, res) => {
 });
 
 // POST task status update (called by backup extension background.js REPORT_STATUS)
-app.post('/api/tasks/update-status', validate(updateStatusSchema), async (req, res) => {
+app.post('/api/tasks/update-status', optionalWorker, validate(updateStatusSchema), async (req, res) => {
     const { taskId, status, failure_reason, proof_url } = req.validated;
     const numericId = parseInt(taskId) || taskId;
     console.log(`📝 [POST] /api/tasks/update-status → Task ${numericId}: ${status}`);
@@ -2237,7 +2263,7 @@ app.post('/api/tasks/update-status', validate(updateStatusSchema), async (req, r
 });
 
 // PATCH task status (called by full_app extension on SUCCESS/FAILED)
-app.patch('/api/tasks/:id/status', validate(patchStatusSchema), async (req, res) => {
+app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), async (req, res) => {
     const { id } = req.params;
     const { status, failure_reason, error: bodyError, completed_at, proof_url } = req.validated;
     const failReason = failure_reason || bodyError;
@@ -2454,7 +2480,7 @@ app.post('/api/worker/resume', ...dashboardAuth, denyDemo, (req, res) => {
 });
 
 // Worker heartbeat (extension calls this to register presence)
-app.post('/api/worker/heartbeat', (req, res) => {
+app.post('/api/worker/heartbeat', optionalWorker, (req, res) => {
     // The extension (background.js) sends manifest_version/origin_folder/extension_id —
     // accept both those field names and the older version/origin/extensionId names so
     // this doesn't silently regress again if either side changes independently.

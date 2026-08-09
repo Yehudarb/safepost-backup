@@ -43,6 +43,25 @@ function workerHeaders(p) {
     return { 'x-worker-id': p.workerId, 'x-device-token': p.token };
 }
 
+// Attach worker credentials to the LEGACY (non-paired) endpoints too whenever
+// this install happens to be paired. The server accepts them there optionally
+// today, so this is a no-op for behaviour — but it is what lets the operator
+// turn WORKER_AUTH_ENFORCED on later without the extension losing access.
+// Returns plain headers when unpaired, exactly as before.
+async function authedHeaders(extra = {}) {
+    const pairing = await getPairing();
+    return pairing ? { ...extra, ...workerHeaders(pairing) } : { ...extra };
+}
+
+// Same idea for EventSource, which cannot send headers — see the note on
+// readWorkerCredentials in server/middleware/worker.cjs.
+async function authedStreamUrl(url) {
+    const pairing = await getPairing();
+    if (!pairing) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}worker_id=${encodeURIComponent(pairing.workerId)}&device_token=${encodeURIComponent(pairing.token)}`;
+}
+
 async function persistFacebookUser(facebook_user, facebook_user_id = null) {
     const clean = typeof facebook_user === 'string' ? facebook_user.trim() : '';
     const cleanId = typeof facebook_user_id === 'string' ? facebook_user_id.trim() : '';
@@ -135,16 +154,18 @@ function checkWatchdog() {
     // Give the next window a full grace period so we reconnect at most once per
     // WATCHDOG_LIMIT rather than on every alarm tick while the server is down.
     lastServerContact = Date.now();
-    try { connectSSE(); } catch (e) { console.warn('[Watchdog] SSE reconnect failed:', e?.message || e); }
+    // connectSSE is async (it reads the pairing from storage), so failures
+    // surface as a rejected promise rather than a synchronous throw.
+    Promise.resolve(connectSSE()).catch(e => console.warn('[Watchdog] SSE reconnect failed:', e?.message || e));
 }
 
 // SSE Real-Time Listener
 let sseSource = null;
 
-function connectSSE() {
+async function connectSSE() {
     if (sseSource) { sseSource.close(); sseSource = null; }
     try {
-        sseSource = new EventSource(`${BASE_URL}/api/stream/jobs`);
+        sseSource = new EventSource(await authedStreamUrl(`${BASE_URL}/api/stream/jobs`));
         sseSource.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
@@ -284,7 +305,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 try {
                     const res = await fetch(`${BASE_URL}/api/tasks/${missionId}/status`, {
                         method: 'PATCH',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: await authedHeaders({ 'Content-Type': 'application/json' }),
                         body: JSON.stringify({ status: 'SUCCESS', completed_at: new Date().toISOString() })
                     });
                     if (!res.ok) console.error('[BG] DB Update Failed:', res.status);
@@ -313,7 +334,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             try {
                 await fetch(`${BASE_URL}/api/tasks/${missionId}/status`, {
                     method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: await authedHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ status: 'FAILED', error: request.reason || 'Unknown Error', completed_at: new Date().toISOString() })
                 });
             } catch (err) { console.error("[BG] Sync Error:", err); }
@@ -327,26 +348,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     if (request.action === "SYNC_GROUPS") {
         persistFacebookUser(request.facebook_user || null, request.facebook_user_id || null);
-        fetch(`${BASE_URL}/api/groups/sync`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                groups: request.groups,
-                facebook_user: request.facebook_user || null,
-                facebook_user_id: request.facebook_user_id || null
-            })
-        })
-            .then(async (res) => {
+        // async IIFE: authedHeaders reads the pairing from storage, but this
+        // listener must stay sync so the `return true` below still keeps the
+        // sendResponse channel open (MV3 closes it if the listener returns a
+        // promise instead).
+        (async () => {
+            try {
+                const res = await fetch(`${BASE_URL}/api/groups/sync`, {
+                    method: 'POST',
+                    headers: await authedHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify({
+                        groups: request.groups,
+                        facebook_user: request.facebook_user || null,
+                        facebook_user_id: request.facebook_user_id || null
+                    })
+                });
                 const rawBody = await res.text();
                 try {
                     const data = JSON.parse(rawBody);
                     if (!res.ok) throw new Error(data.error || `Server Status ${res.status}`);
                     sendResponse({ success: true, serverData: data });
-                } catch (e) {
+                } catch {
                     sendResponse({ success: false, error: "Server Error (HTML/Invalid JSON)" });
                 }
-            })
-            .catch(err => sendResponse({ success: false, error: err.toString() }));
+            } catch (err) {
+                sendResponse({ success: false, error: err.toString() });
+            }
+        })();
         return true;
     }
 
@@ -359,7 +387,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     console.log('[Background] Sending POST /api/profile/sync with profile:', profile);
                     await fetch(`${BASE_URL}/api/profile/sync`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: await authedHeaders({ 'Content-Type': 'application/json' }),
                         body: JSON.stringify({
                             facebook_user: profile.facebook_user,
                             facebook_user_id: profile.facebook_user_id,
@@ -385,12 +413,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === "REPORT_STATUS") {
-        fetch(`${BASE_URL}/api/tasks/${request.payload.taskId}/status`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(request.payload)
-        }).catch(err => console.error("Status Network Error:", err))
-         .finally(() => sendResponse({ ok: true }));
+        // async IIFE for the same reason as SYNC_GROUPS above.
+        (async () => {
+            try {
+                await fetch(`${BASE_URL}/api/tasks/${request.payload.taskId}/status`, {
+                    method: 'PATCH',
+                    headers: await authedHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify(request.payload)
+                });
+            } catch (err) {
+                console.error("Status Network Error:", err);
+            } finally {
+                sendResponse({ ok: true });
+            }
+        })();
         return true;
     }
 
@@ -444,8 +480,8 @@ async function scanAndSyncGroups() {
     const fbProfileFromContent = await getFacebookUserFromContent();
     console.log('[Background] FB user from content.js:', fbProfileFromContent.name || '(none)');
 
-    const reportFail = (error) => fetch(`${BASE_URL}/api/groups/sync-failed`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+    const reportFail = async (error) => fetch(`${BASE_URL}/api/groups/sync-failed`, {
+        method: 'POST', headers: await authedHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ error })
     }).catch(() => {});
 
@@ -893,7 +929,7 @@ async function scanAndSyncGroups() {
 
                         const syncRes = await fetch(`${BASE_URL}/api/groups/sync`, {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: await authedHeaders({ 'Content-Type': 'application/json' }),
                             body: JSON.stringify({ groups, facebook_user, facebook_user_id })
                         });
                         const syncData = await syncRes.json();
