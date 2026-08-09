@@ -71,6 +71,9 @@ function resolvePlaceholders(text, group, facebookUser) {
 // consecutiveFailures}. consecutiveFailures counts FAILED/CANCELLED rows from
 // the most recent post backwards, stopping at the first SUCCESS — a "cold
 // streak" signal shared by the health score and the throttle suggestion.
+// Pure function: caller decides date range / app_source scoping via the
+// `posts` array it passes in, so /api/groups and /api/analytics can each
+// scope their own query while sharing this one aggregation.
 function buildGroupHealthStats(posts) {
     const stats = {};
     (posts || []).forEach(p => {
@@ -89,13 +92,15 @@ function buildGroupHealthStats(posts) {
             else if (['SUCCESS', 'COMPLETED'].includes(p.status)) break;
         }
         s.consecutiveFailures = streak;
-        delete s.posts;
+        delete s.posts; // don't leak raw rows to callers
     });
     return stats;
 }
 
 // Derives a 0-100 health score from one group's aggregated stats, or null if
 // the group has no post history yet (don't fabricate a score from nothing).
+// Follows the same "derived field, not a stored column" pattern as
+// requires_moderation in GET /api/groups.
 function computeGroupHealth(stats) {
     const total = (stats?.success || 0) + (stats?.failed || 0) + (stats?.cancelled || 0);
     if (total === 0) return null;
@@ -104,6 +109,29 @@ function computeGroupHealth(stats) {
     const failPenalty = Math.min(stats.failed / total, 0.5);
     const streakPenalty = (stats.consecutiveFailures || 0) >= 3 ? 0.2 : 0;
     return Math.round(Math.max(0, successRate - modPenalty - failPenalty - streakPenalty) * 100);
+}
+
+// Manual per-group timezone bias (Item 6). Facebook exposes no group
+// location/timezone, so this only applies when the operator has explicitly
+// tagged a group (groups.timezone, migration 0009) — untagged groups are
+// completely unaffected. No timezone library needed: Intl.DateTimeFormat with
+// a timeZone option reads the local hour for any IANA zone string natively.
+const POST_WINDOW = { start: 8, end: 22 }; // 08:00–22:00 local
+function localHour(date, tz) {
+    try {
+        return parseInt(new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', hour12: false }).format(date), 10);
+    } catch {
+        return null; // invalid/unsupported IANA string — caller treats this as "don't bias"
+    }
+}
+function biasIntoWindow(date, tz) {
+    const hour = localHour(date, tz);
+    if (hour === null) return date; // fail safe: unknown tz never blocks scheduling
+    let d = date, guard = 0;
+    while (guard++ < 48 && (localHour(d, tz) < POST_WINDOW.start || localHour(d, tz) >= POST_WINDOW.end)) {
+        d = new Date(d.getTime() + 3600000); // nudge forward one hour at a time
+    }
+    return d;
 }
 
 // Ensure uploads directory exists
@@ -122,12 +150,41 @@ const upload = multer({
 
 const ALLOWED_ORIGINS = [
     'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://0.0.0.0:5173',
     'http://localhost:3001',
+    'http://127.0.0.1:3001',
+    'http://0.0.0.0:3001',
     'https://safepost-backup.vercel.app',
     'https://safepost-backup.onrender.com',
     'https://www.facebook.com',
     'https://web.facebook.com'
 ];
+
+function isLocalOrigin(origin) {
+    if (!origin || typeof origin !== 'string') return false;
+    try {
+        const url = new URL(origin);
+        return ['http:', 'https:'].includes(url.protocol) && (
+            url.hostname === 'localhost' ||
+            url.hostname === '127.0.0.1' ||
+            url.hostname === '0.0.0.0' ||
+            /^10\./.test(url.hostname) ||
+            /^192\.168\./.test(url.hostname) ||
+            /^172\.(1[6-9]|2\d|3[01])\./.test(url.hostname)
+        );
+    } catch (_) {
+        return false;
+    }
+}
+
+function isAllowedOrigin(origin) {
+    return !!origin && (
+        ALLOWED_ORIGINS.includes(origin) ||
+        origin.startsWith('chrome-extension://') ||
+        isLocalOrigin(origin)
+    );
+}
 
 const app = express();
 
@@ -191,12 +248,19 @@ const postsSchema = Joi.object({
         })
     ).optional(),
     ai_spin: Joi.boolean().optional().default(false),
-    facebook_user: Joi.string().optional().allow(null).max(500)
+    facebook_user: Joi.string().optional().allow(null).max(500),
+    // A-B testing: when present, each group gets one variant round-robin
+    // instead of the single shared `content` field. Requires migration 0009
+    // (posts.variant_label) to be applied before this is used.
+    content_variants: Joi.array().items(Joi.object({
+        label: Joi.string().max(50).required(),
+        content: Joi.string().max(50000).required()
+    })).min(1).optional()
 });
 
 // Schema for POST /api/tasks/update-status
 const updateStatusSchema = Joi.object({
-    taskId: Joi.string().required().messages({
+    taskId: Joi.alternatives(Joi.string(), Joi.number()).required().messages({
         'any.required': 'taskId is required'
     }),
     status: Joi.string().required().valid('PENDING', 'SENT', 'PROCESSING', 'SUCCESS', 'FAILED', 'CANCELLED', 'LOG').messages({
@@ -204,11 +268,17 @@ const updateStatusSchema = Joi.object({
         'any.only': 'status must be one of: PENDING, SENT, PROCESSING, SUCCESS, FAILED, CANCELLED, LOG'
     }),
     failure_reason: Joi.string().optional().allow(null).max(1000),
-    proof_url: Joi.string().optional().allow(null).uri({ scheme: ['http', 'https'] })
-});
+    proof_url: Joi.string().optional().allow(null).uri({ scheme: ['http', 'https'] }),
+    metadata: Joi.object().optional()
+}).unknown(true);
 
 // Schema for PATCH /api/tasks/:id/status
+// NOTE: the extension (content.js/background.js) includes taskId + metadata in the
+// body of every report (including terminal SUCCESS/FAILED and LOG traces). These
+// must be permitted or Joi rejects the whole report with 400 — which silently
+// leaves tasks stuck in PROCESSING. `.unknown(true)` tolerates any extra fields.
 const patchStatusSchema = Joi.object({
+    taskId: Joi.alternatives(Joi.string(), Joi.number()).optional(),
     status: Joi.string().required().valid('PENDING', 'SENT', 'PROCESSING', 'SUCCESS', 'FAILED', 'CANCELLED', 'LOG').messages({
         'any.required': 'status is required',
         'any.only': 'status must be one of: PENDING, SENT, PROCESSING, SUCCESS, FAILED, CANCELLED, LOG'
@@ -216,8 +286,9 @@ const patchStatusSchema = Joi.object({
     failure_reason: Joi.string().optional().allow(null).max(1000),
     error: Joi.string().optional().allow(null).max(1000),
     completed_at: Joi.date().optional(),
-    proof_url: Joi.string().optional().allow(null).uri({ scheme: ['http', 'https'] })
-});
+    proof_url: Joi.string().optional().allow(null).uri({ scheme: ['http', 'https'] }),
+    metadata: Joi.object().optional()
+}).unknown(true);
 
 // Validation middleware
 const validate = (schema) => {
@@ -232,6 +303,28 @@ const validate = (schema) => {
         next();
     };
 };
+
+// Retry governor for stuck-dispatch recovery (SENT handshake timeout / stale heartbeat).
+// Two competing goals here:
+//   • Fast recovery when the extension was momentarily busy (MV3 service-worker
+//     suspend, mid-sync, tab switch) — the vast majority of "stuck" cases.
+//   • Slow re-dispatch when the group itself is broken/rate-limited so we don't
+//     hammer Facebook and get the account checkpointed.
+// Solution: fast initial retries (extension usually just needs a moment), then
+// escalate to the long backoffs only if it keeps failing.
+const MAX_DISPATCH_RETRIES = 5;
+function dispatchBackoffMs(attempt) {
+    if (attempt <= 1) return 30000;   // 30s — likely just needs a moment
+    if (attempt === 2) return 90000;  // 1.5min
+    if (attempt === 3) return 300000; // 5min — now assume something's actually wrong
+    if (attempt === 4) return 600000; // 10min
+    return 15 * 60 * 1000;            // 15min cap
+}
+// The extension has ~15s of grace to acknowledge a SENT job before we consider
+// the handshake failed. Was 45s — that was too aggressive; MV3 service workers
+// can idle briefly and miss the SSE tick, but the /api/jobs/next alarm is on a
+// 60-second cadence so 90s gives it a full poll cycle plus buffer.
+const SENT_HANDSHAKE_TIMEOUT_MS = 90000;
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -341,6 +434,11 @@ let lastWorkerExtensionId = null;
 let workerStopSignal = false;
 let workerStopUntil = null;
 let pendingSyncCommand = false;
+let pendingSyncWorkspaceId = null;
+// The Facebook account the dashboard was viewing when it requested a sync — used
+// as a fallback when the extension's group-scan tab couldn't detect the logged-in
+// account itself. Cleared right after the sync consumes it.
+let pendingSyncFacebookUser = null;
 let workerThrottleUntil = null;
 const sentTaskTimestamps = new Map();
 const processingStartTimestamps = new Map();
@@ -360,16 +458,12 @@ app.use((req, res, next) => {
 // --- MANUAL CORS HEADERS (BEFORE ALL MIDDLEWARE) ---
 app.use((req, res, next) => {
     const origin = req.headers.origin;
-    const allowed = origin && (
-        ALLOWED_ORIGINS.includes(origin) ||
-        origin.startsWith('chrome-extension://')
-    );
-    if (allowed) {
+    if (isAllowedOrigin(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS,HEAD');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-requested-with');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-requested-with,x-workspace-id');
     res.setHeader('Access-Control-Max-Age', '86400');
 
     if (req.method === 'OPTIONS') {
@@ -386,6 +480,17 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 process.on('uncaughtException', (err) => {
     console.error('🔥 UNCAUGHT EXCEPTION:', err);
+    // A failure to bind the port is fatal and must NOT be swallowed. The dispatch
+    // loop (setInterval(runDispatchTick)) is registered at module load, so a
+    // process that lost the port race kept polling Supabase forever as an
+    // invisible second dispatcher. Several of those accumulated over days: they
+    // raced to mark tasks SENT, never received the extension's ack (only the
+    // process holding the port can), then timed the tasks out and failed them
+    // with "No worker handshake after N attempts". Die instead.
+    if (err && err.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use — another SafePost server is running. Exiting so this process cannot become a second dispatcher.`);
+        process.exit(1);
+    }
 });
 
 console.log("🚀 Server connecting to Supabase...");
@@ -394,7 +499,7 @@ console.log("🚀 Server connecting to Supabase...");
 app.use(cors({
     origin: function (origin, callback) {
         // Allow all origins in development, whitelist in production
-        if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.startsWith('chrome-extension://') || process.env.NODE_ENV === 'development') {
+        if (!origin || isAllowedOrigin(origin) || process.env.NODE_ENV === 'development') {
             callback(null, true);
         } else {
             console.log(`⚠️ CORS blocked origin: ${origin}`);
@@ -438,16 +543,36 @@ app.get('/api/stream/jobs', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // disable any proxy buffering so events flush immediately
     res.flushHeaders();
 
     const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
     send({ type: 'connected' });
     sseClients.add(send);
 
-    // Check if there's already a pending sync when extension reconnects
-    if (pendingSyncCommand) send({ type: 'sync_groups' });
+    // Keep the connection warm. Without periodic traffic, MV3 service workers
+    // (and any intermediate proxy) can silently drop the socket, which stops
+    // job_available events from reaching the extension and turns dispatch into
+    // a 60-second-alarm poll. A 20s ping is well under the typical idle-kill
+    // threshold and cheap.
+    const pingId = setInterval(() => {
+        try { res.write(': ping\n\n'); } catch { /* client gone, cleaned up on close */ }
+    }, 20000);
 
-    req.on('close', () => sseClients.delete(send));
+    // Deliver a pending sync to an extension that (re)connects — but clear the flag
+    // immediately so we don't re-trigger a full group scan on EVERY reconnect. The
+    // SSE reconnects roughly every 30s (and whenever the MV3 service worker wakes),
+    // so without this clear one dashboard click looped group syncs forever.
+    if (pendingSyncCommand) {
+        send({ type: 'sync_groups' });
+        pendingSyncCommand = false;
+        console.log('📡 Delivered pending sync_groups on SSE (re)connect — flag cleared');
+    }
+
+    req.on('close', () => {
+        clearInterval(pingId);
+        sseClients.delete(send);
+    });
 });
 
 function broadcastSSE(data) {
@@ -493,6 +618,46 @@ async function updateTaskStatus(taskId, status, message = null, metadata = null)
 
 // --- API ROUTES ---
 
+let lastFacebookProfile = null;
+let lastFacebookUser = null;
+
+app.get('/api/profile/current', (req, res) => {
+    console.log(`📋 [PROFILE] GET /api/profile/current → returning: "${lastFacebookUser || '(none)'}"`);
+    res.json({
+        current_user: lastFacebookProfile?.facebook_user || null,
+        current_user_id: lastFacebookProfile?.facebook_user_id || null,
+        source: lastFacebookProfile?.source || null,
+        detected_at: lastFacebookProfile?.detected_at || null
+    });
+});
+
+app.post('/api/profile/sync', (req, res) => {
+    console.log('🧭 [PROFILE] POST /api/profile/sync received:', JSON.stringify(req.body));
+    const facebook_user = typeof req.body?.facebook_user === 'string' ? req.body.facebook_user.trim() : '';
+    if (!facebook_user) {
+        console.log('⚠️ [PROFILE] facebook_user is empty or missing');
+        return res.status(400).json({ error: 'facebook_user is required' });
+    }
+    const facebook_user_id = typeof req.body?.facebook_user_id === 'string' ? req.body.facebook_user_id.trim() : '';
+    const source = typeof req.body?.source === 'string' ? req.body.source.trim() : '';
+    const detected_at = typeof req.body?.detected_at === 'string' ? req.body.detected_at.trim() : '';
+    lastFacebookProfile = {
+        facebook_user,
+        facebook_user_id: facebook_user_id || null,
+        source: source || 'extension',
+        detected_at: detected_at || new Date().toISOString()
+    };
+    lastFacebookUser = lastFacebookProfile.facebook_user;
+    console.log('✅ [PROFILE] Current Facebook user updated to:', lastFacebookUser);
+    res.json({
+        success: true,
+        current_user: lastFacebookProfile.facebook_user,
+        current_user_id: lastFacebookProfile.facebook_user_id,
+        source: lastFacebookProfile.source,
+        detected_at: lastFacebookProfile.detected_at
+    });
+});
+
 app.get('/api/groups', ...dashboardAuth, async (req, res) => {
     const { data, error } = await scopeToWorkspace(supabase
         .from('groups')
@@ -501,38 +666,47 @@ app.get('/api/groups', ...dashboardAuth, async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Groups with pending-moderation failures — shouldn't be re-used without
-    // admin action (accepting the pending post in Facebook, or disabling group
-    // moderation). Marked so the UI can warn or filter them out.
+    // Find groups with pending-moderation failures — these should not be re-used
+    // without admin action (accepting the pending post in Facebook or disabling
+    // group moderation). Mark them so the UI can warn or filter them out.
     const { data: moderationBuggers } = await scopeToWorkspace(supabase
         .from('posts')
         .select('distinct group_id')
         .like('failure_reason', '%ממתין לאישור מנהל%'), req);
     const modGroupIds = new Set((moderationBuggers || []).map(r => r.group_id).filter(Boolean));
 
-    // Group Health Score — derived from full posts history per group.
+    // Group Health Score — derived from full posts history per group, same
+    // "computed field" pattern as requires_moderation above.
     const { data: healthPosts } = await scopeToWorkspace(supabase
         .from('posts')
         .select('group_id, status, created_at'), req);
     const healthStats = buildGroupHealthStats(healthPosts);
 
     // Filter by facebook_user if provided — but ALWAYS keep untagged groups
-    // (facebook_user null/empty). Groups synced by the extension carry no
-    // account attribution, so a strict equality filter would hide every one of
-    // them the moment a current user is selected. Untagged groups belong to
-    // "all accounts".
+    // (facebook_user null). Groups synced by the extension carry no account
+    // attribution, so a strict equality filter would hide every one of them the
+    // moment a current user is selected. Untagged groups belong to "all accounts".
     let filtered = data || [];
     if (req.query.user && data) {
         filtered = data.filter(g => !g.facebook_user || g.facebook_user === req.query.user);
     }
 
+    // Tag groups that have pending-moderation failures + attach health score
     filtered = filtered.map(g => ({
         ...g,
         requires_moderation: modGroupIds.has(g.id),
         health_score: computeGroupHealth(healthStats[g.id])
     }));
 
-    res.json({ groups: filtered });
+    const facebookUsers = [...new Set((data || [])
+        .map(g => g.facebook_user)
+        .filter(Boolean))];
+
+    res.json({
+        groups: filtered,
+        current_user: req.query.user || (facebookUsers.length === 1 ? facebookUsers[0] : null),
+        facebook_users: facebookUsers
+    });
 });
 
 app.delete('/api/groups', ...dashboardAuth, async (req, res) => {
@@ -578,63 +752,199 @@ app.post('/api/groups', ...dashboardAuth, async (req, res) => {
     const { groups } = req.body;
     if (!groups || !Array.isArray(groups)) return res.status(400).json({ error: "Invalid data" });
 
-    // Upsert items
+    // Upsert items. Groups are keyed per (workspace_id, facebook_user, id); an
+    // optional per-group facebook_user is honored, defaulting to '' (the DB
+    // sentinel for "unattributed") so the composite-key upsert is well-defined.
     const { data, error } = await supabase
         .from('groups')
         .upsert(groups.map(g => ({
             id: g.id,
             name: g.name,
             url: g.url,
+            facebook_user: g.facebook_user || '',
             ...workspaceFields(req)
-        })));
+        })), { onConflict: 'workspace_id,facebook_user,id' });
 
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true, count: groups.length });
 });
 
+// Manual per-group timezone tag (Item 6). Facebook exposes no group
+// location/timezone, so this is operator-set, not auto-detected — consumed by
+// POST /api/posts' biasIntoWindow to nudge that group's scheduled posts toward
+// an 08:00-22:00 local window. Requires migration 0009 (groups.timezone).
+app.patch('/api/groups/:id/timezone', ...dashboardAuth, async (req, res) => {
+    const { id } = req.params;
+    const { facebook_user, timezone } = req.body;
+
+    if (timezone) {
+        try { new Intl.DateTimeFormat('en', { timeZone: timezone }); }
+        catch { return res.status(400).json({ error: 'Invalid IANA timezone string (e.g. "Asia/Jerusalem").' }); }
+    }
+
+    // Groups are keyed per (workspace_id, facebook_user, id) since migration
+    // 0008 — must match on all three, or this silently updates the wrong
+    // per-user copy of a shared group id.
+    const { error } = await scopeToWorkspace(supabase
+        .from('groups')
+        .update({ timezone: timezone || null })
+        .eq('id', id)
+        .eq('facebook_user', facebook_user || ''), req);
+
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+});
+
 // --- SYNC ENDPOINT ---
 app.post('/api/groups/sync', async (req, res) => {
-    console.log("📥 Received sync data from extension:", req.body);
-    const { groups, facebook_user } = req.body;
+    const { groups, facebook_user, facebook_user_id = null } = req.body;
+    console.log(`[GROUPS] Received sync: ${groups?.length || 0} groups, facebook_user="${facebook_user || '(null)'}"`);
 
     if (!groups || !Array.isArray(groups) || groups.length === 0) {
         return res.status(400).json({ error: "No groups provided" });
     }
 
-    // UPSERT newly scraped groups (preserves existing IDs and prevents SET NULL on posts)
-    const toUpsert = groups.map(g => {
-        const item = {
-            id: g.id,
-            name: g.name,
-            url: g.url
-        };
-        // Only add facebook_user if it's provided (will be ignored if column doesn't exist)
-        if (facebook_user) {
-            item.facebook_user = facebook_user;
+    const dedupedGroups = [];
+    const seenGroupIds = new Set();
+    for (const group of groups) {
+        const id = typeof group?.id === 'string' || typeof group?.id === 'number' ? String(group.id).trim() : '';
+        const name = typeof group?.name === 'string' ? group.name.trim() : '';
+        const url = typeof group?.url === 'string' ? group.url.trim() : '';
+        if (!id || !name || !url || seenGroupIds.has(id)) continue;
+        seenGroupIds.add(id);
+        dedupedGroups.push({ id, name, url });
+    }
+
+    if (!dedupedGroups.length) {
+        return res.status(400).json({ error: "No valid groups provided" });
+    }
+
+    let workspaceId = req.headers['x-workspace-id'] || pendingSyncWorkspaceId || null;
+    if (!workspaceId) {
+        const { data: ws, error: wsError } = await supabase
+            .from('workspaces')
+            .select('id')
+            .eq('is_demo', false)
+            .limit(1)
+            .maybeSingle();
+        if (wsError || !ws) {
+            console.error("Sync Error: could not resolve a workspace", wsError);
+            return res.status(400).json({ error: "Could not resolve target workspace for sync" });
         }
-        return item;
+        workspaceId = ws.id;
+    }
+    pendingSyncWorkspaceId = null;
+
+    // Groups are keyed per (workspace_id, facebook_user, id) — the same Facebook
+    // group can be saved separately for each account. `fbUser` is '' when unknown
+    // (matches the DB sentinel) so it can participate in the composite key.
+    //
+    // The group-scan tab sometimes fails to read the logged-in account, arriving
+    // here as null. Fall back through the strongest signals we have, in order:
+    //   1. What the extension detected (most authoritative — the actual scan tab).
+    //   2. The account the dashboard was showing when it requested this sync.
+    //   3. The last account the content script reported to /api/profile/sync.
+    //   4. '' sentinel (legacy / truly unattributed).
+    const fbUser = (facebook_user && facebook_user.trim())
+        || (pendingSyncFacebookUser && pendingSyncFacebookUser.trim())
+        || lastFacebookUser
+        || '';
+    pendingSyncFacebookUser = null; // consume the hint so it never leaks into a later sync
+    console.log(`[GROUPS] Effective facebook_user for this sync: "${fbUser || '(unattributed)'}"`);
+
+    // Preserve real names against placeholder overwrites. The extension emits
+    // "קבוצה {id}" only as a last-resort placeholder when it couldn't extract
+    // the actual FB group name. If a previous sync (or manual repair) already
+    // stored a real name for a row, do NOT downgrade it back to the placeholder.
+    const PLACEHOLDER_NAME = /^קבוצה [^\s]+$/;
+    const { data: existingRows } = await supabase
+        .from('groups')
+        .select('id, name')
+        .eq('workspace_id', workspaceId)
+        .eq('facebook_user', fbUser)
+        .in('id', dedupedGroups.map(g => g.id));
+    const existingNameById = new Map((existingRows || []).map(r => [r.id, r.name]));
+
+    // Upsert only THIS user's rows. onConflict targets the composite key, so a
+    // group already owned by a DIFFERENT user is never touched — it gets its own
+    // row for this user instead of overwriting the other account's copy.
+    const toUpsert = dedupedGroups.map((g) => {
+        const incomingIsPlaceholder = PLACEHOLDER_NAME.test(g.name || '');
+        const existing = existingNameById.get(g.id);
+        const existingIsReal = existing && !PLACEHOLDER_NAME.test(existing);
+        const finalName = (incomingIsPlaceholder && existingIsReal) ? existing : g.name;
+        return {
+            id: g.id,
+            name: finalName,
+            url: g.url,
+            workspace_id: workspaceId,
+            facebook_user: fbUser,
+        };
     });
+
     const { error: upsertError } = await supabase
         .from('groups')
-        .upsert(toUpsert, { onConflict: 'id' });
+        .upsert(toUpsert, { onConflict: 'workspace_id,facebook_user,id' });
 
     if (upsertError) {
         console.error("Sync Upsert Error:", upsertError);
         return res.status(500).json({ error: upsertError.message });
     }
 
+    // Stale-delete is scoped strictly to THIS user (and workspace): groups the
+    // account left since the last sync are removed, while every OTHER user's
+    // groups are left completely untouched.
+    const currentIds = dedupedGroups.map((g) => `"${String(g.id).replace(/"/g, '""')}"`);
+    if (currentIds.length > 0) {
+        const { error: staleDeleteError } = await supabase
+            .from('groups')
+            .delete()
+            .eq('workspace_id', workspaceId)
+            .eq('facebook_user', fbUser)
+            .not('id', 'in', `(${currentIds.join(',')})`);
+        if (staleDeleteError) console.warn('Delete stale groups warning:', staleDeleteError.message);
+    }
+
     io.emit('groups_updated');
     io.emit('data_updated');
-    console.log(`✅ Sync complete: upserted ${groups.length} groups`);
-    res.json({ success: true, added: groups.length, message: `Synced ${groups.length} groups` });
+    console.log(`[GROUPS] Sync complete: upserted ${dedupedGroups.length} groups`);
+    res.json({
+        success: true,
+        added: dedupedGroups.length,
+        synced: dedupedGroups.length,
+        facebook_user: facebook_user || null,
+        facebook_user_id: facebook_user_id || null,
+        message: `Synced ${dedupedGroups.length} groups`
+    });
+});
+// Dashboard requests extension to sync groups via SSE
+app.post('/api/groups/request-sync', ...dashboardAuth, (req, res) => {
+    const dashboardUser = typeof req.body?.facebook_user === 'string' ? req.body.facebook_user.trim() : '';
+    console.log(`📡 Dashboard requested group sync from extension (user hint: "${dashboardUser || '(none)'}")`);
+    pendingSyncWorkspaceId = req.workspaceId || null;
+    pendingSyncFacebookUser = dashboardUser || null;
+    if (sseClients.size > 0) {
+        // An extension is connected — deliver once, now, and do NOT leave the flag set
+        // (leaving it set is what caused every later SSE reconnect to re-run the scan).
+        broadcastSSE({ type: 'sync_groups' });
+        pendingSyncCommand = false;
+        console.log(`📡 sync_groups delivered to ${sseClients.size} connected client(s)`);
+    } else {
+        // No extension connected right now — hold the request until one reconnects,
+        // where the /api/stream/jobs handler delivers it once and clears the flag.
+        pendingSyncCommand = true;
+        console.log('📡 No SSE client connected — will deliver on next reconnect');
+    }
+    res.json({ success: true });
 });
 
-// Dashboard requests extension to sync groups via SSE
-app.post('/api/groups/request-sync', ...dashboardAuth, denyDemo, (req, res) => {
-    console.log("📡 Dashboard requested group sync from extension");
-    pendingSyncCommand = true;
-    broadcastSSE({ type: 'sync_groups' });
-    res.json({ success: true });
+app.get('/api/groups/pending-sync', (req, res) => {
+    const sync_needed = pendingSyncCommand;
+    if (pendingSyncCommand) {
+        console.log('📡 Pending group sync consumed by extension poll');
+    }
+    pendingSyncCommand = false;
+    res.json({ success: true, sync_needed });
 });
 
 // --- DEMO: reset synthetic data (demo workspaces only) ---
@@ -653,8 +963,8 @@ app.post('/api/demo/reset', ...dashboardAuth, async (req, res) => {
 
 // ===================== PHASE 5: EXTENSION PAIRING / WORKERS =====================
 
-// Dashboard: generate a short-lived, single-use pairing code (demo blocked).
-app.post('/api/workers/pairing-code', ...dashboardAuth, denyDemo, async (req, res) => {
+// Dashboard: generate a short-lived, single-use pairing code
+app.post('/api/workers/pairing-code', ...dashboardAuth, async (req, res) => {
     const code = generatePairingCode();
     const expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min
     const { error } = await supabase.from('pairing_codes').insert({
@@ -1096,8 +1406,9 @@ app.get('/api/analytics', ...dashboardAuth, async (req, res) => {
         .map(([message, count]) => ({ message, count, percent: failed > 0 ? Math.round(count / failed * 100) : 0 }));
 
     // Queue-to-completion timing. Only created_at→ended_at is reliably populated
-    // for SUCCESS/FAILED — measures queue wait + execution + report latency, not
-    // pure Facebook post-execution duration.
+    // (CANCELLED posts didn't get ended_at until the Item-8 fix, so this measures
+    // queue wait + execution + report latency for SUCCESS/FAILED only — not pure
+    // Facebook post-execution duration).
     const timedDurationsSec = posts
         .filter(p => ['SUCCESS', 'COMPLETED', 'FAILED'].includes(p.status) && p.ended_at && p.created_at)
         .map(p => (new Date(p.ended_at) - new Date(p.created_at)) / 1000)
@@ -1133,6 +1444,33 @@ app.get('/api/analytics', ...dashboardAuth, async (req, res) => {
         note: 'Heuristic derived from your own posting history — not machine learning. Nothing is auto-applied; the jitter in POST /api/posts is unchanged.'
     };
 
+    // A-B variant breakdown (Item 5). Deliberately a SEPARATE, defensive query
+    // rather than adding variant_label to the main select above: that column
+    // only exists after migration 0009 is applied, and this endpoint is on the
+    // dashboard's hot path — a missing column here must not break the rest of
+    // /api/analytics. Resolves to [] until the migration lands.
+    let variantStats = [];
+    try {
+        const { data: variantPosts, error: variantError } = await scopeToWorkspace(supabase
+            .from('posts')
+            .select('variant_label, status')
+            .in('app_source', ['backup', 'demo'])
+            .gte('created_at', thirtyDaysAgo)
+            .not('variant_label', 'is', null), req);
+        if (!variantError && variantPosts) {
+            const vMap = {};
+            variantPosts.forEach(p => {
+                if (!vMap[p.variant_label]) vMap[p.variant_label] = { label: p.variant_label, success: 0, failed: 0, total: 0 };
+                vMap[p.variant_label].total++;
+                if (['SUCCESS', 'COMPLETED'].includes(p.status)) vMap[p.variant_label].success++;
+                if (p.status === 'FAILED') vMap[p.variant_label].failed++;
+            });
+            variantStats = Object.values(vMap).sort((a, b) => b.total - a.total);
+        }
+    } catch (e) {
+        console.error('[Analytics] variant stats query failed (migration 0009 not applied yet?):', e.message);
+    }
+
     res.json({
         summary: { total, success, failed, cancelled, pending, successRate },
         byDay: Object.entries(byDay).map(([date, d]) => ({ date, ...d })),
@@ -1142,7 +1480,8 @@ app.get('/api/analytics', ...dashboardAuth, async (req, res) => {
         activeGroups,
         topErrors,
         timing,
-        throttleSuggestion
+        throttleSuggestion,
+        variantStats
     });
 });
 
@@ -1300,11 +1639,11 @@ app.post('/api/ai/generate', strictLimiter, requireAuth, async (req, res) => {
 
 // --- 1. PROPER JITTER CALCULATION ---
 app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res) => {
-    const { group_ids, content, schedule, media_url, media_files, ai_spin, facebook_user } = req.validated;
+    const { group_ids, content, schedule, media_url, media_files, ai_spin, facebook_user, content_variants } = req.validated;
 
-    // Additional validation: must have content or media
-    if (!content && !media_url && !media_files) {
-        return res.status(400).json({ error: "Must provide content, media_url, or media_files" });
+    // Additional validation: must have content, media, or A-B variants
+    if (!content && !media_url && !media_files && !(content_variants && content_variants.length)) {
+        return res.status(400).json({ error: "Must provide content, media_url, media_files, or content_variants" });
     }
 
     console.log(`🚀 [POSTS] Intelligent Launch: Preparing ${group_ids.length} tasks...`);
@@ -1366,6 +1705,21 @@ app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res)
         console.error('❌ [POSTS] Error fetching group names for placeholders:', e.message);
     }
 
+    // Group timezone tags (Item 6) — SEPARATE, defensive query. The timezone
+    // column only exists after migration 0009 is applied, and this feeds the
+    // core launch path used on every campaign, so a missing column must not
+    // break normal posting. No tag found (pre-migration or just untagged) →
+    // groupTimezones stays empty → biasIntoWindow is never called → today's
+    // scheduling behavior, unchanged.
+    const groupTimezones = new Map();
+    try {
+        const { data: tzRows, error: tzError } = await scopeToWorkspace(
+            supabase.from('groups').select('id, timezone').in('id', group_ids).not('timezone', 'is', null), req);
+        if (!tzError) (tzRows || []).forEach(g => { if (g.timezone) groupTimezones.set(g.id, g.timezone); });
+    } catch (e) {
+        console.error('[POSTS] Group timezone lookup failed (migration 0009 not applied yet?):', e.message);
+    }
+
     const tasks = [];
     group_ids.forEach((gid, index) => {
         // First post: within 30s. Subsequent posts: 150–210s (2.5–3.5 min) jitter
@@ -1374,10 +1728,26 @@ app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res)
             : Math.floor(Math.random() * (210000 - 150000 + 1)) + 150000; // 150–210 seconds
         nextScheduleTime = new Date(nextScheduleTime.getTime() + jitter);
 
+        // Per-task scheduled time, optionally biased toward this group's tagged
+        // local posting window (08:00-22:00). Bias is applied to a COPY, not to
+        // nextScheduleTime itself — the running accumulator that subsequent
+        // groups' jitter builds on — so one tagged group's multi-hour bias never
+        // bleeds into an untagged group's schedule later in the same campaign.
+        const groupTz = groupTimezones.get(gid);
+        const taskScheduledTime = groupTz ? biasIntoWindow(nextScheduleTime, groupTz) : nextScheduleTime;
+
+        // A-B testing: round-robin this group onto one content_variants entry
+        // instead of the single shared `content` field. Absent → today's
+        // single-content path, unchanged.
+        const variant = (content_variants && content_variants.length)
+            ? content_variants[index % content_variants.length]
+            : null;
+        const rawContent = variant ? variant.content : content;
+
         // Resolve {{GROUP_NAME}} etc. BEFORE spinning — spinText's spintax regex
         // would otherwise corrupt an unresolved {{TOKEN}} (see resolvePlaceholders
         // comment above spinText's definition).
-        const resolvedContent = resolvePlaceholders(content, groupMap.get(gid), facebook_user);
+        const resolvedContent = resolvePlaceholders(rawContent, groupMap.get(gid), facebook_user);
         let finalContent = ai_spin ? spinText(resolvedContent) : resolvedContent;
 
         // Embed media URLs in content
@@ -1394,7 +1764,7 @@ app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res)
             media_url: media_url || null,           // Legacy field
             media_paths: mediaPaths || null,        // New field: array of Supabase Storage paths
             status: 'PENDING',
-            scheduled_time: nextScheduleTime.toISOString(),
+            scheduled_time: taskScheduledTime.toISOString(),
             // Demo workspaces produce app_source='demo' posts, which the worker
             // (jobs/next filters app_source='backup') never claims/publishes.
             app_source: req.isDemo ? 'demo' : 'backup',
@@ -1403,6 +1773,15 @@ app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res)
         // Only add facebook_user if provided (will be ignored if column doesn't exist)
         if (facebook_user) {
             task.facebook_user = facebook_user;
+        }
+        // Only set variant_label when variants are actually in use — this column
+        // only exists after migration 0009 is applied. Never touching it on the
+        // ordinary single-content path (the overwhelming majority of requests)
+        // means this code is safe to ship BEFORE the migration runs; only a
+        // request that explicitly opts into content_variants can fail, and it
+        // fails with a clear DB error rather than corrupting anything.
+        if (variant) {
+            task.variant_label = variant.label;
         }
         tasks.push(task);
     });
@@ -1423,7 +1802,7 @@ app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res)
 app.post('/api/worker/ack', async (req, res) => {
     const { taskId } = req.body;
     console.log(`🤝 Handshake: Worker acknowledged task ${taskId}`);
-    
+
     const { error } = await supabase
         .from('posts')
         .update({ status: 'PROCESSING' })
@@ -1431,7 +1810,7 @@ app.post('/api/worker/ack', async (req, res) => {
         .eq('status', 'SENT'); // Only if it was in SENT state
 
     if (error) return res.status(500).json({ error: error.message });
-    
+
     sentTaskTimestamps.delete(taskId);
     processingStartTimestamps.set(taskId, Date.now());
     updateTaskStatus(taskId, 'PROCESSING', 'Worker started execution');
@@ -1439,18 +1818,26 @@ app.post('/api/worker/ack', async (req, res) => {
 });
 
 // --- 3. REFACTORED STRICT QUEUE POLLER ---
-setInterval(async () => {
+//
+// Runs on a 5-second timer AND is invoked directly right after each terminal
+// task transition (SUCCESS/FAILED/CANCELLED). That direct call collapses the
+// gap between one post finishing and the next going out: instead of waiting up
+// to 5s for the timer to notice the worker is free again, the next dispatch
+// starts immediately. A lightweight mutex prevents overlapping runs if a
+// terminal update lands mid-tick.
+let dispatchLockActive = false;
+async function runDispatchTick() {
+    if (dispatchLockActive) return;
+    dispatchLockActive = true;
     const now = new Date();
-    if (workerStopSignal && workerStopUntil && now < workerStopUntil) return;
-    if (workerThrottleUntil && now < workerThrottleUntil) return;
-
-    // console.log(`[Poller] Heartbeat check at ${now.toISOString()}...`);
+    if (workerStopSignal && workerStopUntil && now < workerStopUntil) { dispatchLockActive = false; return; }
+    if (workerThrottleUntil && now < workerThrottleUntil) { dispatchLockActive = false; return; }
 
     try {
         // A. Check if ANY task is currently being handled
         const { data: activeTasks } = await supabase
             .from('posts')
-            .select('id, status')
+            .select('id, status, attempt_count, group_id')
             .in('status', ['SENT', 'PROCESSING'])
             .eq('app_source', 'backup');
 
@@ -1464,11 +1851,31 @@ setInterval(async () => {
                         sentAt = now.getTime();
                         sentTaskTimestamps.set(active.id, sentAt);
                     }
-                    if (now.getTime() - sentAt > 45000) { // Increased to 45s for reliability
-                        console.log(`⏳ [Timeout] Task ${active.id} stuck in SENT for >45s. Resetting to PENDING.`);
-                        await supabase.from('posts').update({ status: 'PENDING', scheduled_time: new Date(now.getTime() + 120000).toISOString() }).eq('id', active.id);
+                    if (now.getTime() - sentAt > SENT_HANDSHAKE_TIMEOUT_MS) {
                         sentTaskTimestamps.delete(active.id);
                         activeCount--;
+                        // RETRY CAP + BACKOFF: a stuck-SENT task used to be reset to PENDING
+                        // unconditionally, so a group with a broken selector got re-dispatched
+                        // every ~2min forever — the extension kept opening a tab and navigating
+                        // to the SAME Facebook group over and over, which reads as bot/spam
+                        // behavior to Facebook and got the account rate-limited/checkpointed.
+                        // Now we cap retries and back off exponentially instead.
+                        const attempts = (active.attempt_count || 0) + 1;
+                        if (attempts >= MAX_DISPATCH_RETRIES) {
+                            console.log(`🛑 [Retry Cap] Task ${active.id} (group ${active.group_id}) exceeded ${MAX_DISPATCH_RETRIES} handshake attempts — marking FAILED instead of re-hitting the group.`);
+                            await supabase.from('posts').update({
+                                status: 'FAILED', attempt_count: attempts,
+                                failure_reason: `No worker handshake after ${MAX_DISPATCH_RETRIES} attempts (stopped to avoid repeated navigation to the same group)`
+                            }).eq('id', active.id);
+                            logEvent(active.id, 'FAILED', 'Retry cap reached — stopped re-dispatching to protect the account from rate limiting', { attempts, group_id: active.group_id });
+                        } else {
+                            const delayMs = dispatchBackoffMs(attempts);
+                            console.log(`⏳ [Timeout] Task ${active.id} stuck in SENT for >${SENT_HANDSHAKE_TIMEOUT_MS/1000}s (attempt ${attempts}/${MAX_DISPATCH_RETRIES}). Backing off ${Math.round(delayMs / 1000)}s before retry.`);
+                            await supabase.from('posts').update({
+                                status: 'PENDING', attempt_count: attempts,
+                                scheduled_time: new Date(now.getTime() + delayMs).toISOString()
+                            }).eq('id', active.id);
+                        }
                     }
                 } else if (active.status === 'PROCESSING') {
                     // Ensure processing tasks are in our tracking map for the heartbeat
@@ -1507,10 +1914,19 @@ setInterval(async () => {
         sentTaskTimestamps.set(nextTask.id, Date.now());
 
         // D. Send via SSE
-        const { data: group } = await supabase.from('groups').select('url').eq('id', nextTask.group_id).single();
-        broadcastSSE({ 
-            type: 'new_job', 
-            job: { ...nextTask, group_url: group?.url, status: 'SENT' } 
+        // A group id can now exist once PER user, so scope the URL lookup to this
+        // task's workspace + facebook_user (falling back to any match) and never
+        // use .single() — that would throw when multiple users share the group.
+        let groupQuery = supabase.from('groups').select('url').eq('id', nextTask.group_id);
+        if (nextTask.workspace_id) groupQuery = groupQuery.eq('workspace_id', nextTask.workspace_id);
+        if (nextTask.facebook_user) groupQuery = groupQuery.eq('facebook_user', nextTask.facebook_user);
+        const { data: group } = await groupQuery.limit(1).maybeSingle();
+        // NOTE: the extension's SSE handler listens for 'job_available' (not
+        // 'new_job') to trigger an immediate checkJobs(). Sending the matching
+        // event gives real-time pickup instead of waiting for the ~1min MV3 alarm.
+        broadcastSSE({
+            type: 'job_available',
+            job: { ...nextTask, group_url: group?.url, status: 'SENT' }
         });
         
         await updateTaskStatus(nextTask.id, 'SENT', 'Waiting for worker handshake...');
@@ -1532,8 +1948,11 @@ setInterval(async () => {
                 message: `🔴 Poller Critical Error: ${e.message || e}`
             }]);
         } catch (inner) { console.error("Logger failed:", inner); }
+    } finally {
+        dispatchLockActive = false;
     }
-}, 5000);
+}
+setInterval(runDispatchTick, 5000);
 
 
 // HEARTBEAT: Reset tasks stuck in PROCESSING/SENT for more than 4 minutes
@@ -1554,76 +1973,85 @@ setInterval(async () => {
         // (e.g. server restarted while task was mid-flight and startup populate failed)
         const { data: dbStuck } = await supabase
             .from('posts')
-            .select('id, created_at')
+            .select('id, created_at, attempt_count, group_id')
             .in('status', ['PROCESSING', 'SENT'])
             .eq('app_source', 'backup');
-        if (dbStuck) {
-            for (const t of dbStuck) {
-                const id = t.id;
-                if (!processingStartTimestamps.has(id) && !sentTaskTimestamps.has(id)) {
-                    const ageMs = now - new Date(t.created_at).getTime();
-                    if (ageMs > FOUR_MINUTES) {
-                        staleIds.push(id);
-                    } else {
-                        // Register it so next heartbeat can track it
-                        processingStartTimestamps.set(id, new Date(t.created_at).getTime());
-                    }
-                }
+        if (!dbStuck) return;
+
+        const staleTasks = [];
+        for (const t of dbStuck) {
+            const id = t.id;
+            const trackedStart = processingStartTimestamps.get(id) || sentTaskTimestamps.get(id);
+            const ageMs = trackedStart ? (now - trackedStart) : (now - new Date(t.created_at).getTime());
+            if (ageMs > FOUR_MINUTES) {
+                staleTasks.push(t);
+            } else if (!trackedStart) {
+                // Register it so next heartbeat can track it
+                processingStartTimestamps.set(id, new Date(t.created_at).getTime());
             }
         }
 
         // SCHEDULED RESUME (moderation cooldown): give moderation-blocked posts
-        // one more shot instead of leaving them CANCELLED forever. Placed BEFORE
-        // the `uniqueIds.length === 0` early return below so this still runs
-        // every tick even when nothing is currently stuck in PROCESSING/SENT.
-        // Uses the real attempt_count column (this schema has it, from queue
-        // hardening) instead of an in-memory counter, so the cap survives restarts.
+        // one more shot instead of leaving them CANCELLED forever. Capped via
+        // attempt_count — moderation-CANCELLED posts reach CANCELLED directly
+        // from the content script's pre-flight check, never through the
+        // SENT/handshake retry path below, so attempt_count is always 0 for them
+        // at cancel time and sharing the column here is safe. Placed BEFORE the
+        // `staleTasks.length === 0` early return so this still runs every tick
+        // even when nothing is currently stuck in PROCESSING/SENT.
         const MODERATION_COOLDOWN_MS = 48 * 60 * 60 * 1000; // 48h
         const MODERATION_RESUME_CAP = 2;
         const modCutoff = new Date(now - MODERATION_COOLDOWN_MS).toISOString();
-        const { data: modCancelled } = await scopeToWorkspace(supabase
+        const { data: modCancelled } = await supabase
             .from('posts').select('id, group_id, attempt_count')
-            .eq('status', 'CANCELLED').in('app_source', ['backup', 'demo'])
+            .eq('status', 'CANCELLED').eq('app_source', 'backup')
             .like('failure_reason', '%ממתין לאישור מנהל%')
-            .lt('attempt_count', MODERATION_RESUME_CAP)
-            .not('ended_at', 'is', null).lte('ended_at', modCutoff), null);
+            .not('ended_at', 'is', null).lte('ended_at', modCutoff);
 
+        let resumedAny = false;
         for (const p of modCancelled || []) {
             const attempts = p.attempt_count || 0;
-            const { error: resumeError } = await supabase.from('posts').update({
-                status: 'PENDING', scheduled_time: new Date(now).toISOString(),
-                failure_reason: null, attempt_count: attempts + 1
+            if (attempts >= MODERATION_RESUME_CAP) continue; // stays CANCELLED — operator must act manually (approve in FB or clear the group's moderation setting)
+            await supabase.from('posts').update({
+                status: 'PENDING', attempt_count: attempts + 1,
+                scheduled_time: new Date(now).toISOString(),
+                failure_reason: null
             }).eq('id', p.id).eq('status', 'CANCELLED');
-            if (!resumeError) {
-                console.log(`[Heartbeat] Task ${p.id} (group ${p.group_id}) auto-resumed after 48h moderation cooldown (attempt ${attempts + 1}/${MODERATION_RESUME_CAP}).`);
-                logEvent(p.id, 'PENDING', `Auto-resumed after 48h moderation cooldown (attempt ${attempts + 1}/${MODERATION_RESUME_CAP})`, { group_id: p.group_id, reset_by: 'moderation_resume_sweep' });
-                io.emit('queue_updated');
-                io.emit('data_updated');
+            resumedAny = true;
+            console.log(`[Heartbeat] Task ${p.id} (group ${p.group_id}) auto-resumed after 48h moderation cooldown (attempt ${attempts + 1}/${MODERATION_RESUME_CAP}).`);
+            logEvent(p.id, 'PENDING', `Auto-resumed after 48h moderation cooldown (attempt ${attempts + 1}/${MODERATION_RESUME_CAP})`, { group_id: p.group_id, reset_by: 'moderation_resume_sweep' });
+        }
+        if (resumedAny) { io.emit('queue_updated'); io.emit('data_updated'); }
+
+        if (staleTasks.length === 0) return;
+
+        // RETRY CAP + BACKOFF (see MAX_DISPATCH_RETRIES / dispatchBackoffMs above): resetting
+        // a stuck task to PENDING unconditionally caused it to be re-dispatched to the same
+        // Facebook group every few minutes indefinitely, which looks like bot/spam behavior
+        // to Facebook and triggered an account checkpoint. Cap retries per task instead.
+        for (const t of staleTasks) {
+            processingStartTimestamps.delete(t.id);
+            sentTaskTimestamps.delete(t.id);
+            const attempts = (t.attempt_count || 0) + 1;
+            if (attempts >= MAX_DISPATCH_RETRIES) {
+                await supabase.from('posts').update({
+                    status: 'FAILED', attempt_count: attempts,
+                    failure_reason: `Stuck > 4 minutes, ${MAX_DISPATCH_RETRIES} attempts exhausted (stopped to avoid repeated navigation to the same group)`
+                }).in('id', [t.id]).in('status', ['PROCESSING', 'SENT']);
+                console.log(`🛑 [Heartbeat Retry Cap] Task ${t.id} (group ${t.group_id}) exceeded ${MAX_DISPATCH_RETRIES} attempts — marked FAILED.`);
+                logEvent(t.id, 'FAILED', 'Retry cap reached via heartbeat — stopped re-dispatching to protect the account from rate limiting', { attempts, group_id: t.group_id, reset_by: 'heartbeat' });
+            } else {
+                const delayMs = dispatchBackoffMs(attempts);
+                await supabase.from('posts').update({
+                    status: 'PENDING', attempt_count: attempts,
+                    scheduled_time: new Date(now + delayMs).toISOString()
+                }).in('id', [t.id]).in('status', ['PROCESSING', 'SENT']);
+                console.log(`[Heartbeat] Task ${t.id} stale, attempt ${attempts}/${MAX_DISPATCH_RETRIES}, backing off ${Math.round(delayMs / 1000)}s.`);
+                logEvent(t.id, 'STUCK', 'Heartbeat auto-reset stuck task to PENDING', { reset_by: 'heartbeat', attempts });
             }
         }
-
-        const uniqueIds = [...new Set(staleIds)];
-        if (uniqueIds.length === 0) return;
-
-        console.log(`[Heartbeat] Resetting ${uniqueIds.length} stale task(s): ${uniqueIds.join(', ')}`);
-        const newScheduledTime = new Date(now + 180000).toISOString();
-        const { error } = await supabase
-            .from('posts')
-            .update({ status: 'PENDING', scheduled_time: newScheduledTime })
-            .in('id', uniqueIds)
-            .in('status', ['PROCESSING', 'SENT']);
-
-        if (!error) {
-            uniqueIds.forEach(id => {
-                processingStartTimestamps.delete(id);
-                sentTaskTimestamps.delete(id);
-                logEvent(id, 'STUCK', 'Heartbeat auto-reset stuck task to PENDING', { reset_by: 'heartbeat' });
-            });
-            io.emit('queue_updated');
-            io.emit('data_updated');
-        } else {
-            console.error('[Heartbeat] Reset error:', error.message);
-        }
+        io.emit('queue_updated');
+        io.emit('data_updated');
     } catch (e) {
         console.error('[Heartbeat] Unexpected error:', e);
     }
@@ -1660,12 +2088,14 @@ app.get('/api/jobs/next', async (req, res) => {
 
     if (!data) return res.json({ job: null });
 
-    // Fetch group URL separately (posts table doesn't store group_url)
-    const { data: group } = await supabase
-        .from('groups')
-        .select('name, url')
-        .eq('id', data.group_id)
-        .maybeSingle();
+    // Fetch group URL separately (posts table doesn't store group_url).
+    // A group id can exist once per user, so scope to this task's workspace +
+    // facebook_user and cap at one row — .maybeSingle() alone would throw when
+    // several users share the group.
+    let nextGroupQuery = supabase.from('groups').select('name, url').eq('id', data.group_id);
+    if (data.workspace_id) nextGroupQuery = nextGroupQuery.eq('workspace_id', data.workspace_id);
+    if (data.facebook_user) nextGroupQuery = nextGroupQuery.eq('facebook_user', data.facebook_user);
+    const { data: group } = await nextGroupQuery.limit(1).maybeSingle();
 
     // Mark as PROCESSING immediately to prevent double-dispatch
     await supabase.from('posts').update({ status: 'PROCESSING' }).eq('id', data.id);
@@ -1697,11 +2127,13 @@ app.get('/api/jobs/for-url', async (req, res) => {
 
     const normalizedUrl = url.replace(/\/$/, '');
 
-    // Find group by URL
+    // Find group by URL. The same URL can now map to several per-user rows, so
+    // cap at one (id/name are identical across a group's copies).
     const { data: group } = await supabase
         .from('groups')
         .select('id, name')
         .or(`url.eq.${normalizedUrl},url.eq.${normalizedUrl}/`)
+        .limit(1)
         .maybeSingle();
 
     if (!group) return res.json({ job: null });
@@ -1804,9 +2236,10 @@ app.patch('/api/tasks/:id/status', validate(patchStatusSchema), async (req, res)
     const update = { status };
     if (failReason) update.failure_reason = failReason;
     if (completed_at) update.ended_at = completed_at;
-    // The content script's moderation-block path sends CANCELLED with no
-    // completed_at, so ended_at was never set for these rows — leaving nothing
-    // for the moderation-resume sweep to anchor its 48h cooldown on.
+    // The content script's moderation-block path (content.js ~825-835) sends
+    // CANCELLED with no completed_at, so ended_at was never set for these rows —
+    // leaving nothing for the moderation-resume sweep below to anchor its 48h
+    // cooldown on. Stamp it here for any CANCELLED that didn't already get one.
     else if (status === 'CANCELLED') update.ended_at = new Date().toISOString();
     if (proof_url) update.proof_url = proof_url;
 
@@ -1843,15 +2276,26 @@ app.patch('/api/tasks/:id/status', validate(patchStatusSchema), async (req, res)
     io.emit('status_update', { taskId: parseInt(id) || id, status, group_id: taskData?.group_id });
     io.emit('queue_updated');
     res.json({ success: true });
+
+    // Kick the dispatcher immediately when the worker just finished a task —
+    // otherwise we wait up to 5s (the poller cadence) with an idle extension
+    // and a scheduled-time-in-the-past task sitting in PENDING.
+    if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(status)) {
+        setImmediate(() => { runDispatchTick().catch(err => console.error('Immediate dispatch failed:', err)); });
+    }
 });
 
 // --- QUEUE (POSTS) ---
 app.get('/api/queue', ...dashboardAuth, async (req, res) => {
     console.log('📋 [QUEUE] Fetching queue...');
 
+    // No embedded groups(...) join here — the migration 0008 dropped the
+    // posts→groups FK (a group id is no longer globally unique; it exists once
+    // per facebook_user), and PostgREST refuses to resolve the auto-relationship
+    // without a FK. Fetch posts, then merge in group name/url manually.
     const { data, error } = await scopeToWorkspace(supabase
         .from('posts')
-        .select('*, groups(name, url)')
+        .select('*')
         .in('app_source', ['backup', 'demo']), req)
         .order('scheduled_time', { ascending: true })
         .range(0, 4999);
@@ -1861,13 +2305,33 @@ app.get('/api/queue', ...dashboardAuth, async (req, res) => {
         return res.status(500).json({ error: error.message });
     }
 
-    // Flatten group info into each row
-    const rows = (data || []).map(p => ({
-        ...p,
-        group_name: p.groups?.name || p.group_id,
-        group_url:  p.groups?.url  || null,
-        groups: undefined
-    }));
+    // Look up each post's group name/url, matching the group to the SAME
+    // account the post belongs to (a shared group id can be attributed to
+    // multiple accounts under the new per-user key).
+    const groupIds = [...new Set((data || []).map(p => p.group_id).filter(Boolean))];
+    const groupIndex = new Map(); // key: `${fbUser}\x1f${id}` and fallback `${id}`
+    if (groupIds.length > 0) {
+        const { data: groups } = await scopeToWorkspace(supabase
+            .from('groups')
+            .select('id, name, url, facebook_user')
+            .in('id', groupIds), req);
+        (groups || []).forEach(g => {
+            groupIndex.set(`${g.facebook_user || ''}\x1f${g.id}`, g);
+            // Keep a plain-id fallback for posts that don't carry a facebook_user
+            // (e.g. legacy rows created before the per-user era).
+            if (!groupIndex.has(g.id)) groupIndex.set(g.id, g);
+        });
+    }
+
+    const rows = (data || []).map(p => {
+        const g = groupIndex.get(`${p.facebook_user || ''}\x1f${p.group_id}`)
+               || groupIndex.get(p.group_id);
+        return {
+            ...p,
+            group_name: g?.name || p.group_id,
+            group_url:  g?.url  || null,
+        };
+    });
 
     console.log(`✅ [QUEUE] Fetched ${rows.length} tasks`);
     if (rows.length > 0) {
@@ -1959,10 +2423,13 @@ app.post('/api/worker/resume', ...dashboardAuth, denyDemo, (req, res) => {
 
 // Worker heartbeat (extension calls this to register presence)
 app.post('/api/worker/heartbeat', (req, res) => {
+    // The extension (background.js) sends manifest_version/origin_folder/extension_id —
+    // accept both those field names and the older version/origin/extensionId names so
+    // this doesn't silently regress again if either side changes independently.
     lastWorkerCheckin   = new Date().toISOString();
-    lastWorkerVersion   = req.body.version  || lastWorkerVersion;
-    lastWorkerOrigin    = req.body.origin   || lastWorkerOrigin;
-    lastWorkerExtensionId = req.body.extensionId || lastWorkerExtensionId;
+    lastWorkerVersion   = req.body.manifest_version || req.body.version || lastWorkerVersion;
+    lastWorkerOrigin    = req.body.origin_folder || req.body.origin || lastWorkerOrigin;
+    lastWorkerExtensionId = req.body.extension_id || req.body.extensionId || lastWorkerExtensionId;
     res.json({ success: true, stop_signal: workerStopSignal });
 });
 
@@ -2042,6 +2509,17 @@ setInterval(() => {
     sweepMissedSchedules().catch(e => console.error('[sweep] missed:', e.message));
 }, QUEUE_SWEEP_MS);
 
+// Belt-and-braces alongside the uncaughtException guard above: http.Server
+// emits 'error' for bind failures, which is the documented place to catch them.
+server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} is already in use — another SafePost server is running. Exiting.`);
+        process.exit(1);
+    }
+    console.error('🔥 HTTP server error:', err);
+    process.exit(1);
+});
+
 server.listen(PORT, '0.0.0.0', async () => {
     console.log(`🔥 SafePost OS Server running on http://localhost:${PORT} (Supabase Backend)`);
     // Populate processingStartTimestamps for any in-flight tasks from before server restart
@@ -2095,40 +2573,11 @@ server.listen(PORT, '0.0.0.0', async () => {
         console.error('[Startup] Could not init processing map:', e.message);
     }
 
-    // Automatic cleanup: fix stuck tasks every 60 seconds
-    setInterval(async () => {
-        try {
-            const fourMinutesAgo = new Date(Date.now() - 4 * 60 * 1000).toISOString();
-            const { data: stuckTasks, error: fetchError } = await supabase
-                .from('posts')
-                .select('id, status, group_id')
-                .in('status', ['PROCESSING', 'SENT'])
-                .lt('created_at', fourMinutesAgo)
-                .eq('app_source', 'backup');
-
-            if (!fetchError && stuckTasks && stuckTasks.length > 0) {
-                console.log(`🔧 [AUTO-CLEANUP] Found ${stuckTasks.length} stuck task(s), marking as FAILED...`);
-                const { error: updateError } = await supabase
-                    .from('posts')
-                    .update({ status: 'FAILED', failure_reason: 'Auto-timeout: task stuck > 4 minutes' })
-                    .in('status', ['PROCESSING', 'SENT'])
-                    .lt('created_at', fourMinutesAgo)
-                    .eq('app_source', 'backup');
-
-                if (!updateError) {
-                    console.log(`✅ [AUTO-CLEANUP] Fixed ${stuckTasks.length} stuck task(s)`);
-                    // Log each one
-                    stuckTasks.forEach(t => {
-                        logEvent(t.id, 'STUCK_AUTO_CLEANUP', `Auto-cleaned stuck task (${t.status} > 4min)`);
-                    });
-                    // Notify dashboard via Socket.io
-                    io.emit('tasks_cleanup', { fixed: stuckTasks.length, timestamp: new Date().toISOString() });
-                } else {
-                    console.error('[AUTO-CLEANUP] Update failed:', updateError.message);
-                }
-            }
-        } catch (e) {
-            console.error('[AUTO-CLEANUP] Error:', e.message);
-        }
-    }, 60 * 1000); // Run every 60 seconds
+    // NOTE: a second "auto-cleanup" sweep used to run here on the same 60s cadence as the
+    // HEARTBEAT above, both racing to handle the same stuck PROCESSING/SENT tasks — this one
+    // force-failed anything >4min past created_at unconditionally, which fought with the
+    // heartbeat's retry/backoff bookkeeping (a task correctly backing off 8-20min after a
+    // retry could get yanked to FAILED here mid-backoff). The heartbeat is now the single
+    // owner of stuck-task recovery (with MAX_DISPATCH_RETRIES + dispatchBackoffMs), so this
+    // duplicate was removed rather than reconciled.
 });

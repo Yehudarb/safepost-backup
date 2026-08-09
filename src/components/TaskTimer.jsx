@@ -20,10 +20,10 @@ const TaskTimer = ({ targetTime, status, onComplete }) => {
         return Math.max(0, diff);
     });
 
-    // Callers may pass an inline arrow (e.g. onComplete={() => {}}), whose
-    // identity changes on every parent render. Keeping it in the effect's
-    // dependency array tears down and rebuilds every row's interval on each
-    // render — with many queued tasks that's many timers churning per render.
+    // Callers pass an inline arrow (`onComplete={() => {}}`), so its identity
+    // changes on every parent render. Keeping it in the effect's dependency array
+    // tore down and rebuilt every row's interval on each render — with a few
+    // hundred queued tasks that is a few hundred timers churning per render.
     // Hold it in a ref so the effect depends only on the values that matter.
     const onCompleteRef = useRef(onComplete);
     useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);

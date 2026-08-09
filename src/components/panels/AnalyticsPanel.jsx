@@ -73,6 +73,7 @@ const AnalyticsPanel = ({ data, onClose }) => {
     const topErrors = data?.topErrors || [];
     const timing = data?.timing || null;
     const throttleSuggestion = data?.throttleSuggestion || null;
+    const variantStats = data?.variantStats || [];
 
     const healthBadgeClass = (score) =>
         score >= 70 ? 'bg-emerald-500/10 text-emerald-400'
@@ -290,6 +291,27 @@ const AnalyticsPanel = ({ data, onClose }) => {
                                 </p>
                             )}
                             <p className="text-[9px] text-gray-600 mt-2">{throttleSuggestion.note}</p>
+                        </div>
+                    )}
+
+                    {/* A-B Variant Breakdown — only appears once migration 0009 lands and at least one campaign used content_variants */}
+                    {variantStats.length > 0 && (
+                        <div className="md:col-span-4 bg-[#161b22] border border-[#30363d] rounded-2xl p-4">
+                            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-3">פילוח גרסאות A/B</h3>
+                            <div className="space-y-2">
+                                {variantStats.map((v, i) => {
+                                    const vRate = v.total > 0 ? Math.round(v.success / v.total * 100) : 0;
+                                    return (
+                                        <div key={i} className="flex items-center gap-3 p-2 bg-[#1c2128] rounded-lg">
+                                            <span className="text-[10px] font-black uppercase text-sky-400 w-16 shrink-0">{v.label}</span>
+                                            <div className="flex-1 h-2 bg-[#0d1117] rounded-full overflow-hidden">
+                                                <div className="h-full bg-sky-500" style={{ width: `${vRate}%` }} />
+                                            </div>
+                                            <span className="text-[10px] text-gray-400 shrink-0 w-32 text-left" dir="ltr">{v.success}/{v.total} ({vRate}%)</span>
+                                        </div>
+                                    );
+                                })}
+                            </div>
                         </div>
                     )}
 

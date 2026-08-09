@@ -8,6 +8,15 @@ export default {
     theme: {
         extend: {
             colors: {
+                // WCAG AA-safe values for the "brand" accent used throughout the
+                // dashboard (bg-brand, text-brand, gradients) — this token was
+                // referenced everywhere but never defined, so it silently failed
+                // to render in light mode (white text on an unstyled/white bg).
+                brand: {
+                    DEFAULT: "#2563eb",
+                    soft: "#eef1fe",
+                    dark: "#60a5fa",
+                },
                 "on-background": "#0b1c30",
                 "inverse-surface": "#213145",
                 "primary-container": "#2170e4",

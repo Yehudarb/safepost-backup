@@ -22,7 +22,7 @@ const SchedulerForm = ({ groups, onSubmit, disabled }) => {
 
         onSubmit({
             content,
-            group_id: selectedGroup,
+            group_ids: [selectedGroup],
             group_name: group ? group.name : 'Unknown Group',
             schedule: isoScheduledAt // Using 'schedule' to match server/index.cjs expectations
         });

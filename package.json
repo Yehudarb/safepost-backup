@@ -7,7 +7,11 @@
         "start-all": "concurrently \"cross-env NODE_ENV=development node server/index.cjs\" \"npm run dev\"",
         "dev": "cross-env NODE_ENV=development vite",
         "build": "vite build",
-        "preview": "vite preview"
+        "preview": "vite preview",
+        "test": "npm run test:validation && npm run test:sync && npm run test:performance",
+        "test:validation": "node server/tests/validation.test.cjs",
+        "test:sync": "node server/tests/sync.test.cjs",
+        "test:performance": "node server/tests/performance.test.cjs"
     },
     "dependencies": {
         "@anthropic-ai/sdk": "^0.32.0",
