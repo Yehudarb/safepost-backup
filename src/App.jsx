@@ -201,12 +201,17 @@ function HeroCountdown({ queue }) {
     if (activeTask) {
         if (activeTask.status === 'SENT' || activeTask.status === 'PROCESSING') {
             const elapsed = Math.max(0, Math.floor((now - new Date(activeTask.created_at || now).getTime()) / 1000));
-            mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
-            ss = String(elapsed % 60).padStart(2, '0');
             const mins = Math.floor(elapsed / 60);
+            // The MM:SS boxes only have room for 2 digits each. A task that's been
+            // stuck for hours/days (e.g. no worker ever connected) used to overflow
+            // "mm" into a raw, unformatted minute count instead of wrapping — freeze
+            // the visible clock at 59:59 and say so in the label instead.
+            const displayElapsed = Math.min(elapsed, 59 * 60 + 59);
+            mm = String(Math.floor(displayElapsed / 60)).padStart(2, '0');
+            ss = String(displayElapsed % 60).padStart(2, '0');
             if (activeTask.status === 'SENT') {
-                label = 'Waiting for Worker...';
-                colorClass = elapsed > 20 ? 'text-amber-500' : 'text-sky-500';
+                label = mins > 5 ? 'Worker not responding' : 'Waiting for Worker...';
+                colorClass = mins > 5 ? 'text-rose-500' : elapsed > 20 ? 'text-amber-500' : 'text-sky-500';
             } else {
                 label = mins > 4 ? 'Task stalled' : mins > 2 ? 'Publishing (slow)' : 'Post in progress';
                 colorClass = mins > 4 ? 'text-rose-500' : mins > 2 ? 'text-amber-500' : 'text-emerald-500';
