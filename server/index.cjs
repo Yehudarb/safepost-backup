@@ -2061,7 +2061,10 @@ setInterval(async () => {
 app.get('/api/system/status', requireAuth, (req, res) => {
     const now = new Date();
     const checkinAge = lastWorkerCheckin ? (now - new Date(lastWorkerCheckin)) / 1000 : null;
-    const workerActive = checkinAge !== null && checkinAge < 60; // active if checked in within 60s
+    // Extension heartbeats fire on a chrome.alarms 1-minute period (MV3's minimum
+    // resolution, and its actual firing time can drift/lag when the service worker
+    // was suspended). A 60s window flaps to OFFLINE between ticks; 90s gives slack.
+    const workerActive = checkinAge !== null && checkinAge < 90;
 
     res.json({
         worker_status: workerActive ? 'ACTIVE' : 'OFFLINE',
