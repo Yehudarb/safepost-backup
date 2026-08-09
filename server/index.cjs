@@ -1770,10 +1770,11 @@ app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res)
             app_source: req.isDemo ? 'demo' : 'backup',
             ...workspaceFields(req)
         };
-        // Only add facebook_user if provided (will be ignored if column doesn't exist)
-        if (facebook_user) {
-            task.facebook_user = facebook_user;
-        }
+        // NOTE: posts has no facebook_user column in production (only groups does,
+        // via migration 0008) — PostgREST rejects an insert containing an unknown
+        // column outright rather than silently dropping it, which broke every launch
+        // that had a current user selected (i.e. almost always). facebook_user is
+        // still used above for {{}} placeholder resolution; it's just never written here.
         // Only set variant_label when variants are actually in use — this column
         // only exists after migration 0009 is applied. Never touching it on the
         // ordinary single-content path (the overwhelming majority of requests)
