@@ -29,7 +29,7 @@ function safeSendMessage(payload, callback = null) {
 // localStorage key here would never see what the popup saved.
 async function getBackendUrl() {
     const { apiUrl } = await chrome.storage.local.get('apiUrl');
-    return (apiUrl || 'http://localhost:3001').replace(/\/+$/, '');
+    return (apiUrl || 'https://safepost-backup.onrender.com').replace(/\/+$/, '');
 }
 
 // 0. Remote Logging Helper

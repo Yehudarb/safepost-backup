@@ -4,11 +4,12 @@ console.log("[Background] Service Worker v9.0 — Multi-anchor name extraction (
 importScripts('extensionStorage.js');
 
 const API_PORT = 3001;
-// Default backend URL. Overridden at runtime by the value saved in the
-// extension settings popup (chrome.storage.local 'apiUrl'). Kept as a mutable
-// `let` so all `${BASE_URL}` call sites pick up the configured value without
-// changing their (already async) call signatures.
-const DEFAULT_BASE_URL = 'http://localhost:3001';
+// Default backend URL — production, so a fresh install works with zero setup.
+// Overridden at runtime by the value saved in the extension settings popup
+// (chrome.storage.local 'apiUrl'), e.g. to http://localhost:3001 for local
+// dev. Kept as a mutable `let` so all `${BASE_URL}` call sites pick up the
+// configured value without changing their (already async) call signatures.
+const DEFAULT_BASE_URL = 'https://safepost-backup.onrender.com';
 let BASE_URL = DEFAULT_BASE_URL;
 
 // Boot from the saved API URL when present so the extension stays aligned with
