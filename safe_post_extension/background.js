@@ -48,18 +48,30 @@ function workerHeaders(p) {
 // today, so this is a no-op for behaviour — but it is what lets the operator
 // turn WORKER_AUTH_ENFORCED on later without the extension losing access.
 // Returns plain headers when unpaired, exactly as before.
+// The shared key set in the settings popup, used when this install is not
+// paired. Either credential satisfies the server.
+async function getExtensionKey() {
+    const { extensionKey } = await chrome.storage.local.get('extensionKey');
+    return extensionKey || null;
+}
+
 async function authedHeaders(extra = {}) {
     const pairing = await getPairing();
-    return pairing ? { ...extra, ...workerHeaders(pairing) } : { ...extra };
+    if (pairing) return { ...extra, ...workerHeaders(pairing) };
+    const key = await getExtensionKey();
+    return key ? { ...extra, 'x-extension-key': key } : { ...extra };
 }
 
 // Same idea for EventSource, which cannot send headers — see the note on
 // readWorkerCredentials in server/middleware/worker.cjs.
 async function authedStreamUrl(url) {
-    const pairing = await getPairing();
-    if (!pairing) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}worker_id=${encodeURIComponent(pairing.workerId)}&device_token=${encodeURIComponent(pairing.token)}`;
+    const pairing = await getPairing();
+    if (pairing) {
+        return `${url}${sep}worker_id=${encodeURIComponent(pairing.workerId)}&device_token=${encodeURIComponent(pairing.token)}`;
+    }
+    const key = await getExtensionKey();
+    return key ? `${url}${sep}extension_key=${encodeURIComponent(key)}` : url;
 }
 
 async function persistFacebookUser(facebook_user, facebook_user_id = null) {

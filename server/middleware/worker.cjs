@@ -42,6 +42,27 @@ function readWorkerCredentials(req) {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Shared-secret alternative to per-device pairing. One EXTENSION_API_KEY on the
+// server, the same value pasted into the extension's settings popup — no codes,
+// no browser_workers rows, no dashboard step. Suited to a single operator; if
+// several people or machines ever need separate, individually revocable access,
+// the pairing flow above is the better fit.
+function readExtensionKey(req) {
+    // Query fallback exists only because EventSource cannot set headers — see
+    // the note on readWorkerCredentials.
+    return req.headers['x-extension-key'] || req.query.extension_key || null;
+}
+
+// Constant-time compare so a wrong key cannot be recovered by timing how long
+// the rejection takes.
+function keyMatches(presented, expected) {
+    if (!presented || !expected) return false;
+    const a = Buffer.from(String(presented));
+    const b = Buffer.from(String(expected));
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+}
+
 async function requireWorker(req, res, next) {
     const { workerId, token } = readWorkerCredentials(req);
     if (!workerId || !token) {
@@ -98,8 +119,30 @@ async function requireWorker(req, res, next) {
 async function optionalWorker(req, res, next) {
     const { workerId, token } = readWorkerCredentials(req);
 
+    // 1. A paired worker's device token, when present.
     if (workerId && token) return requireWorker(req, res, next);
 
+    // 2. The shared extension key, when both sides have one configured. A key
+    //    that is present but WRONG is rejected outright — never quietly
+    //    downgraded to "anonymous", which would make the whole check bypassable
+    //    by sending a deliberately bad key.
+    const presentedKey = readExtensionKey(req);
+    const expectedKey = process.env.EXTENSION_API_KEY;
+    if (presentedKey && expectedKey) {
+        if (!keyMatches(presentedKey, expectedKey)) {
+            return res.status(401).json({ error: 'Invalid extension key.' });
+        }
+        req.worker = null;
+        req.extensionKeyAuthed = true;
+        return next();
+    }
+    // A key presented to a server that has none configured is ignored rather
+    // than rejected, and falls through to the anonymous rules below. Rejecting
+    // it would buy nothing — with no key set and the flag off, anonymous access
+    // is permitted anyway — while breaking the extension for anyone who saved
+    // the key in the popup before setting it on the server.
+
+    // 3. No credentials at all.
     if (process.env.WORKER_AUTH_ENFORCED === 'true') {
         return res.status(401).json({ error: 'Worker credentials required.' });
     }
