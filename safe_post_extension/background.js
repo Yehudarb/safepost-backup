@@ -48,11 +48,17 @@ async function persistFacebookUser(facebook_user, facebook_user_id = null) {
     const cleanId = typeof facebook_user_id === 'string' ? facebook_user_id.trim() : '';
     if (!clean) return null;
     try {
+        // Don't blindly null out a previously known account id when this particular
+        // caller didn't have one to give us — that stale-but-still-correct id is what
+        // detectCurrentFacebookUser() later uses to validate a cached name belongs to
+        // the account that's ACTUALLY active, so wiping it defeats that safety check.
+        const existing = cleanId ? null : await chrome.storage.local.get('safepost_currentUserId');
+        const finalId = cleanId || existing?.safepost_currentUserId || null;
         await chrome.storage.local.set({
             fb_session: clean,
             safepost_currentUser: clean,
             safepost_detectedFacebookUser: clean,
-            safepost_currentUserId: cleanId || null
+            safepost_currentUserId: finalId
         });
     } catch (e) {
         console.warn('[Background] Failed to persist facebook user:', e);
@@ -320,13 +326,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === "SYNC_GROUPS") {
-        persistFacebookUser(request.facebook_user || null);
+        persistFacebookUser(request.facebook_user || null, request.facebook_user_id || null);
         fetch(`${BASE_URL}/api/groups/sync`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 groups: request.groups,
-                facebook_user: request.facebook_user || null
+                facebook_user: request.facebook_user || null,
+                facebook_user_id: request.facebook_user_id || null
             })
         })
             .then(async (res) => {
@@ -387,12 +394,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
-    if (request.action === "GET_COOKIES") {
-        chrome.cookies.getAll({ domain: "facebook.com" }, (cookies) => {
-            sendResponse({ success: true, cookies: cookies });
-        });
-        return true;
-    }
+    // (A "GET_COOKIES" handler used to live here, returning every facebook.com
+    // cookie — session cookies included — to the caller. Nothing called it, so
+    // it was pure attack surface, and it contradicted the rule that Facebook
+    // credentials never leave the browser. Removed, along with the "cookies"
+    // manifest permission it required.)
 
     return false;
 });
@@ -408,21 +414,21 @@ let isGroupScanning = false;
 async function getFacebookUserFromContent() {
     try {
         const tabs = await chrome.tabs.query({ url: 'https://www.facebook.com/*' });
-        if (!tabs.length) return null;
+        if (!tabs.length) return { name: null, id: null };
 
         return new Promise((resolve) => {
             chrome.tabs.sendMessage(tabs[0].id, { action: 'GET_FACEBOOK_USER' }, (response) => {
                 if (chrome.runtime.lastError) {
                     console.warn('[Background] Failed to get user from content:', chrome.runtime.lastError.message);
-                    resolve(null);
+                    resolve({ name: null, id: null });
                 } else {
-                    resolve(response?.facebook_user || null);
+                    resolve({ name: response?.facebook_user || null, id: response?.facebook_user_id || null });
                 }
             });
         });
     } catch (e) {
         console.warn('[Background] Error querying FB user from content:', e.message);
-        return null;
+        return { name: null, id: null };
     }
 }
 
@@ -435,8 +441,8 @@ async function scanAndSyncGroups() {
     console.log("[Background] scanAndSyncGroups v9.0 (multi-anchor + upgrade) via www.facebook.com/groups/joins/");
 
     // Get the current user from content.js BEFORE opening the new tab
-    const fbUserFromContent = await getFacebookUserFromContent();
-    console.log('[Background] FB user from content.js:', fbUserFromContent || '(none)');
+    const fbProfileFromContent = await getFacebookUserFromContent();
+    console.log('[Background] FB user from content.js:', fbProfileFromContent.name || '(none)');
 
     const reportFail = (error) => fetch(`${BASE_URL}/api/groups/sync-failed`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -473,10 +479,11 @@ async function scanAndSyncGroups() {
 
                         const results = await chrome.scripting.executeScript({
                             target: { tabId },
-                            args: [fbUserFromContent],
-                            func: (fbUserFromContent) => new Promise(resolveAll => {
+                            args: [fbProfileFromContent],
+                            func: (fbProfileFromContent) => new Promise(resolveAll => {
                                 // Store the user from content.js so it's available during detection
-                                window.__fbUserFromContent = fbUserFromContent;
+                                window.__fbUserFromContent = fbProfileFromContent?.name || null;
+                                window.__fbUserIdFromContent = fbProfileFromContent?.id || null;
                                 // --- Live status panel, rendered inside this tab so the user sees
                                 // the scrape working: running count, scroll progress, elapsed time. ---
                                 const panel = (() => {
@@ -827,7 +834,7 @@ async function scanAndSyncGroups() {
                                             console.log('[SafePost DEBUG] final group names:', groups.map(g => g.name));
                                             // Keep the finished panel visible briefly before the tab closes.
                                             // Return both groups AND the FB user they belong to
-                                            setTimeout(() => resolveAll({ groups, facebook_user }), 2200);
+                                            setTimeout(() => resolveAll({ groups, facebook_user, facebook_user_id }), 2200);
                                             return;
                                         }
                                         tick();
@@ -853,13 +860,15 @@ async function scanAndSyncGroups() {
                                         }
 
                                         const nameMatch = slice.match(/"NAME"\s*:\s*"([^"]+)"/);
-                                        if (nameMatch && nameMatch[1]) return nameMatch[1];
+                                        if (nameMatch && nameMatch[1]) return { name: nameMatch[1], id: userId };
                                     }
                                     return null;
                                 };
                                 // Use the user from content.js if available (passed via window.__fbUserFromContent);
                                 // otherwise detect it fresh in this tab.
-                                const facebook_user = window.__fbUserFromContent || detectFBUserInTab();
+                                const detectedInTab = detectFBUserInTab();
+                                const facebook_user = window.__fbUserFromContent || detectedInTab?.name || null;
+                                const facebook_user_id = window.__fbUserIdFromContent || detectedInTab?.id || null;
                                 console.log('[SafePost] Final FB user for sync:', facebook_user || '(none)');
 
                                 extractWithSafety(); // grab what's already loaded
@@ -872,6 +881,7 @@ async function scanAndSyncGroups() {
                         const result = results?.[0]?.result || {};
                         const groups = result.groups || [];
                         const facebook_user = result.facebook_user || null;
+                        const facebook_user_id = result.facebook_user_id || null;
                         console.log(`[Background] joins scan: found ${groups.length} groups (user: ${facebook_user || 'none'})`);
 
                         if (groups.length === 0) {
@@ -884,7 +894,7 @@ async function scanAndSyncGroups() {
                         const syncRes = await fetch(`${BASE_URL}/api/groups/sync`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ groups, facebook_user })
+                            body: JSON.stringify({ groups, facebook_user, facebook_user_id })
                         });
                         const syncData = await syncRes.json();
                         clearTimeout(timeout);
@@ -998,16 +1008,11 @@ chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => 
         sendResponse({ success: true, status: "STARTED" });
     }
 
-    if (request.action === "GET_COOKIES") {
-        chrome.cookies.getAll({ domain: "facebook.com" }, (cookies) => {
-            if (chrome.runtime.lastError) {
-                sendResponse({ success: false, error: chrome.runtime.lastError.message });
-            } else {
-                sendResponse({ success: true, cookies: cookies || [] });
-            }
-        });
-        return true;
-    }
+    // A second "GET_COOKIES" handler used to live here. This listener is
+    // onMessageExternal, so it was reachable from any page in the manifest's
+    // externally_connectable list — meaning a web page could ask the extension
+    // for the user's full Facebook session cookies. Nothing ever called it.
+    // Removed; see the matching note in the onMessage listener above.
 
     if (request.action === "SCAN_AND_SYNC_GROUPS") {
         console.log("[Background] SCAN_AND_SYNC_GROUPS received from Dashboard");

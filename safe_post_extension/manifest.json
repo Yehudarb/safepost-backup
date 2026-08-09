@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "SafePost Automation",
-    "version": "7.5",
+    "version": "9.0",
     "description": "Automated Facebook Group Posting (Supabase Storage Sync). Configurable API server via popup settings.",
     "permissions": [
         "activeTab",
@@ -9,8 +9,7 @@
         "storage",
         "alarms",
         "clipboardRead",
-        "clipboardWrite",
-        "cookies"
+        "clipboardWrite"
     ],
     "host_permissions": [
         "https://www.facebook.com/*",
@@ -24,9 +23,7 @@
             "http://localhost:5173/*",
             "http://127.0.0.1:5173/*",
             "http://localhost:3001/*",
-            "http://127.0.0.1:3001/*",
-            "https://safepost-backup.vercel.app/*",
-            "https://safepost-backup.onrender.com/*"
+            "http://127.0.0.1:3001/*"
         ]
     },
     "background": {
