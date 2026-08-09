@@ -24,6 +24,14 @@ function safeSendMessage(payload, callback = null) {
     }
 }
 
+// Same source of truth as popup.js/background.js (chrome.storage.local 'apiUrl'),
+// not page localStorage — content scripts run in the facebook.com origin, so a
+// localStorage key here would never see what the popup saved.
+async function getBackendUrl() {
+    const { apiUrl } = await chrome.storage.local.get('apiUrl');
+    return (apiUrl || 'http://localhost:3001').replace(/\/+$/, '');
+}
+
 // 0. Remote Logging Helper
 async function logRemote(message, metadata = {}) {
     console.log(`[SafePost-Remote] ${message}`, metadata);
@@ -449,7 +457,7 @@ async function uploadMedia(mediaPath) {
 
     let fullUrl = mediaPath;
     if (!mediaPath.startsWith('http')) {
-        fullUrl = `http://localhost:3001${mediaPath}`;
+        fullUrl = `${await getBackendUrl()}${mediaPath}`;
     }
 
     window.hud.updateText(mediaType === 'video' ? "טוען סרטון" : "מוריד תמונה", "טוען מהענן...");
