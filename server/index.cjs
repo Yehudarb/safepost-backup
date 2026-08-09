@@ -428,19 +428,54 @@ function isIdempotentDuplicate(taskId, idempotencyKey) {
     }
     return isDuplicate;
 }
-let lastWorkerCheckin = null;
-let lastWorkerVersion = 'UNKNOWN';
-let lastWorkerOrigin = 'UNKNOWN';
-let lastWorkerExtensionId = null;
-let workerStopSignal = false;
-let workerStopUntil = null;
-let pendingSyncCommand = false;
-let pendingSyncWorkspaceId = null;
-// The Facebook account the dashboard was viewing when it requested a sync — used
-// as a fallback when the extension's group-scan tab couldn't detect the logged-in
-// account itself. Cleared right after the sync consumes it.
-let pendingSyncFacebookUser = null;
-let workerThrottleUntil = null;
+// --- PER-TENANT RUNTIME STATE ---
+//
+// All of this used to be a dozen module-level `let`s shared by every request.
+// That is invisible while there is one tenant, but with several it means: one
+// account's "Stop Worker" halts everyone; one account's Facebook identity
+// overwrites another's and is served back by /api/profile/current; a sync
+// request queued by one dashboard is consumed by another's extension; and the
+// dashboard reports someone else's extension as connected.
+//
+// Now keyed by workspace id. The `null` key holds the legacy single-tenant
+// state used whenever no workspace is resolved (unauthenticated/open mode),
+// so behaviour with one tenant is exactly as before.
+const tenantStates = new Map();
+
+function tenantState(workspaceId) {
+    const key = workspaceId || null;
+    let state = tenantStates.get(key);
+    if (!state) {
+        state = {
+            lastWorkerCheckin: null,
+            lastWorkerVersion: 'UNKNOWN',
+            lastWorkerOrigin: 'UNKNOWN',
+            lastWorkerExtensionId: null,
+            workerStopSignal: false,
+            workerStopUntil: null,
+            pendingSyncCommand: false,
+            // The Facebook account the dashboard was viewing when it requested a
+            // sync — a fallback for when the extension's group-scan tab could not
+            // detect the logged-in account itself. Cleared once a sync uses it.
+            pendingSyncFacebookUser: null,
+            // Read by the dispatcher but never assigned anywhere, here or before
+            // this refactor — kept so the check reads the same, not load-bearing.
+            workerThrottleUntil: null,
+            lastFacebookProfile: null,
+            lastFacebookUser: null,
+        };
+        tenantStates.set(key, state);
+    }
+    return state;
+}
+
+// Which workspace the last dashboard-initiated sync was for. Unlike the state
+// above this cannot be keyed by tenant, because the extension that answers the
+// sync is unpaired in exactly the case where it is needed and so has no
+// workspace of its own to look up. It is only consulted when nothing is paired
+// — a paired worker's verified workspace always takes precedence.
+let legacyPendingSyncWorkspaceId = null;
+
 const sentTaskTimestamps = new Map();
 const processingStartTimestamps = new Map();
 
@@ -525,14 +560,17 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString(), supabase: !!supabase });
 });
 
-app.get('/api/debug/state', requireAuth, (req, res) => {
+app.get('/api/debug/state', requireAuth, requireWorkspaceAccess, (req, res) => {
+    const state = tenantState(req.workspaceId);
     res.json({
-        workerStopSignal,
-        workerStopUntil,
-        workerThrottleUntil,
+        workspaceId: req.workspaceId || null,
+        workerStopSignal: state.workerStopSignal,
+        workerStopUntil: state.workerStopUntil,
+        workerThrottleUntil: state.workerThrottleUntil,
         sentTaskCount: sentTaskTimestamps.size,
         processingTaskCount: processingStartTimestamps.size,
         activeSseClients: sseClients.size,
+        knownTenants: tenantStates.size,
         serverTime: new Date().toISOString()
     });
 });
@@ -568,9 +606,12 @@ app.get('/api/stream/jobs', optionalWorker, (req, res) => {
     // immediately so we don't re-trigger a full group scan on EVERY reconnect. The
     // SSE reconnects roughly every 30s (and whenever the MV3 service worker wakes),
     // so without this clear one dashboard click looped group syncs forever.
-    if (pendingSyncCommand) {
+    // Only this client's own tenant's pending sync — otherwise a reconnecting
+    // extension would pick up a sync another account had queued.
+    const connectState = tenantState(req.workspaceId);
+    if (connectState.pendingSyncCommand) {
         send({ type: 'sync_groups' });
-        pendingSyncCommand = false;
+        connectState.pendingSyncCommand = false;
         console.log('📡 Delivered pending sync_groups on SSE (re)connect — flag cleared');
     }
 
@@ -647,16 +688,16 @@ async function updateTaskStatus(taskId, status, message = null, metadata = null)
 
 // --- API ROUTES ---
 
-let lastFacebookProfile = null;
-let lastFacebookUser = null;
-
+// The detected Facebook identity is per tenant — see tenantState. Sharing one
+// value meant whichever account synced last was reported to everyone.
 app.get('/api/profile/current', optionalWorker, (req, res) => {
-    console.log(`📋 [PROFILE] GET /api/profile/current → returning: "${lastFacebookUser || '(none)'}"`);
+    const state = tenantState(req.workspaceId);
+    console.log(`📋 [PROFILE] GET /api/profile/current → returning: "${state.lastFacebookUser || '(none)'}"`);
     res.json({
-        current_user: lastFacebookProfile?.facebook_user || null,
-        current_user_id: lastFacebookProfile?.facebook_user_id || null,
-        source: lastFacebookProfile?.source || null,
-        detected_at: lastFacebookProfile?.detected_at || null
+        current_user: state.lastFacebookProfile?.facebook_user || null,
+        current_user_id: state.lastFacebookProfile?.facebook_user_id || null,
+        source: state.lastFacebookProfile?.source || null,
+        detected_at: state.lastFacebookProfile?.detected_at || null
     });
 });
 
@@ -670,20 +711,21 @@ app.post('/api/profile/sync', optionalWorker, (req, res) => {
     const facebook_user_id = typeof req.body?.facebook_user_id === 'string' ? req.body.facebook_user_id.trim() : '';
     const source = typeof req.body?.source === 'string' ? req.body.source.trim() : '';
     const detected_at = typeof req.body?.detected_at === 'string' ? req.body.detected_at.trim() : '';
-    lastFacebookProfile = {
+    const state = tenantState(req.workspaceId);
+    state.lastFacebookProfile = {
         facebook_user,
         facebook_user_id: facebook_user_id || null,
         source: source || 'extension',
         detected_at: detected_at || new Date().toISOString()
     };
-    lastFacebookUser = lastFacebookProfile.facebook_user;
-    console.log('✅ [PROFILE] Current Facebook user updated to:', lastFacebookUser);
+    state.lastFacebookUser = state.lastFacebookProfile.facebook_user;
+    console.log('✅ [PROFILE] Current Facebook user updated to:', state.lastFacebookUser);
     res.json({
         success: true,
-        current_user: lastFacebookProfile.facebook_user,
-        current_user_id: lastFacebookProfile.facebook_user_id,
-        source: lastFacebookProfile.source,
-        detected_at: lastFacebookProfile.detected_at
+        current_user: state.lastFacebookProfile.facebook_user,
+        current_user_id: state.lastFacebookProfile.facebook_user_id,
+        source: state.lastFacebookProfile.source,
+        detected_at: state.lastFacebookProfile.detected_at
     });
 });
 
@@ -848,7 +890,14 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
         return res.status(400).json({ error: "No valid groups provided" });
     }
 
-    let workspaceId = req.headers['x-workspace-id'] || pendingSyncWorkspaceId || null;
+    // req.workspaceId comes from a verified device token and therefore wins over
+    // the x-workspace-id header, which the caller can set to anything. The
+    // legacy hint below is only reachable when nothing is paired — i.e. the
+    // single-tenant case — because a paired worker always resolves above it.
+    let workspaceId = req.workspaceId
+        || req.headers['x-workspace-id']
+        || legacyPendingSyncWorkspaceId
+        || null;
     if (!workspaceId) {
         const { data: ws, error: wsError } = await supabase
             .from('workspaces')
@@ -862,7 +911,7 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
         }
         workspaceId = ws.id;
     }
-    pendingSyncWorkspaceId = null;
+    legacyPendingSyncWorkspaceId = null;
 
     // Groups are keyed per (workspace_id, facebook_user, id) — the same Facebook
     // group can be saved separately for each account. `fbUser` is '' when unknown
@@ -878,26 +927,31 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
     let fbUser = (facebook_user && facebook_user.trim()) || null;
     let attributionSource = fbUser ? 'request' : null;
 
+    // Hints are read from the state of the workspace this sync resolved to, not
+    // from a server-wide value — otherwise another tenant's dashboard hint or
+    // last-known account could be applied to these groups.
+    const syncState = tenantState(workspaceId);
+
     if (!fbUser) {
-        const dashboardHint = pendingSyncFacebookUser && pendingSyncFacebookUser.trim();
+        const dashboardHint = syncState.pendingSyncFacebookUser && syncState.pendingSyncFacebookUser.trim();
         if (dashboardHint) {
             fbUser = dashboardHint;
             attributionSource = 'dashboard_hint';
-        } else if (lastFacebookUser) {
+        } else if (syncState.lastFacebookUser) {
             // Only trust the last-known name if it isn't contradicted by the account
             // actually active in this request — a mismatched id means the browser has
             // since switched accounts, and reusing the old name would silently
             // misattribute the new account's groups to the previous one.
-            const knownId = lastFacebookProfile?.facebook_user_id || null;
+            const knownId = syncState.lastFacebookProfile?.facebook_user_id || null;
             const idConflicts = incomingId && knownId && incomingId !== knownId;
             if (!idConflicts) {
-                fbUser = lastFacebookUser;
+                fbUser = syncState.lastFacebookUser;
                 attributionSource = 'last_known_profile';
             }
         }
     }
     fbUser = fbUser || '';
-    pendingSyncFacebookUser = null; // consume the hint so it never leaks into a later sync
+    syncState.pendingSyncFacebookUser = null; // consume the hint so it never leaks into a later sync
     console.log(`[GROUPS] Effective facebook_user for this sync: "${fbUser || '(unattributed)'}" (source: ${attributionSource || 'none'})`);
 
     // This sync path (the dashboard-triggered scan) doesn't call /api/profile/sync
@@ -905,8 +959,8 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
     // the id-conflict check above would keep comparing against a profile from whatever
     // account synced last via the OTHER path.
     if (attributionSource === 'request' && incomingId) {
-        lastFacebookProfile = { facebook_user: fbUser, facebook_user_id: incomingId, source: 'groups_sync', detected_at: new Date().toISOString() };
-        lastFacebookUser = fbUser;
+        syncState.lastFacebookProfile = { facebook_user: fbUser, facebook_user_id: incomingId, source: 'groups_sync', detected_at: new Date().toISOString() };
+        syncState.lastFacebookUser = fbUser;
     }
 
     // Preserve real names against placeholder overwrites. The extension emits
@@ -978,29 +1032,33 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
 app.post('/api/groups/request-sync', ...dashboardAuth, (req, res) => {
     const dashboardUser = typeof req.body?.facebook_user === 'string' ? req.body.facebook_user.trim() : '';
     console.log(`📡 Dashboard requested group sync from extension (user hint: "${dashboardUser || '(none)'}")`);
-    pendingSyncWorkspaceId = req.workspaceId || null;
-    pendingSyncFacebookUser = dashboardUser || null;
+    const requestState = tenantState(req.workspaceId);
+    legacyPendingSyncWorkspaceId = req.workspaceId || null;
+    requestState.pendingSyncFacebookUser = dashboardUser || null;
     if (sseClients.size > 0) {
         // An extension is connected — deliver once, now, and do NOT leave the flag set
         // (leaving it set is what caused every later SSE reconnect to re-run the scan).
         broadcastSSE({ type: 'sync_groups' }, req.workspaceId || null);
-        pendingSyncCommand = false;
+        requestState.pendingSyncCommand = false;
         console.log(`📡 sync_groups delivered to ${sseClients.size} connected client(s)`);
     } else {
         // No extension connected right now — hold the request until one reconnects,
         // where the /api/stream/jobs handler delivers it once and clears the flag.
-        pendingSyncCommand = true;
+        requestState.pendingSyncCommand = true;
         console.log('📡 No SSE client connected — will deliver on next reconnect');
     }
     res.json({ success: true });
 });
 
 app.get('/api/groups/pending-sync', optionalWorker, (req, res) => {
-    const sync_needed = pendingSyncCommand;
-    if (pendingSyncCommand) {
+    // Only this tenant's pending sync, so one account's poll cannot swallow the
+    // request another account queued.
+    const pollState = tenantState(req.workspaceId);
+    const sync_needed = pollState.pendingSyncCommand;
+    if (sync_needed) {
         console.log('📡 Pending group sync consumed by extension poll');
     }
-    pendingSyncCommand = false;
+    pollState.pendingSyncCommand = false;
     res.json({ success: true, sync_needed });
 });
 
@@ -1884,25 +1942,75 @@ app.post('/api/worker/ack', optionalWorker, async (req, res) => {
 // starts immediately. A lightweight mutex prevents overlapping runs if a
 // terminal update lands mid-tick.
 let dispatchLockActive = false;
+// How many due tasks to consider per tick. This is a window across ALL tenants,
+// so it must comfortably exceed the number of active workspaces — otherwise a
+// single tenant with a large backlog fills the window and starves the rest.
+const DISPATCH_SCAN_LIMIT = 200;
+
+// Hand one already-locked task to its tenant's extension.
+// Split out of runDispatchTick so the tick can dispatch for several workspaces
+// in one pass; the body is unchanged from when it was inline.
+async function dispatchTask(nextTask) {
+    // A group id can now exist once PER user, so scope the URL lookup to this
+    // task's workspace + facebook_user (falling back to any match) and never
+    // use .single() — that would throw when multiple users share the group.
+    let groupQuery = supabase.from('groups').select('url').eq('id', nextTask.group_id);
+    if (nextTask.workspace_id) groupQuery = groupQuery.eq('workspace_id', nextTask.workspace_id);
+    if (nextTask.facebook_user) groupQuery = groupQuery.eq('facebook_user', nextTask.facebook_user);
+    const { data: group } = await groupQuery.limit(1).maybeSingle();
+
+    // NOTE: the extension's SSE handler listens for 'job_available' (not
+    // 'new_job') to trigger an immediate checkJobs(). Sending the matching
+    // event gives real-time pickup instead of waiting for the ~1min MV3 alarm.
+    // Scoped to the task's own workspace: this payload contains the post
+    // content and target group, so it must reach only that tenant.
+    broadcastSSE({
+        type: 'job_available',
+        job: { ...nextTask, group_url: group?.url, status: 'SENT' }
+    }, nextTask.workspace_id || null);
+
+    await updateTaskStatus(nextTask.id, 'SENT', 'Waiting for worker handshake...');
+
+    await supabase.from('system_logs').insert([{
+        log_level: 'info',
+        source: 'server_scheduler',
+        message: `📡 Dispatched Task #${nextTask.id} to group: ${group?.url || nextTask.group_id}`
+    }]);
+
+    io.emit('queue_updated');
+}
+
+// Dispatch runs PER TENANT.
+//
+// It used to hold one global "is anything in flight?" gate and one global
+// stop/throttle flag, which meant a single busy or paused account stalled
+// publishing for every other account on the server. Each workspace now gets
+// its own gate, so tenants proceed independently — while keeping the property
+// that matters within a tenant: at most one task in flight at a time, which is
+// what stops repeated navigation to the same Facebook group.
 async function runDispatchTick() {
     if (dispatchLockActive) return;
     dispatchLockActive = true;
     const now = new Date();
-    if (workerStopSignal && workerStopUntil && now < workerStopUntil) { dispatchLockActive = false; return; }
-    if (workerThrottleUntil && now < workerThrottleUntil) { dispatchLockActive = false; return; }
 
     try {
-        // A. Check if ANY task is currently being handled
+        // A. Bucket in-flight tasks by workspace, handling handshake timeouts.
         const { data: activeTasks } = await supabase
             .from('posts')
-            .select('id, status, attempt_count, group_id')
+            .select('id, status, attempt_count, group_id, workspace_id')
             .in('status', ['SENT', 'PROCESSING'])
             .eq('app_source', 'backup');
 
+        const activeByWorkspace = new Map();
+        const bumpActive = (wsId) => {
+            const key = wsId || null;
+            activeByWorkspace.set(key, (activeByWorkspace.get(key) || 0) + 1);
+        };
+
         if (activeTasks && activeTasks.length > 0) {
-            let activeCount = activeTasks.length;
             // Check for timeouts on SENT tasks (Handshake failure)
             for (const active of activeTasks) {
+                let stillActive = true;
                 if (active.status === 'SENT') {
                     let sentAt = sentTaskTimestamps.get(active.id);
                     if (!sentAt) {
@@ -1911,7 +2019,7 @@ async function runDispatchTick() {
                     }
                     if (now.getTime() - sentAt > SENT_HANDSHAKE_TIMEOUT_MS) {
                         sentTaskTimestamps.delete(active.id);
-                        activeCount--;
+                        stillActive = false; // timed out — no longer occupies its tenant's slot
                         // RETRY CAP + BACKOFF: a stuck-SENT task used to be reset to PENDING
                         // unconditionally, so a group with a broken selector got re-dispatched
                         // every ~2min forever — the extension kept opening a tab and navigating
@@ -1941,64 +2049,54 @@ async function runDispatchTick() {
                         processingStartTimestamps.set(active.id, now.getTime() - 10000); // Assume it started 10s ago
                     }
                 }
+                if (stillActive) bumpActive(active.workspace_id);
             }
-            if (activeCount > 0) return; // Busy - Don't send more
         }
 
-        // B. Find exactly ONE next task
-        const { data: nextTask, error: fetchError } = await supabase
+        // B. Take the due queue in time order and dispatch at most one task per
+        //    idle tenant. The limit is a window over all tenants rather than a
+        //    single row, so one workspace's backlog cannot starve another's.
+        const { data: dueTasks, error: fetchError } = await supabase
             .from('posts')
             .select('*')
             .eq('status', 'PENDING')
             .eq('app_source', 'backup')
             .lte('scheduled_time', now.toISOString())
             .order('scheduled_time', { ascending: true })
-            .limit(1)
-            .single();
+            .limit(DISPATCH_SCAN_LIMIT);
 
-        if (fetchError || !nextTask) return;
+        if (fetchError || !dueTasks || dueTasks.length === 0) return;
 
-        console.log(`📡 Dispatching Task ${nextTask.id} to worker...`);
-        
-        // C. Mark as SENT (Pre-lock)
-        const { error: lockError } = await supabase
-            .from('posts')
-            .update({ status: 'SENT' })
-            .eq('id', nextTask.id)
-            .eq('status', 'PENDING');
+        const dispatchedWorkspaces = new Set();
 
-        if (lockError) return;
-        
-        sentTaskTimestamps.set(nextTask.id, Date.now());
+        for (const nextTask of dueTasks) {
+            const wsKey = nextTask.workspace_id || null;
 
-        // D. Send via SSE
-        // A group id can now exist once PER user, so scope the URL lookup to this
-        // task's workspace + facebook_user (falling back to any match) and never
-        // use .single() — that would throw when multiple users share the group.
-        let groupQuery = supabase.from('groups').select('url').eq('id', nextTask.group_id);
-        if (nextTask.workspace_id) groupQuery = groupQuery.eq('workspace_id', nextTask.workspace_id);
-        if (nextTask.facebook_user) groupQuery = groupQuery.eq('facebook_user', nextTask.facebook_user);
-        const { data: group } = await groupQuery.limit(1).maybeSingle();
-        // NOTE: the extension's SSE handler listens for 'job_available' (not
-        // 'new_job') to trigger an immediate checkJobs(). Sending the matching
-        // event gives real-time pickup instead of waiting for the ~1min MV3 alarm.
-        // Scoped to the task's own workspace: this payload contains the post
-        // content and target group, so it must reach only that tenant.
-        broadcastSSE({
-            type: 'job_available',
-            job: { ...nextTask, group_url: group?.url, status: 'SENT' }
-        }, nextTask.workspace_id || null);
-        
-        await updateTaskStatus(nextTask.id, 'SENT', 'Waiting for worker handshake...');
-        
-        await supabase.from('system_logs').insert([{
-            log_level: 'info',
-            source: 'server_scheduler',
-            message: `📡 Dispatched Task #${nextTask.id} to group: ${group?.url || nextTask.group_id}`
-        }]);
+            // One in flight per tenant, and one dispatch per tenant per tick.
+            if (dispatchedWorkspaces.has(wsKey)) continue;
+            if ((activeByWorkspace.get(wsKey) || 0) > 0) continue;
 
-        io.emit('queue_updated');
+            // This tenant's own stop signal and throttle window.
+            const state = tenantState(wsKey);
+            if (state.workerStopSignal && state.workerStopUntil && now < state.workerStopUntil) continue;
+            if (state.workerThrottleUntil && now < state.workerThrottleUntil) continue;
 
+            console.log(`📡 Dispatching Task ${nextTask.id} to worker...`);
+
+            // C. Mark as SENT (Pre-lock). Conditional on still being PENDING, so
+            //    two ticks racing cannot both claim the same row.
+            const { error: lockError } = await supabase
+                .from('posts')
+                .update({ status: 'SENT' })
+                .eq('id', nextTask.id)
+                .eq('status', 'PENDING');
+
+            if (lockError) continue;
+
+            sentTaskTimestamps.set(nextTask.id, Date.now());
+            dispatchedWorkspaces.add(wsKey);
+            await dispatchTask(nextTask);
+        }
     } catch (e) {
         console.error("Queue Poller Error:", e);
         try {
@@ -2146,19 +2244,25 @@ setInterval(async () => {
 }, 60000);
 
 // --- SYSTEM STATUS ---
-app.get('/api/system/status', requireAuth, (req, res) => {
+app.get('/api/system/status', requireAuth, requireWorkspaceAccess, (req, res) => {
     const now = new Date();
-    const checkinAge = lastWorkerCheckin ? (now - new Date(lastWorkerCheckin)) / 1000 : null;
-    const workerActive = checkinAge !== null && checkinAge < 60; // active if checked in within 60s
+    // Worker presence is per tenant: without this the dashboard reported
+    // whichever extension checked in last, no matter whose it was.
+    const state = tenantState(req.workspaceId);
+    const checkinAge = state.lastWorkerCheckin ? (now - new Date(state.lastWorkerCheckin)) / 1000 : null;
+    // Extension heartbeats fire on a chrome.alarms 1-minute period (MV3's minimum
+    // resolution, and its actual firing time can drift/lag when the service worker
+    // was suspended). A 60s window flaps to OFFLINE between ticks; 90s gives slack.
+    const workerActive = checkinAge !== null && checkinAge < 90;
 
     res.json({
         worker_status: workerActive ? 'ACTIVE' : 'OFFLINE',
         worker_message: workerActive ? 'Worker is active' : 'No recent worker check-in',
-        last_worker_checkin: lastWorkerCheckin,
-        worker_version: lastWorkerVersion,
-        worker_origin: lastWorkerOrigin,
-        worker_extension_id: lastWorkerExtensionId,
-        worker_stopped: workerStopSignal,
+        last_worker_checkin: state.lastWorkerCheckin,
+        worker_version: state.lastWorkerVersion,
+        worker_origin: state.lastWorkerOrigin,
+        worker_extension_id: state.lastWorkerExtensionId,
+        worker_stopped: state.workerStopSignal,
         server_time: now.toISOString()
     });
 });
@@ -2524,9 +2628,12 @@ app.delete('/api/tasks/:id', ...dashboardAuth, async (req, res) => {
 });
 
 // --- WORKER CONTROL ---
+// Stop/resume apply to the calling tenant only. As one shared flag, any
+// account pressing Stop halted publishing for everybody on the server.
 app.post('/api/worker/stop', ...dashboardAuth, denyDemo, (req, res) => {
-    workerStopSignal = true;
-    workerStopUntil  = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h safety
+    const state = tenantState(req.workspaceId);
+    state.workerStopSignal = true;
+    state.workerStopUntil  = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h safety
     broadcastSSE({ type: 'stop_worker' }, req.workspaceId || null);
     io.emit('worker_stop_signal');
     console.log('🛑 Worker stop signal sent');
@@ -2534,8 +2641,9 @@ app.post('/api/worker/stop', ...dashboardAuth, denyDemo, (req, res) => {
 });
 
 app.post('/api/worker/resume', ...dashboardAuth, denyDemo, (req, res) => {
-    workerStopSignal = false;
-    workerStopUntil  = null;
+    const state = tenantState(req.workspaceId);
+    state.workerStopSignal = false;
+    state.workerStopUntil  = null;
     io.emit('worker_resumed');
     console.log('▶️ Worker resumed');
     res.json({ success: true });
@@ -2546,11 +2654,12 @@ app.post('/api/worker/heartbeat', optionalWorker, (req, res) => {
     // The extension (background.js) sends manifest_version/origin_folder/extension_id —
     // accept both those field names and the older version/origin/extensionId names so
     // this doesn't silently regress again if either side changes independently.
-    lastWorkerCheckin   = new Date().toISOString();
-    lastWorkerVersion   = req.body.manifest_version || req.body.version || lastWorkerVersion;
-    lastWorkerOrigin    = req.body.origin_folder || req.body.origin || lastWorkerOrigin;
-    lastWorkerExtensionId = req.body.extension_id || req.body.extensionId || lastWorkerExtensionId;
-    res.json({ success: true, stop_signal: workerStopSignal });
+    const state = tenantState(req.workspaceId);
+    state.lastWorkerCheckin   = new Date().toISOString();
+    state.lastWorkerVersion   = req.body.manifest_version || req.body.version || state.lastWorkerVersion;
+    state.lastWorkerOrigin    = req.body.origin_folder || req.body.origin || state.lastWorkerOrigin;
+    state.lastWorkerExtensionId = req.body.extension_id || req.body.extensionId || state.lastWorkerExtensionId;
+    res.json({ success: true, stop_signal: state.workerStopSignal });
 });
 
 // --- MANUAL STUCK TASK RESET ---
