@@ -93,7 +93,6 @@ export default function AccessibilityWidget() {
                 @media (prefers-reduced-motion: reduce) { #a11y-v-fab { animation: none !important; } }
                 @media (max-width: 480px) {
                     #a11y-v-fab {
-                        top: 10px !important;
                         right: 10px !important;
                         width: 34px !important;
                         height: 34px !important;
@@ -111,8 +110,9 @@ export default function AccessibilityWidget() {
                 aria-haspopup="dialog"
                 className="fixed rounded-full flex items-center justify-center text-white hover:brightness-110 transition"
                 style={{
-                    top: 12,
+                    top: '50%',
                     right: 12,
+                    transform: 'translateY(-50%)',
                     width: 36,
                     height: 36,
                     zIndex: 99999,
