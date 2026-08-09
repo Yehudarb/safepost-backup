@@ -2299,8 +2299,13 @@ app.get('/api/jobs/next', optionalWorker, async (req, res) => {
     if (data.facebook_user) nextGroupQuery = nextGroupQuery.eq('facebook_user', data.facebook_user);
     const { data: group } = await nextGroupQuery.limit(1).maybeSingle();
 
-    // Mark as PROCESSING immediately to prevent double-dispatch
-    await supabase.from('posts').update({ status: 'PROCESSING' }).eq('id', data.id);
+    // Mark as PROCESSING immediately to prevent double-dispatch. The row already
+    // came from a workspace-filtered read above, so this filter is belt and
+    // braces — but it keeps the guarantee local to the write rather than
+    // depending on a caller several lines up.
+    let claimQuery = supabase.from('posts').update({ status: 'PROCESSING' }).eq('id', data.id);
+    if (req.workspaceId) claimQuery = claimQuery.eq('workspace_id', req.workspaceId);
+    await claimQuery;
     sentTaskTimestamps.delete(data.id);
     processingStartTimestamps.set(data.id, Date.now()); // START TRACKING HERE
     await updateTaskStatus(data.id, 'PROCESSING', 'Extension picked up job');
