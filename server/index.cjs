@@ -140,12 +140,20 @@ if (!fs.existsSync(UPLOAD_DIR)) {
     fs.mkdirSync(UPLOAD_DIR);
 }
 
-// Multer Memory Storage Configuration
+// Multer Memory Storage Configuration.
+//
+// memoryStorage buffers the WHOLE file in RAM, so this limit is a memory
+// budget, not just a policy: two concurrent uploads at the limit cost twice
+// this much. Raise UPLOAD_MAX_MB only alongside the container's memory, and
+// note the storage bucket enforces its own ceiling independently — when that
+// is the lower of the two, its error is now surfaced verbatim.
+const UPLOAD_MAX_MB = Number(process.env.UPLOAD_MAX_MB) || 50;
+
 const storage = multer.memoryStorage();
 
 const upload = multer({
     storage: storage,
-    limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+    limits: { fileSize: UPLOAD_MAX_MB * 1024 * 1024 }
 });
 
 const ALLOWED_ORIGINS = [
@@ -1334,9 +1342,20 @@ app.post('/api/upload', strictLimiter, ...dashboardAuth, denyDemo, async (req, r
                 fileName = `${Date.now()}-${req.file.originalname.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, '-').toLowerCase()}`;
                 mimetype = req.file.mimetype || 'application/octet-stream';
             } catch (multerErr) {
-                console.warn("⚠️ Multer failed, trying fallback:", multerErr.message);
-                // Fallback: just return success with a placeholder
-                return res.json({ success: true, file_path: `https://via.placeholder.com/150?text=media`, type: 'placeholder' });
+                // This used to answer 200 with a placeholder.com URL, which the
+                // dashboard accepted as a successful upload — so an oversized
+                // video looked like it had uploaded and the post went out with a
+                // placeholder image attached instead. Report the real failure.
+                if (multerErr.code === 'LIMIT_FILE_SIZE') {
+                    console.warn(`⚠️ Upload rejected: over the ${UPLOAD_MAX_MB}MB limit`);
+                    return res.status(413).json({
+                        success: false,
+                        error: `File is larger than the ${UPLOAD_MAX_MB}MB limit.`,
+                        limit_mb: UPLOAD_MAX_MB
+                    });
+                }
+                console.warn("⚠️ Upload failed:", multerErr.message);
+                return res.status(400).json({ success: false, error: multerErr.message });
             }
         } else if (req.body.file) {
             // Handle JSON base64 upload
@@ -1355,9 +1374,14 @@ app.post('/api/upload', strictLimiter, ...dashboardAuth, denyDemo, async (req, r
             .upload(fileName, fileBuffer, { contentType: mimetype, upsert: true });
 
         if (error) {
-            console.error("❌ Supabase error:", error.message);
-            // Fallback: return placeholder on Supabase error too
-            return res.json({ success: true, file_path: `https://via.placeholder.com/150?text=upload+failed`, type: 'placeholder' });
+            // Surfaced verbatim rather than swallowed: the useful cases here are
+            // the bucket's own size ceiling and a missing/misnamed bucket, and
+            // both are only fixable if the operator can see which one it is.
+            console.error("❌ Supabase storage error:", error.message);
+            return res.status(502).json({
+                success: false,
+                error: `Storage rejected the upload: ${error.message}`
+            });
         }
 
         // Try public URL first; fall back to 1-year signed URL if bucket is private
@@ -1371,8 +1395,7 @@ app.post('/api/upload', strictLimiter, ...dashboardAuth, denyDemo, async (req, r
         res.json({ success: true, file_path: fileUrl });
     } catch (err) {
         console.error("🔥 Upload error:", err.message);
-        // Final fallback - never fail the upload, return placeholder
-        res.json({ success: true, file_path: `https://via.placeholder.com/150?text=error`, type: 'fallback' });
+        res.status(500).json({ success: false, error: err.message || 'Upload failed.' });
     }
 });
 

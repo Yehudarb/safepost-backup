@@ -128,7 +128,13 @@ class ApiService {
         const formData = new FormData();
         formData.append('file', file);
         const res = await fetch(`${API_BASE}/upload`, { method: 'POST', headers: await getAuthHeaders(), body: formData });
-        if (!res.ok) throw new Error(`Upload Failed: ${res.status}`);
+        if (!res.ok) {
+            // The server explains why (too large, storage rejected it, ...).
+            // Surfacing that beats "Upload Failed: 413", which tells the user
+            // nothing they can act on.
+            const detail = await res.json().catch(() => null);
+            throw new Error(detail?.error || `Upload failed (${res.status})`);
+        }
         return await res.json();
     }
     static generateAiContent(prompt, history = []) { return this.request('/ai/generate', { method: 'POST', body: JSON.stringify({ prompt, history }) }); }
@@ -1273,7 +1279,7 @@ export default function App() {
             let mediaUrl = null;
             if (selectedFile) {
                 const up = await ApiService.uploadFile(selectedFile);
-                if (!up.success) throw new Error('File upload failed');
+                if (!up.success) throw new Error(up.error || 'File upload failed');
                 mediaUrl = up.file_path;
             }
             const payload = {
