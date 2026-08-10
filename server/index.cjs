@@ -2290,15 +2290,37 @@ app.get('/api/system/status', requireAuth, requireWorkspaceAccess, (req, res) =>
     });
 });
 
+// The job routes below hand a concrete task — post text, target group, media —
+// to whichever extension asked. Every other scoped route degrades harmlessly
+// without a workspace (a list comes back wider than it should), but these two
+// cause an ACTION: publishing one tenant's content to another tenant's group
+// from a third party's Facebook session. That is not a leak that can be undone
+// by fixing the filter afterwards.
+//
+// So once the deployment is locked down (WORKER_AUTH_ENFORCED=true), an
+// unscoped caller is refused outright rather than served globally. Reaching
+// here without a workspace at that point means a real misconfiguration:
+// EXTENSION_API_KEY set but EXTENSION_KEY_WORKSPACE_ID missing (see
+// middleware/worker.cjs). The message says so, because "no jobs" would send
+// someone hunting through the queue instead of the env vars.
+function refuseIfUnscoped(req, res) {
+    if (req.workspaceId) return false;
+    if (process.env.WORKER_AUTH_ENFORCED !== 'true') return false;
+    console.warn('[jobs] refused an unscoped job request — pair the extension, or set EXTENSION_KEY_WORKSPACE_ID');
+    res.status(409).json({
+        error: 'This extension is not bound to a workspace. Pair it from the dashboard, or set EXTENSION_KEY_WORKSPACE_ID on the server.',
+        code: 'WORKSPACE_UNRESOLVED'
+    });
+    return true;
+}
+
 // Next Job for Extension (polled by background.js every 6s)
 //
-// Scoped to the caller's workspace when it is a paired worker. Without that
-// filter this handed out whichever task was next GLOBALLY, so with more than
-// one tenant an extension could be told to publish another account's post —
-// to that account's group, from this browser's Facebook session. Unpaired
-// callers still get the global next task, which is correct while the
-// deployment is single-tenant and is closed off by WORKER_AUTH_ENFORCED.
+// Scoped to the caller's workspace when it is a paired worker, or when the
+// shared extension key is bound to one. Without that filter this handed out
+// whichever task was next GLOBALLY — see refuseIfUnscoped above.
 app.get('/api/jobs/next', optionalWorker, async (req, res) => {
+    if (refuseIfUnscoped(req, res)) return;
     let nextQuery = supabase
         .from('posts')
         .select('*')
@@ -2352,6 +2374,7 @@ app.get('/api/jobs/next', optionalWorker, async (req, res) => {
 
 // Job lookup by group URL — used by content.js auto-execute fallback
 app.get('/api/jobs/for-url', optionalWorker, async (req, res) => {
+    if (refuseIfUnscoped(req, res)) return;
     const { url } = req.query;
     if (!url) return res.json({ job: null });
 

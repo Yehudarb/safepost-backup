@@ -134,6 +134,25 @@ async function optionalWorker(req, res, next) {
         }
         req.worker = null;
         req.extensionKeyAuthed = true;
+        // The key proves "an authorised extension", not "which tenant". Without
+        // a workspace, every scoped query downstream silently degrades to
+        // unscoped — /api/jobs/next would hand this extension whichever tenant's
+        // post happens to be next in the global queue, and publish it from the
+        // wrong Facebook account. EXTENSION_KEY_WORKSPACE_ID pins the key to one
+        // workspace, which is the only coherent reading of a single shared
+        // secret: one operator, one tenant. Several tenants need pairing, where
+        // the workspace comes from the device token instead.
+        const boundWorkspace = process.env.EXTENSION_KEY_WORKSPACE_ID;
+        if (boundWorkspace) {
+            // A malformed id would be passed straight into a uuid column filter
+            // and raise a 500 on every extension request. Refuse it loudly once,
+            // here, rather than letting it look like an outage.
+            if (!UUID_RE.test(boundWorkspace)) {
+                console.error('[worker] EXTENSION_KEY_WORKSPACE_ID is not a valid uuid — ignoring it. Extension requests will be UNSCOPED.');
+            } else {
+                req.workspaceId = boundWorkspace;
+            }
+        }
         return next();
     }
     // A key presented to a server that has none configured is ignored rather
