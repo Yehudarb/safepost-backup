@@ -715,6 +715,13 @@ export default function App() {
         localStorage.getItem('safepost_currentUserId') || ''
     );
     const [uniqueUsers, setUniqueUsers]       = useState([]);
+    // Set when the operator edits the account field by hand, so the poll below
+    // stops overwriting their choice. Released as soon as the server reports a
+    // DIFFERENT account — that is a real Facebook account switch, and following
+    // the browser is exactly what we want there. Refs, not state: changing this
+    // must not trigger a render or re-fire the fetch effect.
+    const accountPinnedRef   = React.useRef(false);
+    const lastServerUserRef  = React.useRef(null);
 
     // Mission Control shell state (2026-07 redesign)
     const [showDrawer, setShowDrawer]     = useState(false);
@@ -1000,9 +1007,21 @@ export default function App() {
             const profileData = profileRes.status === 'fulfilled' ? (profileRes.value || {}) : {};
             const apiCurrentUser = profileData.current_user || groupsData.current_user || null;
             const apiUsers = Array.isArray(groupsData.facebook_users) ? groupsData.facebook_users : [];
-            // Always update currentUser from server if available
+            // Adopt the account the extension detected — unless the operator has
+            // just chosen one by hand. This used to be unconditional, which made
+            // the Clear button (and typing another account) look broken: the
+            // field emptied, then the next poll a few seconds later put the
+            // detected account straight back, so the group list never came out
+            // of its per-account filter.
+            //
+            // A genuinely new detection still wins. That is the account-switch
+            // case the filter exists for, and silently keeping a stale account
+            // there is what caused groups to be saved under the previous login.
             if (apiCurrentUser) {
-                setCurrentUser(apiCurrentUser);
+                const serverSwitched = apiCurrentUser !== lastServerUserRef.current;
+                lastServerUserRef.current = apiCurrentUser;
+                if (serverSwitched) accountPinnedRef.current = false;
+                if (!accountPinnedRef.current) setCurrentUser(apiCurrentUser);
             } else if (!currentUser && apiUsers.length === 1) {
                 setCurrentUser(apiUsers[0]);
             }
@@ -2144,14 +2163,14 @@ export default function App() {
                                     id="current-fb-user"
                                     type="text"
                                     value={currentUser}
-                                    onChange={(e) => setCurrentUser(e.target.value)}
+                                    onChange={(e) => { accountPinnedRef.current = true; setCurrentUser(e.target.value); }}
                                     placeholder={t('fbUsernamePlaceholder')}
                                     className="w-full px-3 py-2 rounded-lg text-[12px] border border-amber-300 dark:border-amber-800/50 bg-white dark:bg-[#161b22] text-gray-800 dark:text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-amber-500"
                                 />
                                 {currentUser && (
                                     <div className="mt-2 flex gap-2 flex-wrap">
                                         <button
-                                            onClick={() => setCurrentUser('')}
+                                            onClick={() => { accountPinnedRef.current = true; setCurrentUser(''); }}
                                             className="px-2 py-1 bg-red-500 text-white text-[9px] rounded hover:bg-red-600 transition"
                                         >
                                             {t('clearLabel')}
