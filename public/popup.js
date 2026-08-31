@@ -1,12 +1,17 @@
 // SafePost extension settings + pairing popup.
 // MV3 requires popup scripts to be external (no inline JS).
 
-const DEFAULT_API_URL = 'https://safepost-backup.onrender.com';
+const DEFAULT_API_URL = 'http://localhost:3001';
 const $ = (id) => document.getElementById(id);
 
 async function getApiUrl() {
     const { apiUrl } = await chrome.storage.local.get('apiUrl');
-    return (apiUrl || DEFAULT_API_URL).replace(/\/+$/, '');
+    const clean = (apiUrl || DEFAULT_API_URL).replace(/\/+$/, '');
+    if (!clean || /onrender\.com/i.test(clean)) {
+        await chrome.storage.local.set({ apiUrl: DEFAULT_API_URL });
+        return DEFAULT_API_URL;
+    }
+    return clean;
 }
 
 function normalizeUrl(raw) {
@@ -89,7 +94,13 @@ function setResult(id, msg, ok) {
 
 async function load() {
     const { apiUrl } = await chrome.storage.local.get('apiUrl');
-    $('apiUrl').value = apiUrl || '';
+    const clean = typeof apiUrl === 'string' ? apiUrl.trim().replace(/\/+$/, '') : '';
+    if (!clean || /onrender\.com/i.test(clean)) {
+        $('apiUrl').value = DEFAULT_API_URL;
+        await chrome.storage.local.set({ apiUrl: DEFAULT_API_URL });
+    } else {
+        $('apiUrl').value = clean;
+    }
     $('apiUrl').placeholder = DEFAULT_API_URL;
     $('version').textContent = chrome.runtime.getManifest().version;
     refreshPairUI();

@@ -13,8 +13,7 @@
 // scope every query.
 
 const { supabase } = require('../supabaseClient.cjs');
-
-const AUTH_ENFORCED = process.env.AUTH_ENFORCED === 'true';
+const { AUTH_ENFORCED } = require('../lib/runtimeMode.cjs');
 
 function getBearerToken(req) {
     const header = req.headers['authorization'] || '';

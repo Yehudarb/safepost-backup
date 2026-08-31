@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Sparkles, RefreshCw, Send, CheckCircle, X } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n';
 
 /**
  * AiPostAssistantModal
@@ -8,6 +9,7 @@ import { Sparkles, RefreshCw, Send, CheckCircle, X } from 'lucide-react';
  * @param {function} onClose
  */
 function AiPostAssistantModal({ onInsert, onGenerate, onClose }) {
+    const { t } = useLanguage();
     const [input, setInput] = useState('');
     const [messages, setMessages] = useState([]);
     const [generating, setGenerating] = useState(false);
@@ -30,10 +32,10 @@ function AiPostAssistantModal({ onInsert, onGenerate, onClose }) {
             if (result.success && result.text) {
                 setMessages(prev => [...prev, { role: 'ai', text: result.text }]);
             } else {
-                setMessages(prev => [...prev, { role: 'error', text: result.message || 'שגיאה, נסה שנית.' }]);
+                setMessages(prev => [...prev, { role: 'error', text: result.message || t('aiAssistantGenericError') }]);
             }
         } catch (e) {
-            setMessages(prev => [...prev, { role: 'error', text: 'שגיאת רשת, נסה שנית.' }]);
+            setMessages(prev => [...prev, { role: 'error', text: t('aiAssistantNetworkError') }]);
         } finally {
             setGenerating(false);
             setTimeout(() => inputRef.current?.focus(), 50);
@@ -49,7 +51,7 @@ function AiPostAssistantModal({ onInsert, onGenerate, onClose }) {
                     <h2 className="text-gray-900 dark:text-white font-bold text-sm flex items-center gap-2">
                         <Sparkles size={16} className="text-purple-400" /> AI Content Generator
                     </h2>
-                    <button onClick={onClose} aria-label="סגור" className="text-gray-400 hover:text-gray-900 dark:hover:text-white transition"><X size={18} /></button>
+                    <button onClick={onClose} aria-label={t('close')} className="text-gray-400 hover:text-gray-900 dark:hover:text-white transition"><X size={18} /></button>
                 </div>
 
                 {/* Chat History */}
@@ -57,7 +59,7 @@ function AiPostAssistantModal({ onInsert, onGenerate, onClose }) {
                     {messages.length === 0 && (
                         <div className="flex flex-col items-center justify-center h-full text-center gap-3 opacity-40">
                             <Sparkles size={32} className="text-purple-400" />
-                            <p className="text-gray-400 text-sm">שאל את ה-AI לכתוב פוסט,<br />לשנות טון, להוסיף אמוג׳ים ועוד!</p>
+                            <p className="text-gray-400 text-sm">{t('aiAssistantEmptyStateLine1')}<br />{t('aiAssistantEmptyStateLine2')}</p>
                         </div>
                     )}
                     {messages.map((msg, i) => (
@@ -72,7 +74,7 @@ function AiPostAssistantModal({ onInsert, onGenerate, onClose }) {
                                     {msg.role === 'ai' && (
                                         <button onClick={() => onInsert(msg.text)}
                                             className="mt-2 text-[10px] font-bold uppercase tracking-widest text-purple-400 hover:text-purple-300 flex items-center gap-1 transition">
-                                            <CheckCircle size={11} /> השתמש בטקסט זה
+                                            <CheckCircle size={11} /> {t('aiAssistantUseThisText')}
                                         </button>
                                     )}
                                 </div>
@@ -98,7 +100,7 @@ function AiPostAssistantModal({ onInsert, onGenerate, onClose }) {
                     <div className="flex gap-2 items-end">
                         <textarea ref={inputRef} autoFocus rows={2}
                             className="flex-1 bg-white dark:bg-[#161b22] border border-gray-200 dark:border-[#30363d] rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:ring-offset-0 outline-none transition resize-none"
-                            placeholder='כתוב פוסט על פיצרייה חדשה... שנה טון... הוסף אמוג׳ים...'
+                            placeholder={t('aiAssistantInputPlaceholder')}
                             value={input} onChange={e => setInput(e.target.value)}
                             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }} />
                         <button onClick={sendMessage} disabled={!input.trim() || generating}
@@ -106,7 +108,7 @@ function AiPostAssistantModal({ onInsert, onGenerate, onClose }) {
                             {generating ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
                         </button>
                     </div>
-                    <p className="text-[10px] text-gray-600 mt-1.5" dir="rtl">Enter לשליחה &bull; Shift+Enter לשורה חדשה</p>
+                    <p className="text-[10px] text-gray-600 mt-1.5" dir="rtl">{t('aiAssistantKeyboardHint')}</p>
                 </div>
             </div>
         </div>

@@ -1,6 +1,7 @@
 import React from 'react';
 import TaskTimer from './TaskTimer';
 import { Trash2, RefreshCw, Clock, CheckCircle, XCircle, AlertCircle, Share2, ExternalLink } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n';
 
 const StatusBadge = ({ status }) => {
     const styles = {
@@ -39,6 +40,7 @@ const StatusBadge = ({ status }) => {
 };
 
 const QueueTable = ({ jobs, onDelete, onBulkDelete, selectedIds, setSelectedIds, onRefresh }) => {
+    const { t } = useLanguage();
     const isAllSelected = jobs.length > 0 && selectedIds.length === jobs.length;
 
     const handleSelectAll = () => {
@@ -153,7 +155,7 @@ const QueueTable = ({ jobs, onDelete, onBulkDelete, selectedIds, setSelectedIds,
                                                         target="_blank"
                                                         rel="noopener noreferrer"
                                                         className="p-xs rounded-full bg-primary-fixed text-primary hover:bg-primary hover:text-on-primary transition-all duration-300 transform hover:scale-110"
-                                                        title="צפה בפוסט שפורסם"
+                                                        title={t('queueTableViewPublishedPost')}
                                                     >
                                                         <ExternalLink className="w-3 h-3" />
                                                     </a>

@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto Sans:wght@100;300;400;500;600;700;800;900&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap');
 
 @tailwind base;
@@ -5,11 +6,22 @@
 @tailwind utilities;
 
 @layer base {
+  html {
+    font-family: 'Noto Sans', 'Space Grotesk', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+    /* direction intentionally not hardcoded — LanguageProvider sets the
+       html[dir] attribute at runtime and the browser follows it natively. */
+  }
+
   body {
     @apply font-sans;
     margin: 0;
     padding: 0;
     -webkit-font-smoothing: antialiased;
+    font-family: 'Noto Sans', 'Space Grotesk', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+  }
+
+  code, pre, [role="code"], [data-font="mono"] {
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
   }
 }
 

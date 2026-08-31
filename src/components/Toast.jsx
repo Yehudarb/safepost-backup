@@ -1,7 +1,9 @@
 import React, { useEffect } from 'react';
 import { Check, AlertCircle, X, Info, AlertTriangle } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n';
 
 const Toast = ({ message, type = 'success', onClose }) => {
+    const { t } = useLanguage();
     useEffect(() => {
         const timer = setTimeout(() => {
             onClose();
@@ -26,14 +28,18 @@ const Toast = ({ message, type = 'success', onClose }) => {
 
     const Icon = icons[type] || Check;
     const colors = colorStyles[type] || colorStyles.info;
+    const isUrgent = type === 'error' || type === 'warning';
 
     return (
-        <div className={`fixed bottom-8 right-8 flex items-center gap-4 px-lg py-md rounded-lg border-l-4 transition-all duration-300 animate-slide-in z-[100] shadow-sm ${colors.bg} ${colors.border}`}>
+        <div
+            role={isUrgent ? 'alert' : 'status'}
+            aria-live={isUrgent ? 'assertive' : 'polite'}
+            className={`fixed bottom-8 right-8 flex items-center gap-4 px-lg py-md rounded-lg border-l-4 transition-all duration-300 animate-slide-in z-[100] shadow-sm ${colors.bg} ${colors.border}`}>
             <div className={`p-sm rounded-md`}>
                 <Icon className={`w-5 h-5 ${colors.icon}`} />
             </div>
             <span className={`font-label-sm ${colors.text}`}>{message}</span>
-            <button onClick={onClose} className="ml-4 p-sm hover:bg-black/5 rounded-md transition-colors flex-shrink-0">
+            <button type="button" onClick={onClose} aria-label={t('toastCloseMessage')} className="ml-4 p-sm hover:bg-black/5 rounded-md transition-colors flex-shrink-0">
                 <X className={`w-4 h-4 ${colors.text}`} />
             </button>
         </div>

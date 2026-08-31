@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { Save, RefreshCw, X } from 'lucide-react';
+import { useLanguage } from '@/lib/i18n';
 
 function SavePostTemplateModal({ content, mediaUrl, onSave, onClose }) {
+    const { t } = useLanguage();
     const [name, setName] = useState('');
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
@@ -26,7 +28,7 @@ function SavePostTemplateModal({ content, mediaUrl, onSave, onClose }) {
                     <h2 className="text-gray-900 dark:text-white font-bold text-sm flex items-center gap-2">
                         <Save size={16} className="text-amber-400" /> Save as Template
                     </h2>
-                    <button onClick={onClose} aria-label="סגור" className="text-gray-400 hover:text-gray-900 dark:hover:text-white transition"><X size={18} /></button>
+                    <button onClick={onClose} aria-label={t('close')} className="text-gray-400 hover:text-gray-900 dark:hover:text-white transition"><X size={18} /></button>
                 </div>
                 <div className="p-4 space-y-4">
                     <div>

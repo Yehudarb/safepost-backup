@@ -61,10 +61,10 @@ window.addEventListener("SAFEPOST_REQ", async (event) => {
 
         if (action === "CHECK_CACHE") {
             // DIRECT READ - No Background Trip Needed!
-            const data = await chrome.storage.local.get(['fb_session', 'cached_groups']);
+            const data = await chrome.storage.local.get(['fb_session', 'safepost_currentUser', 'safepost_detectedFacebookUser', 'cached_groups']);
             response = {
                 success: true,
-                user: data.fb_session || null,
+                user: data.fb_session || data.safepost_currentUser || data.safepost_detectedFacebookUser || null,
                 groups: data.cached_groups || [],
                 cached: true
             };

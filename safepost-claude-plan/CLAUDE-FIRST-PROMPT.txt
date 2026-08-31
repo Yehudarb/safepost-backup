@@ -1,0 +1,21 @@
+Read these files first:
+
+- CLAUDE.md
+- docs/implementation/00-MASTER-PLAN.md
+- docs/implementation/01-BACKUP-AND-INVENTORY.md
+- docs/PROGRESS.md
+
+Inspect both repositories:
+- https://github.com/Yehudarb/safepost
+- https://github.com/Yehudarb/safepost-backup
+
+Execute Phase 1 only.
+
+Do not modify application behavior before completing the backup, inventory,
+startup verification, restoration documentation, branch, tag, and snapshot.
+
+When Phase 1 is complete:
+1. Run verification checks.
+2. Update docs/PROGRESS.md.
+3. Report findings.
+4. Stop.

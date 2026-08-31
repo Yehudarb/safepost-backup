@@ -1,18 +1,481 @@
 <!DOCTYPE html>
-<html lang="en" xml:lang="en" dir="ltr">
+<html lang="en" dir="ltr">
 
 <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/icon128.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SafePost - FB Automation Suite</title>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+    <link rel="icon" type="image/png" href="/icon128.png" />
+    <title>SafePost — Schedule Facebook Group Posts Safely</title>
+    <meta name="description"
+        content="SafePost schedules your Facebook group posts from a dashboard and publishes them through your own browser session. Your password is never shared or stored." />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Rubik:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet" />
+
+    <script type="module" src="/src/landing/main.js"></script>
 </head>
 
-<body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
+<body class="antialiased selection:bg-fb selection:text-white">
+
+    <!-- ===================== NAV ===================== -->
+    <nav id="navbar" class="fixed w-full z-50 glass-nav transition-shadow duration-300">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-20">
+
+                <a href="#top" class="flex-shrink-0 flex items-center gap-2">
+                    <div class="w-10 h-10 rounded-xl bg-fb flex items-center justify-center shadow-lg shadow-blue-500/30">
+                        <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.51 1.49-3.89 3.77-3.89 1.1 0 2.24.19 2.24.19v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12z"/>
+                        </svg>
+                    </div>
+                    <span class="font-bold text-2xl tracking-tight text-slate-800">Safe<span class="text-fb">Post</span></span>
+                </a>
+
+                <div class="hidden md:flex items-center gap-8">
+                    <a href="#how-it-works" data-i18n="nav_how" class="text-slate-600 hover:text-fb transition-colors font-medium">How it Works</a>
+                    <a href="#ai-assistant" data-i18n="nav_ai" class="text-slate-600 hover:text-purple-600 transition-colors font-medium">AI Assistant</a>
+                    <a href="#architecture" data-i18n="nav_architecture" class="text-slate-600 hover:text-fb transition-colors font-medium">Architecture</a>
+                    <a href="#audiences" data-i18n="nav_audiences" class="text-slate-600 hover:text-fb transition-colors font-medium">Who it’s for</a>
+                </div>
+
+                <div class="hidden md:flex items-center gap-3">
+                    <button type="button" data-lang-toggle
+                        class="flex items-center gap-2 text-slate-600 hover:text-fb font-semibold text-sm px-3 py-2 rounded-lg bg-slate-100 hover:bg-blue-50 transition-colors">
+                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10"/><path d="M2 12h20"/>
+                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                        </svg>
+                        <span data-lang-label>עב</span>
+                    </button>
+
+                    <a href="/app" data-i18n="nav_signin" class="text-slate-600 hover:text-fb font-medium px-4 py-2 transition-colors">Sign In</a>
+                    <a href="#extension"
+                        class="bg-fb hover:bg-fb-dark text-white px-5 py-2.5 rounded-lg font-semibold shadow-lg shadow-blue-600/30 transition-all transform hover:-translate-y-0.5 flex items-center gap-2">
+                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/>
+                            <path d="M21.17 8H12M3.95 6.06 8.54 14M10.88 21.94 15.46 14"/>
+                        </svg>
+                        <span data-i18n="nav_cta_text">Get Extension</span>
+                    </a>
+                </div>
+
+                <div class="md:hidden flex items-center gap-3">
+                    <button type="button" data-lang-toggle
+                        class="flex items-center gap-1.5 text-slate-600 font-semibold text-sm px-2.5 py-1.5 rounded-lg bg-slate-100">
+                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10"/><path d="M2 12h20"/>
+                            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                        </svg>
+                        <span data-lang-label>עב</span>
+                    </button>
+                    <button id="mobile-menu-btn" type="button" aria-controls="mobile-menu" aria-expanded="false"
+                        aria-label="Menu" class="text-slate-600 hover:text-fb focus:outline-none focus-visible:ring-2 focus-visible:ring-fb rounded p-1">
+                        <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" aria-hidden="true">
+                            <path d="M3 6h18M3 12h18M3 18h18"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div id="mobile-menu" class="hidden md:hidden bg-white border-t border-gray-100 shadow-xl absolute w-full">
+            <div class="px-4 pt-2 pb-6 space-y-1">
+                <a href="#how-it-works" data-i18n="nav_how" class="block px-3 py-3 rounded-md font-medium text-slate-700 hover:text-fb hover:bg-slate-50">How it Works</a>
+                <a href="#ai-assistant" data-i18n="nav_ai" class="block px-3 py-3 rounded-md font-medium text-slate-700 hover:text-purple-600 hover:bg-purple-50">AI Assistant</a>
+                <a href="#architecture" data-i18n="nav_architecture" class="block px-3 py-3 rounded-md font-medium text-slate-700 hover:text-fb hover:bg-slate-50">Architecture</a>
+                <a href="#audiences" data-i18n="nav_audiences" class="block px-3 py-3 rounded-md font-medium text-slate-700 hover:text-fb hover:bg-slate-50">Who it’s for</a>
+                <div class="mt-4 pt-4 border-t border-gray-100 flex flex-col gap-3">
+                    <a href="/app" data-i18n="nav_signin" class="w-full text-center text-slate-700 font-medium px-4 py-3 rounded-lg border border-slate-200 hover:bg-slate-50">Sign In</a>
+                    <a href="#extension" data-i18n="nav_cta_text" class="w-full text-center bg-fb text-white px-6 py-3 rounded-lg font-semibold shadow-lg">Get Extension</a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ===================== HERO ===================== -->
+    <main id="top">
+    <section class="relative pt-32 pb-20 lg:pt-44 lg:pb-28 overflow-hidden bg-slate-50 bg-dots">
+        <div class="absolute top-0 right-0 -mr-20 -mt-20 w-[500px] h-[500px] rounded-full bg-blue-300/30 blur-[100px] z-0 glow-bg" aria-hidden="true"></div>
+        <div class="absolute bottom-0 left-0 -ml-20 -mb-20 w-[400px] h-[400px] rounded-full bg-purple-300/30 blur-[100px] z-0 glow-bg" style="animation-delay:2s" aria-hidden="true"></div>
+
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+            <div class="lg:grid lg:grid-cols-2 gap-16 items-center">
+
+                <div class="text-center lg:text-start mb-16 lg:mb-0 reveal">
+                    <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white border border-blue-100 shadow-sm text-fb text-sm font-bold mb-8">
+                        <span class="relative flex h-2.5 w-2.5">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-blue-500"></span>
+                        </span>
+                        <span data-i18n="hero_badge">Dashboard + Chrome MV3 Extension</span>
+                    </div>
+
+                    <h1 class="text-4xl sm:text-5xl lg:text-6xl font-black tracking-tight text-slate-900 mb-6 leading-[1.12]">
+                        <span data-i18n="hero_title_1">Schedule &amp; Publish to</span><br />
+                        <span class="gradient-text" data-i18n="hero_title_2">Facebook Groups</span><br />
+                        <span data-i18n="hero_title_3">Safely.</span>
+                    </h1>
+
+                    <p class="text-lg text-slate-600 mb-10 max-w-xl mx-auto lg:mx-0 leading-relaxed" data-i18n="hero_subtitle">
+                        SafePost uses a modern dashboard to schedule your posts, and a Chrome extension that publishes
+                        them through the browser session you are already signed into. Your password is never shared or stored.
+                    </p>
+
+                    <div class="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
+                        <a href="/app"
+                            class="group bg-fb hover:bg-fb-dark text-white px-8 py-4 rounded-xl font-bold text-lg shadow-[0_8px_30px_rgb(24,119,242,0.3)] hover:shadow-[0_8px_30px_rgb(24,119,242,0.5)] transition-all flex items-center justify-center gap-3 transform hover:-translate-y-1">
+                            <span data-i18n="btn_dashboard">Open Dashboard</span>
+                            <svg class="w-5 h-5 rtl:rotate-180 group-hover:translate-x-1 rtl:group-hover:-translate-x-1 transition-transform"
+                                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M5 12h14M12 5l7 7-7 7"/>
+                            </svg>
+                        </a>
+                        <a href="#how-it-works"
+                            class="bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 text-slate-700 px-8 py-4 rounded-xl font-bold text-lg shadow-sm transition-all flex items-center justify-center gap-3">
+                            <span data-i18n="btn_docs">How it works</span>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Product mockup -->
+                <div class="relative reveal lg:ml-6" aria-hidden="true">
+                    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[120%] h-[120%] bg-gradient-to-tr from-blue-400/20 to-purple-400/20 blur-3xl rounded-full -z-10"></div>
+
+                    <div class="glass-card rounded-2xl overflow-hidden animate-float">
+                        <div class="bg-white/50 px-4 py-3 flex items-center gap-2 border-b border-slate-100">
+                            <div class="flex gap-2">
+                                <div class="w-3 h-3 rounded-full bg-red-400"></div>
+                                <div class="w-3 h-3 rounded-full bg-amber-400"></div>
+                                <div class="w-3 h-3 rounded-full bg-green-400"></div>
+                            </div>
+                            <div class="mx-auto flex items-center gap-2 bg-white/60 px-3 py-1 rounded-md border border-slate-200/50">
+                                <svg class="w-3 h-3 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                <span class="text-xs text-slate-500 font-medium" dir="ltr">safepost-backup.vercel.app</span>
+                            </div>
+                        </div>
+
+                        <!-- pb-28 reserves empty space at the bottom for the floating
+                             extension card to sit over, so it never covers a job row. -->
+                        <div class="p-6 pb-28 sm:pb-32 flex flex-col gap-5 bg-white/40">
+                            <div class="flex justify-between items-center gap-3">
+                                <div>
+                                    <h3 class="font-bold text-lg text-slate-800" data-i18n="mock_dash_title">Scheduled Jobs</h3>
+                                    <p class="text-xs text-slate-500 mt-0.5" data-i18n="mock_dash_sub">Manage your upcoming posts</p>
+                                </div>
+                                <span class="flex items-center gap-2 bg-green-50 border border-green-200 text-green-700 text-xs px-3 py-1.5 rounded-full font-bold whitespace-nowrap">
+                                    <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                                    <span data-i18n="mock_live">Live updates</span>
+                                </span>
+                            </div>
+
+                            <div class="p-4 bg-white rounded-xl shadow-sm border border-slate-100 flex justify-between items-center gap-3">
+                                <div class="flex items-center gap-3 min-w-0">
+                                    <div class="w-11 h-11 shrink-0 rounded-xl bg-blue-50 flex items-center justify-center text-fb border border-blue-100">
+                                        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                                    </div>
+                                    <div class="min-w-0">
+                                        <div class="font-bold text-slate-800 truncate" data-i18n="mock_group_1">Marketing Group</div>
+                                        <div class="text-sm text-slate-500 mt-0.5 truncate" data-i18n="mock_job_1_meta">10:00 · “New feature release…”</div>
+                                    </div>
+                                </div>
+                                <span class="text-xs font-bold text-green-600 bg-green-50 border border-green-100 px-3 py-1.5 rounded-lg whitespace-nowrap" data-i18n="mock_status_published">Published</span>
+                            </div>
+
+                            <div class="p-4 bg-blue-50/80 rounded-xl shadow-sm border border-blue-200 flex justify-between items-center gap-3">
+                                <div class="flex items-center gap-3 min-w-0">
+                                    <div class="w-11 h-11 shrink-0 rounded-xl bg-white flex items-center justify-center text-fb shadow-sm">
+                                        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                                    </div>
+                                    <div class="min-w-0">
+                                        <div class="font-bold text-slate-800 truncate" data-i18n="mock_group_2">React Developers</div>
+                                        <div class="text-sm text-slate-500 mt-0.5 truncate" data-i18n="mock_job_2_meta">12:30 · “Check out this stack…”</div>
+                                    </div>
+                                </div>
+                                <span class="text-xs font-bold text-amber-600 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg whitespace-nowrap" data-i18n="mock_status_waiting">Waiting…</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="hidden sm:block absolute bottom-3 -right-6 rtl:-left-6 rtl:right-auto w-64 bg-white/95 rounded-2xl shadow-[0_20px_50px_-12px_rgba(0,0,0,0.2)] border border-white/60 z-20 extension-pulse overflow-hidden">
+                        <div class="bg-slate-900 px-4 py-3 flex items-center gap-2.5">
+                            <svg class="w-4 h-4 text-white/80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><path d="M21.17 8H12M3.95 6.06 8.54 14M10.88 21.94 15.46 14"/></svg>
+                            <span class="text-sm text-white font-semibold" data-i18n="mock_ext_name">SafePost Extension</span>
+                        </div>
+                        <div class="p-4">
+                            <div class="flex items-center gap-2.5 border-b border-slate-100 pb-3 mb-3">
+                                <span class="relative flex h-2.5 w-2.5">
+                                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
+                                </span>
+                                <span class="text-sm font-bold text-slate-700" data-i18n="mock_ext_status">Connected to server</span>
+                            </div>
+                            <div class="text-sm font-medium text-slate-600 mb-2" data-i18n="mock_ext_action">Running job #8492…</div>
+                            <div class="w-full bg-slate-100 rounded-full h-2 mb-3 overflow-hidden">
+                                <div class="bg-gradient-to-r from-fb to-purple-500 h-2 rounded-full w-2/3"></div>
+                            </div>
+                            <div class="flex justify-between items-center gap-2">
+                                <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider" data-i18n="mock_ext_status_label">Status</span>
+                                <span class="text-xs font-bold text-fb bg-blue-50 px-2 py-1 rounded" data-i18n="mock_ext_session">Session active</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </section>
+
+    <!-- ===================== HOW IT WORKS ===================== -->
+    <section id="how-it-works" class="py-24 bg-white scroll-mt-24">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center max-w-3xl mx-auto mb-16 reveal">
+                <span class="inline-block py-1 px-3 rounded-full bg-blue-50 text-fb font-bold tracking-wider uppercase text-xs mb-4 border border-blue-100" data-i18n="how_badge">The Mechanism</span>
+                <h2 class="text-3xl md:text-4xl font-black text-slate-900 mb-5" data-i18n="how_title">How SafePost Works</h2>
+                <p class="text-slate-500 text-lg" data-i18n="how_subtitle">
+                    SafePost separates scheduling from publishing. The schedule lives on the server; the actual posting
+                    happens locally in your own browser, using your own session.
+                </p>
+            </div>
+
+            <div class="grid md:grid-cols-3 gap-8">
+                <div class="group bg-white p-8 rounded-3xl shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] border border-slate-100 hover:border-blue-200 transition-all hover:-translate-y-1 reveal text-center">
+                    <div class="w-16 h-16 mx-auto rounded-2xl bg-slate-50 flex items-center justify-center text-2xl font-black text-slate-300 mb-6 border border-slate-100 group-hover:bg-blue-50 group-hover:text-fb transition-colors">1</div>
+                    <h3 class="text-lg font-bold text-slate-900 mb-3" data-i18n="step1_title">Create jobs in the dashboard</h3>
+                    <p class="text-slate-500 leading-relaxed" data-i18n="step1_desc">Write your post, pick the target groups, and choose a time. The job is saved to the server and appears in your queue.</p>
+                </div>
+
+                <div class="group bg-white p-8 rounded-3xl shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] border border-slate-100 hover:border-fb transition-all hover:-translate-y-1 reveal text-center">
+                    <div class="w-16 h-16 mx-auto rounded-2xl bg-fb flex items-center justify-center text-white mb-6 shadow-lg shadow-blue-500/40">
+                        <svg class="w-7 h-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+                    </div>
+                    <h3 class="text-lg font-bold text-slate-900 mb-3" data-i18n="step2_title">The extension picks them up</h3>
+                    <p class="text-slate-500 leading-relaxed" data-i18n="step2_desc">The Chrome service worker stays in touch with the server. When a scheduled time arrives, it receives that job.</p>
+                </div>
+
+                <div class="group bg-white p-8 rounded-3xl shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] border border-slate-100 hover:border-blue-200 transition-all hover:-translate-y-1 reveal text-center">
+                    <div class="w-16 h-16 mx-auto rounded-2xl bg-slate-50 flex items-center justify-center text-2xl font-black text-slate-300 mb-6 border border-slate-100 group-hover:bg-blue-50 group-hover:text-fb transition-colors">3</div>
+                    <h3 class="text-lg font-bold text-slate-900 mb-3" data-i18n="step3_title">Publishes from your session</h3>
+                    <p class="text-slate-500 leading-relaxed" data-i18n="step3_desc">The extension posts to facebook.com as the account already signed in to your browser. SafePost never sees or stores your Facebook password.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===================== AI ASSISTANT (static showcase) ===================== -->
+    <section id="ai-assistant" class="py-24 bg-gradient-to-b from-white to-purple-50 border-t border-slate-100 scroll-mt-24">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center max-w-3xl mx-auto mb-14 reveal">
+                <span class="inline-flex items-center gap-2 py-1 px-3 rounded-full bg-purple-100 text-purple-700 font-bold tracking-wider uppercase text-xs mb-4 border border-purple-200">
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.9 5.8L4 10.7l5.8 1.9L11.7 19l1.9-5.8L20 11.3l-5.8-1.9z"/></svg>
+                    <span data-i18n="ai_badge">Built into the dashboard</span>
+                </span>
+                <h2 class="text-3xl md:text-4xl font-black text-slate-900 mb-5" data-i18n="ai_title">AI Post Assistant</h2>
+                <p class="text-slate-500 text-lg" data-i18n="ai_subtitle">
+                    Not sure what to write? Describe your topic and the assistant drafts variations for you — then
+                    shortens, expands, adds emoji, or changes tone on request.
+                </p>
+            </div>
+
+            <div class="max-w-5xl mx-auto glass-card rounded-3xl p-6 md:p-10 reveal">
+                <!-- Illustrative prompt (a picture of the feature, not a live input) -->
+                <div class="mb-8">
+                    <div class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2" data-i18n="ai_example_label">Example</div>
+                    <div class="flex items-center gap-3 px-5 py-4 rounded-xl bg-white border-2 border-slate-200">
+                        <svg class="w-5 h-5 text-purple-500 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h.01M16 16h.01"/></svg>
+                        <span class="text-slate-600 text-lg" data-i18n="ai_example_prompt">Write a post about a new pizzeria opening downtown</span>
+                    </div>
+                </div>
+
+                <div class="grid md:grid-cols-3 gap-6">
+                    <div class="bg-slate-50 border border-slate-200 rounded-2xl p-6">
+                        <div class="inline-block px-3 py-1 bg-purple-100 text-purple-700 text-xs font-bold rounded-full mb-4 uppercase tracking-wider border border-purple-200" data-i18n="ai_tone_1">Friendly</div>
+                        <p class="text-slate-700 leading-relaxed" data-i18n="ai_sample_1">🍕 Big news for pizza lovers! A brand-new pizzeria just opened downtown — wood-fired, fresh dough daily, and the smell alone is worth the walk. Who’s coming with me?</p>
+                    </div>
+                    <div class="bg-slate-50 border border-slate-200 rounded-2xl p-6">
+                        <div class="inline-block px-3 py-1 bg-purple-100 text-purple-700 text-xs font-bold rounded-full mb-4 uppercase tracking-wider border border-purple-200" data-i18n="ai_tone_2">Professional</div>
+                        <p class="text-slate-700 leading-relaxed" data-i18n="ai_sample_2">A new wood-fired pizzeria has opened in the city centre, serving dough made fresh each morning. Now open for lunch and dinner — reservations recommended for weekends.</p>
+                    </div>
+                    <div class="bg-slate-50 border border-slate-200 rounded-2xl p-6">
+                        <div class="inline-block px-3 py-1 bg-purple-100 text-purple-700 text-xs font-bold rounded-full mb-4 uppercase tracking-wider border border-purple-200" data-i18n="ai_tone_3">Short &amp; punchy</div>
+                        <p class="text-slate-700 leading-relaxed" data-i18n="ai_sample_3">New pizzeria downtown. Wood-fired. Fresh dough daily. 🔥 Go before the queue finds out.</p>
+                    </div>
+                </div>
+
+                <div class="mt-8 pt-6 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <p class="text-sm text-slate-500" data-i18n="ai_footnote">The assistant runs inside the dashboard, where your API usage stays behind your own account.</p>
+                    <a href="/app" class="shrink-0 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-purple-500/30 transition-transform transform hover:-translate-y-0.5" data-i18n="ai_cta">Try it in the dashboard</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===================== ARCHITECTURE ===================== -->
+    <section id="architecture" class="py-24 bg-slate-50 border-y border-slate-200 bg-dots scroll-mt-24">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center max-w-3xl mx-auto mb-14 reveal">
+                <h2 class="text-3xl md:text-4xl font-black text-slate-900 mb-5">
+                    <span data-i18n="arch_title">Modern stack.</span><br /><span data-i18n="arch_title_2">Reliable by design.</span>
+                </h2>
+                <p class="text-slate-600 text-lg" data-i18n="arch_subtitle">
+                    Three separate pieces, each doing one job — a responsive dashboard, a realtime server, and a local
+                    browser extension.
+                </p>
+            </div>
+
+            <div class="grid md:grid-cols-3 gap-8 reveal">
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-lg hover:border-blue-200 transition-all text-center group">
+                    <div class="w-14 h-14 mx-auto bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-blue-500 group-hover:text-white transition-colors">
+                        <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                    </div>
+                    <h3 class="font-bold text-slate-900 text-lg mb-2" data-i18n="arch_frontend_title">React Dashboard</h3>
+                    <p class="text-slate-500 text-sm" data-i18n="arch_frontend_desc">Responsive web app for writing, scheduling, and tracking every post.</p>
+                </div>
+
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-lg hover:border-green-200 transition-all text-center group">
+                    <div class="w-14 h-14 mx-auto bg-green-50 text-green-600 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-green-500 group-hover:text-white transition-colors">
+                        <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg>
+                    </div>
+                    <h3 class="font-bold text-slate-900 text-lg mb-2" data-i18n="arch_db_title">Realtime Server</h3>
+                    <p class="text-slate-500 text-sm" data-i18n="arch_db_desc">Node.js backend with realtime sync, so the queue updates the moment anything changes.</p>
+                </div>
+
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-lg hover:border-purple-200 transition-all text-center group">
+                    <div class="w-14 h-14 mx-auto bg-purple-50 text-purple-600 rounded-2xl flex items-center justify-center mb-5 group-hover:bg-purple-500 group-hover:text-white transition-colors">
+                        <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h3a2 2 0 0 0 2-2V4a2 2 0 1 1 4 0v1a2 2 0 0 0 2 2h3a1 1 0 0 1 1 1v3a2 2 0 0 0 2 2h1a2 2 0 1 1 0 4h-1a2 2 0 0 0-2 2v3a1 1 0 0 1-1 1h-3.5a.5.5 0 0 1-.5-.5 2.5 2.5 0 1 0-5 0 .5.5 0 0 1-.5.5H4a1 1 0 0 1-1-1v-3.5a.5.5 0 0 1 .5-.5 2.5 2.5 0 1 0 0-5 .5.5 0 0 1-.5-.5V8a1 1 0 0 1 1-1z"/></svg>
+                    </div>
+                    <h3 class="font-bold text-slate-900 text-lg mb-2" data-i18n="arch_ext_title">Chrome Extension</h3>
+                    <p class="text-slate-500 text-sm" data-i18n="arch_ext_desc">A background worker that does the actual posting locally, from your own session.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===================== AUDIENCES ===================== -->
+    <section id="audiences" class="py-20 bg-white scroll-mt-24">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="text-center mb-12 reveal">
+                <h2 class="text-3xl md:text-4xl font-black text-slate-900" data-i18n="audiences_title">Built for people who post a lot</h2>
+            </div>
+
+            <div class="grid md:grid-cols-2 gap-8 reveal">
+                <div class="flex gap-6 p-6 rounded-2xl bg-slate-50 border border-slate-100 hover:shadow-lg hover:border-blue-200 transition-all group">
+                    <div class="shrink-0 w-14 h-14 rounded-2xl bg-blue-100 flex items-center justify-center text-fb group-hover:bg-fb group-hover:text-white transition-colors">
+                        <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18l-1.5 11.2a2 2 0 0 1-2 1.8H6.5a2 2 0 0 1-2-1.8z"/><path d="M3 9l2-6h14l2 6M9 13a3 3 0 0 0 6 0"/></svg>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-bold text-slate-900 mb-2" data-i18n="audiences_biz_title">Business Owners</h3>
+                        <p class="text-slate-600 leading-relaxed" data-i18n="audiences_biz_desc">Automate your daily promotions across local community groups. Reach new customers without spending hours on manual posting — focus on closing sales while SafePost handles distribution.</p>
+                    </div>
+                </div>
+
+                <div class="flex gap-6 p-6 rounded-2xl bg-slate-50 border border-slate-100 hover:shadow-lg hover:border-purple-200 transition-all group">
+                    <div class="shrink-0 w-14 h-14 rounded-2xl bg-purple-100 flex items-center justify-center text-purple-600 group-hover:bg-purple-600 group-hover:text-white transition-colors">
+                        <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+                    </div>
+                    <div>
+                        <h3 class="text-xl font-bold text-slate-900 mb-2" data-i18n="audiences_aff_title">Affiliate Marketers</h3>
+                        <p class="text-slate-600 leading-relaxed" data-i18n="audiences_aff_desc">Distribute product links, reviews, and daily deals to dozens of relevant groups on a schedule. Maximise reach without babysitting every post.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===================== CTA / SETUP ===================== -->
+    <section id="extension" class="py-24 bg-[#0f172a] text-white relative overflow-hidden scroll-mt-24">
+        <div class="absolute top-0 right-0 w-[700px] h-[700px] bg-fb/10 rounded-full blur-[120px] pointer-events-none" aria-hidden="true"></div>
+        <div class="absolute bottom-0 left-0 w-[500px] h-[500px] bg-purple-600/10 rounded-full blur-[100px] pointer-events-none" aria-hidden="true"></div>
+
+        <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 reveal">
+            <div class="text-center">
+                <h2 class="text-3xl md:text-5xl font-black mb-5 tracking-tight" data-i18n="cta_title">Ready to get started?</h2>
+                <p class="text-lg text-blue-200 mb-12 max-w-2xl mx-auto" data-i18n="cta_subtitle">
+                    Load the extension in developer mode, connect it to your dashboard, and schedule your first post.
+                </p>
+            </div>
+
+            <div class="bg-white/5 rounded-3xl p-8 md:p-10 text-start max-w-2xl mx-auto border border-white/10 shadow-2xl">
+                <div class="flex items-center gap-3 mb-6">
+                    <div class="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center border border-blue-500/30">
+                        <svg class="w-5 h-5 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                    </div>
+                    <h3 class="font-bold text-xl" data-i18n="setup_title">Extension setup</h3>
+                </div>
+
+                <ol class="space-y-4 text-blue-100/80">
+                    <li class="flex items-start gap-4">
+                        <span class="shrink-0 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center font-bold text-sm">1</span>
+                        <div class="pt-1">
+                            <span data-i18n="setup_1_a">Open</span>
+                            <code class="bg-black/40 text-blue-300 px-2 py-0.5 rounded text-sm mx-1" dir="ltr">chrome://extensions</code>
+                            <span data-i18n="setup_1_b">in Chrome.</span>
+                        </div>
+                    </li>
+                    <li class="flex items-start gap-4">
+                        <span class="shrink-0 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center font-bold text-sm">2</span>
+                        <div class="pt-1">
+                            <span data-i18n="setup_2_a">Turn on</span>
+                            <strong class="text-white font-semibold mx-1" data-i18n="setup_2_b">Developer mode</strong>
+                            <span data-i18n="setup_2_c">(top right).</span>
+                        </div>
+                    </li>
+                    <li class="flex items-start gap-4">
+                        <span class="shrink-0 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center font-bold text-sm">3</span>
+                        <div class="pt-1">
+                            <span data-i18n="setup_3_a">Click</span>
+                            <strong class="text-white font-semibold mx-1" data-i18n="setup_3_b">Load unpacked</strong>
+                            <span data-i18n="setup_3_c">and select the</span>
+                            <code class="bg-black/40 text-blue-300 px-2 py-0.5 rounded text-sm mx-1" dir="ltr">safe_post_extension/</code>
+                            <span data-i18n="setup_3_d">folder.</span>
+                        </div>
+                    </li>
+                    <li class="flex items-start gap-4">
+                        <span class="shrink-0 w-8 h-8 rounded-full bg-white/10 flex items-center justify-center font-bold text-sm">4</span>
+                        <div class="pt-1" data-i18n="setup_4">Open the extension popup and run the connection test.</div>
+                    </li>
+                </ol>
+
+                <div class="mt-10 flex justify-center pt-8 border-t border-white/10">
+                    <a href="/app"
+                        class="group bg-white text-slate-900 hover:bg-blue-50 px-8 py-4 rounded-xl font-bold text-lg transition-all inline-flex items-center gap-3 transform hover:-translate-y-1">
+                        <span data-i18n="btn_dashboard">Open Dashboard</span>
+                        <svg class="w-5 h-5 rtl:rotate-180 group-hover:translate-x-1 rtl:group-hover:-translate-x-1 transition-transform"
+                            viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </section>
+    </main>
+
+    <!-- ===================== FOOTER ===================== -->
+    <footer class="bg-slate-900 text-slate-400 py-12 border-t border-slate-800">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center gap-6 text-center md:text-start">
+            <div class="flex items-center gap-2">
+                <svg class="w-5 h-5 text-fb" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                    <path d="M22 12a10 10 0 1 0-11.56 9.88v-6.99H7.9V12h2.54V9.8c0-2.51 1.49-3.89 3.77-3.89 1.1 0 2.24.19 2.24.19v2.46h-1.26c-1.24 0-1.63.77-1.63 1.56V12h2.78l-.45 2.89h-2.33v6.99A10 10 0 0 0 22 12z"/>
+                </svg>
+                <span class="font-bold text-xl text-white tracking-tight">Safe<span class="text-fb">Post</span></span>
+            </div>
+
+            <p class="text-sm max-w-md" data-i18n="footer_tagline">Schedule Facebook group posts without sharing your password.</p>
+
+            <div class="text-sm flex flex-col gap-1">
+                <span data-i18n="footer_not_affiliated">Not affiliated with Meta or Facebook.</span>
+                <span>&copy; <span id="year">2026</span> SafePost.</span>
+            </div>
+        </div>
+    </footer>
+
 </body>
 
 </html>

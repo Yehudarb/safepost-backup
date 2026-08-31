@@ -57,14 +57,14 @@ export default function AuthScreen() {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-[#0d1117] p-4">
+        <main className="min-h-screen flex items-center justify-center bg-[#0d1117] p-4">
             <div className="w-full max-w-sm bg-[#161b22] border border-[#30363d] rounded-2xl p-8 shadow-2xl">
                 <div className="flex flex-col items-center mb-6">
                     <div className="p-3 bg-blue-500/10 rounded-xl border border-blue-500/20 mb-3">
                         <Shield className="w-6 h-6 text-blue-400" />
                     </div>
                     <h1 className="text-xl font-bold text-white">SafePost</h1>
-                    <p className="text-xs text-gray-500 mt-1">
+                    <p className="text-xs text-gray-400 mt-1">
                         {mode === 'login' && 'Sign in to your workspace'}
                         {mode === 'register' && 'Create your account'}
                         {mode === 'reset' && 'Reset your password'}
@@ -116,7 +116,7 @@ export default function AuthScreen() {
 
                 {demoEnabled && mode === 'login' && (
                     <>
-                        <div className="my-4 flex items-center gap-3 text-[10px] uppercase tracking-widest text-gray-600">
+                        <div className="my-4 flex items-center gap-3 text-[10px] uppercase tracking-widest text-gray-400">
                             <span className="h-px flex-1 bg-[#30363d]" /> or <span className="h-px flex-1 bg-[#30363d]" />
                         </div>
                         <button
@@ -125,11 +125,11 @@ export default function AuthScreen() {
                         >
                             Try the demo — no signup
                         </button>
-                        <p className="mt-2 text-center text-[10px] text-gray-600">Synthetic data only. No real posts are published.</p>
+                        <p className="mt-2 text-center text-[10px] text-gray-400">Synthetic data only. No real posts are published.</p>
                     </>
                 )}
 
-                <div className="mt-5 flex flex-col gap-2 text-center text-xs text-gray-500">
+                <div className="mt-5 flex flex-col gap-2 text-center text-xs text-gray-400">
                     {mode === 'login' && (
                         <>
                             <button onClick={() => { setMode('reset'); setError(''); setNotice(''); }} className="hover:text-blue-400">Forgot password?</button>
@@ -141,6 +141,6 @@ export default function AuthScreen() {
                     )}
                 </div>
             </div>
-        </div>
+        </main>
     );
 }

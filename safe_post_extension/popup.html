@@ -22,12 +22,38 @@
         .ok { color: #3fb950; }
         .err { color: #f85149; }
         .code-input { text-transform: uppercase; letter-spacing: 0.25em; text-align: center; font-family: monospace; font-size: 16px; }
+
+        /* Dry Run. This popup is a dark-only UI, so the state is carried by an
+           accent border + accent text on the existing dark surface — the first
+           version used light "warning" backgrounds from a light-theme palette,
+           which left the subtitle as grey-on-cream and effectively invisible.
+           Colours are the same GitHub-dark accents already used above. */
+        .dryrun { border: 1px solid #30363d; border-left-width: 4px; border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; background: #161b22; }
+        .dryrun.on { border-left-color: #d29922; }
+        .dryrun.off { border-left-color: #f85149; }
+        .dryrun-title { display: flex; align-items: center; gap: 8px; margin: 0; cursor: pointer; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #e6edf3; }
+        .dryrun-title input { width: auto; margin: 0; accent-color: #d29922; }
+        .dryrun-sub { font-size: 11px; color: #c9d1d9; margin-top: 5px; }
+        .dryrun-state { margin-top: 7px; font-size: 12px; font-weight: 700; }
+        .dryrun.on .dryrun-state { color: #e3b341; }
+        .dryrun.off .dryrun-state { color: #ff7b72; }
     </style>
 </head>
 
 <body>
     <h3>SafePost Automation</h3>
     <div class="status">● System Active</div>
+
+    <!-- Dry Run: the operator must be able to see, at a glance and before any
+         test, whether this install can publish to Facebook. -->
+    <div class="dryrun" id="dryRunSection">
+        <label class="dryrun-title" for="dryRunMode">
+            <input id="dryRunMode" type="checkbox" />
+            <span>Dry Run Mode</span>
+        </label>
+        <div class="dryrun-sub">Prevent final Facebook publish</div>
+        <div id="dryRunState" class="dryrun-state"></div>
+    </div>
 
     <!-- Pairing -->
     <div class="section">
@@ -49,6 +75,10 @@
 
     <label for="apiUrl">API Server URL</label>
     <input id="apiUrl" type="url" placeholder="https://safepost-backup.onrender.com" autocomplete="off" />
+
+    <label for="extensionKey">Extension key <span style="font-weight:400;opacity:.7">(optional)</span></label>
+    <input id="extensionKey" type="password" placeholder="Only if the server requires one" autocomplete="off" />
+
     <div class="row">
         <button id="saveBtn" class="primary">Save</button>
         <button id="testBtn">Test connection</button>

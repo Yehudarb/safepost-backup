@@ -12,6 +12,7 @@
     ],
     "host_permissions": [
         "http://localhost:3001/*",
+        "https://safepost-backup.onrender.com/*",
         "https://www.facebook.com/*"
     ],
     "background": {

@@ -1,19 +1,17 @@
-// Frontend Supabase client — used ONLY for authentication (login/register/reset,
-// session persistence). All business data still flows through the Express API.
-//
-// Configure via env (dev/staging project):
-//   VITE_SUPABASE_URL
-//   VITE_SUPABASE_ANON_KEY
 import { createClient } from '@supabase/supabase-js';
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const mode = String(import.meta.env.MODE || 'development').toLowerCase();
 
+export const isAuthRequired = import.meta.env.PROD || !['development', 'dev', 'test'].includes(mode);
 export const isSupabaseConfigured = Boolean(url && anonKey);
+export const authConfigError = isAuthRequired && !isSupabaseConfigured
+    ? 'Authentication is required in this environment. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY before starting the dashboard.'
+    : null;
 
 if (!isSupabaseConfigured) {
-    // Don't throw — let the UI show a friendly "auth not configured" message.
-    console.warn('[auth] VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY not set — authentication is disabled.');
+    console.warn(authConfigError || '[auth] VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY not set — authentication is disabled for local development.');
 }
 
 export const supabase = isSupabaseConfigured
