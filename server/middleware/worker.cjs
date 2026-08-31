@@ -6,6 +6,7 @@
 
 const crypto = require('crypto');
 const { supabase } = require('../supabaseClient.cjs');
+const { UUID_RE, WORKER_AUTH_ENFORCED } = require('../lib/runtimeMode.cjs');
 
 function generateDeviceToken() {
     return crypto.randomBytes(32).toString('hex'); // 64-char secret (plaintext, returned once)
@@ -39,8 +40,6 @@ function readWorkerCredentials(req) {
         token: req.headers['x-device-token'] || req.query.device_token || null,
     };
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Shared-secret alternative to per-device pairing. One EXTENSION_API_KEY on the
 // server, the same value pasted into the extension's settings popup — no codes,
@@ -162,7 +161,7 @@ async function optionalWorker(req, res, next) {
     // the key in the popup before setting it on the server.
 
     // 3. No credentials at all.
-    if (process.env.WORKER_AUTH_ENFORCED === 'true') {
+    if (WORKER_AUTH_ENFORCED) {
         return res.status(401).json({ error: 'Worker credentials required.' });
     }
 

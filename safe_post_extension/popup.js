@@ -106,12 +106,49 @@ function setResult(id, msg, ok) {
     el.className = 'test-result ' + (ok ? 'ok' : 'err');
 }
 
+// ---- dry run ----
+// Mirrors SafePostFB.resolveDryRun() in fbUtils.js, which is what content.js
+// actually enforces. Kept in sync deliberately: the popup must never claim a
+// state the publish guard would not agree with.
+function resolveDryRun(settings) {
+    if (!settings || typeof settings !== 'object') return true;
+    if (typeof settings.dryRunMode === 'boolean') return settings.dryRunMode;
+    const base = typeof settings.apiUrl === 'string' ? settings.apiUrl : '';
+    if (!base) return false;
+    return /localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]/i.test(base);
+}
+
+function renderDryRun(on, explicit) {
+    $('dryRunMode').checked = on;
+    const el = $('dryRunState');
+    el.textContent = on
+        ? '🛑 ON — publishing is BLOCKED'
+        : '⚠️ OFF — this install CAN publish to Facebook';
+    // State is carried by a CSS class so the colours stay in the stylesheet with
+    // the rest of the dark theme, instead of being hardcoded per element here.
+    $('dryRunSection').classList.toggle('on', on);
+    $('dryRunSection').classList.toggle('off', !on);
+    if (!explicit) el.textContent += ' (default for this API URL)';
+}
+
+async function loadDryRun() {
+    const settings = await chrome.storage.local.get(['dryRunMode', 'apiUrl']);
+    renderDryRun(resolveDryRun(settings), typeof settings.dryRunMode === 'boolean');
+}
+
+async function toggleDryRun() {
+    const on = $('dryRunMode').checked;
+    await chrome.storage.local.set({ dryRunMode: on });
+    renderDryRun(on, true);
+}
+
 async function load() {
     const { apiUrl, extensionKey } = await chrome.storage.local.get(['apiUrl', 'extensionKey']);
     $('apiUrl').value = apiUrl || '';
     $('apiUrl').placeholder = DEFAULT_API_URL;
     $('extensionKey').value = extensionKey || '';
     $('version').textContent = chrome.runtime.getManifest().version;
+    await loadDryRun();
     refreshPairUI();
 }
 
@@ -121,4 +158,5 @@ document.addEventListener('DOMContentLoaded', () => {
     $('testBtn').addEventListener('click', testConnection);
     $('pairBtn').addEventListener('click', pair);
     $('unpairBtn').addEventListener('click', unpair);
+    $('dryRunMode').addEventListener('change', toggleDryRun);
 });

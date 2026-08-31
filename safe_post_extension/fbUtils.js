@@ -150,6 +150,39 @@
         return { checkpoint: false };
     }
     // Aggregate → a single error code when the page isn't postable.
+    // This is deliberately narrower than post-submit moderation detection. A
+    // historical "pending approval" count on a group page does not prove that the
+    // current account cannot compose a new post.
+    const PREFLIGHT_POSTING_BLOCKS = [
+        "you can't post in this group",
+        'you cannot post in this group',
+        "you're not allowed to post in this group",
+        'you are not allowed to post in this group',
+        "you don't have permission to post",
+        'you do not have permission to post',
+        'you are temporarily blocked from posting',
+        'your account is restricted from posting',
+        "you can't create posts in this group",
+        '\u05d0\u05d9\u05df \u05dc\u05da \u05d0\u05e4\u05e9\u05e8\u05d5\u05ea \u05dc\u05e4\u05e8\u05e1\u05dd \u05d1\u05e7\u05d5\u05d1\u05e6\u05d4 \u05d6\u05d5',
+        '\u05d0\u05d9\u05df \u05dc\u05da \u05d0\u05e4\u05e9\u05e8\u05d5\u05ea \u05dc\u05e4\u05e8\u05e1\u05dd \u05d1\u05e7\u05d5\u05d1\u05e6\u05d4 \u05d4\u05d6\u05d5',
+        '\u05d0\u05d9\u05e0\u05da \u05d9\u05db\u05d5\u05dc \u05dc\u05e4\u05e8\u05e1\u05dd \u05d1\u05e7\u05d5\u05d1\u05e6\u05d4 \u05d6\u05d5',
+        '\u05d0\u05d9\u05df \u05dc\u05da \u05d4\u05e8\u05e9\u05d0\u05d4 \u05dc\u05e4\u05e8\u05e1\u05dd \u05d1\u05e7\u05d5\u05d1\u05e6\u05d4 \u05d6\u05d5',
+        '\u05d4\u05d7\u05e9\u05d1\u05d5\u05df \u05e9\u05dc\u05da \u05de\u05d5\u05d2\u05d1\u05dc \u05de\u05e4\u05e8\u05e1\u05d5\u05dd',
+    ];
+
+    function detectPreflightPostingBlock(root) {
+        root = root || document;
+        const elements = Array.from(root.querySelectorAll('div, span, [role="alert"], [role="dialog"], [role="status"]'));
+        for (const element of elements) {
+            if (!isVisible(element)) continue;
+            const text = norm(element.textContent || element.getAttribute('aria-label'));
+            if (!text || text.length > 300) continue;
+            const phrase = PREFLIGHT_POSTING_BLOCKS.find((candidate) => text.includes(norm(candidate)));
+            if (phrase) return { blocked: true, signal: 'explicit-posting-block', text, phrase };
+        }
+        return { blocked: false, signal: 'none', text: null, phrase: null };
+    }
+
     function detectFacebookState(root) {
         root = root || document;
         const login = detectLoginState(root);
@@ -216,12 +249,38 @@
         };
     }
 
+    // ---------------------------------------------------------------------
+    // DRY RUN SAFETY
+    //
+    // Sentinel returned by the publish path when a final submission was blocked.
+    // It is a distinct value (not true/false) so a caller can never mistake a
+    // blocked publish for a successful one.
+    const DRY_RUN_BLOCKED = 'DRY_RUN_BLOCKED';
+
+    // Pure decision function — kept here (rather than in content.js) so it is
+    // unit-testable without a browser.
+    //
+    //   • An explicit stored boolean always wins, in either direction.
+    //   • Unset falls back to the ENVIRONMENT: an install pointed at a local
+    //     backend is a QA/dev install and defaults to BLOCKED. An install
+    //     pointed at a remote backend is a real user and keeps publishing, so
+    //     shipping this does not silently disable production.
+    //   • Anything unreadable or malformed is treated as dry run. A setting we
+    //     cannot evaluate must never be the reason a real post goes out.
+    function resolveDryRun(settings) {
+        if (!settings || typeof settings !== 'object') return true;
+        if (typeof settings.dryRunMode === 'boolean') return settings.dryRunMode;
+        const base = typeof settings.apiUrl === 'string' ? settings.apiUrl : '';
+        if (!base) return false; // unset apiUrl means the production default URL
+        return /localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]/i.test(base);
+    }
+
     const api = {
-        WORDS, STAGES,
+        WORDS, STAGES, DRY_RUN_BLOCKED,
         matchesAny, isVisible, isEnabled, accessibleText,
         findPostComposer, findEditableArea, findMediaButton, findFileInput, findPublishButton,
-        detectLoginState, detectCaptcha, detectCheckpoint, detectFacebookState,
-        waitForElement, waitForEnabledElement, buildDiagnostics,
+        detectLoginState, detectCaptcha, detectCheckpoint, detectPreflightPostingBlock, detectFacebookState,
+        waitForElement, waitForEnabledElement, buildDiagnostics, resolveDryRun,
     };
 
     // Browser content script + Node tests both read the global; CommonJS also

@@ -17,6 +17,11 @@ const RETRYABLE = new Set([
 const NEEDS_USER_ACTION = new Set([
     'FACEBOOK_LOGGED_OUT', 'GROUP_NOT_FOUND', 'NO_GROUP_ACCESS', 'POSTING_NOT_ALLOWED',
     'ACCOUNT_RESTRICTED', 'CHECKPOINT_REQUIRED', 'CAPTCHA_REQUIRED', 'INVALID_MEDIA',
+    // The composer closed but neither a published post nor a pending-approval
+    // banner could be found, so we do not know whether Facebook accepted it.
+    // Deliberately terminal rather than retryable: a retry of a submission that
+    // DID go through posts the same content to the group twice. A human decides.
+    'PUBLISH_UNVERIFIED',
 ]);
 
 // Unknown codes are treated as retryable (likely transient), bounded by max_attempts.
@@ -49,7 +54,16 @@ async function claimNextJob({ workspaceId, workerId }) {
     if (!job) return null;
 
     // Conditional lock: only succeeds if still SENT + lock free (atomic row update).
-    const { data: locked } = await supabase.from('posts')
+    //
+    // NOTE: this used to `.select('*, groups(name, url)')`. That PostgREST embed
+    // needs a foreign key between posts and groups — exactly the FK migration
+    // 0008 deliberately drops, because a group id is no longer globally unique.
+    // After 0008 every claim failed with PGRST200 ("Could not find a relationship
+    // between 'posts' and 'groups'"), the error was swallowed by destructuring
+    // only `data`, and claimNextJob silently returned null — i.e. NO job could
+    // ever be claimed. The group is now resolved separately, scoped the same way
+    // dispatchTask() does it.
+    const { data: locked, error: lockError } = await supabase.from('posts')
         .update({
             status: 'PROCESSING',
             worker_id: workerId || null,
@@ -61,10 +75,22 @@ async function claimNextJob({ workspaceId, workerId }) {
         .eq('id', job.id)
         .eq('status', 'SENT')
         .or(`lock_expires_at.is.null,lock_expires_at.lt.${now}`)
-        .select('*, groups(name, url)');
+        .select('*');
 
+    if (lockError) { console.error('[queue] claim lock failed:', lockError.message); return null; }
     if (!locked || locked.length === 0) return null; // lost the race — caller may retry
-    return locked[0];
+
+    const claimed = locked[0];
+
+    // Resolve the target group for this workspace + facebook_user (composite key
+    // since 0008). The worker needs `group_url` — background.js opens the tab with
+    // it — so attach it here rather than leaving the caller to guess.
+    let groupQuery = supabase.from('groups').select('name, url').eq('id', claimed.group_id);
+    if (claimed.workspace_id) groupQuery = groupQuery.eq('workspace_id', claimed.workspace_id);
+    if (claimed.facebook_user) groupQuery = groupQuery.eq('facebook_user', claimed.facebook_user);
+    const { data: group } = await groupQuery.limit(1).maybeSingle();
+
+    return { ...claimed, group_name: group?.name || null, group_url: group?.url || null };
 }
 
 // Extend the lock for a worker's in-flight job (called on heartbeat).
@@ -76,7 +102,13 @@ async function extendLock(workerId) {
 }
 
 // Report a job result with persistent idempotency + retry/backoff.
-async function reportJobStatus({ jobId, workspaceId, status, errorCode, failureReason, externalUrl }) {
+// `externalUrl` is the post's real permalink and lands in external_post_url — it
+// doubles as the idempotency signal below, so only a genuinely identified post URL
+// belongs there. `proofUrl` is whatever the worker could show as evidence (which
+// may only be the group URL when the permalink could not be found); it is kept in
+// the separate proof_url column, matching what the legacy PATCH route has always
+// stored, so switching the extension to this route loses nothing.
+async function reportJobStatus({ jobId, workspaceId, status, errorCode, failureReason, externalUrl, proofUrl }) {
     const { data: job } = await supabase.from('posts').select('*').eq('id', jobId).maybeSingle();
     if (!job) return { ok: false, code: 404 };
     if (workspaceId && job.workspace_id !== workspaceId) return { ok: false, code: 403 };
@@ -90,9 +122,29 @@ async function reportJobStatus({ jobId, workspaceId, status, errorCode, failureR
         const { error } = await supabase.from('posts').update({
             status: 'SUCCESS', external_post_url: externalUrl || null,
             ended_at: now, lock_expires_at: null, worker_id: null, error_code: null,
+            ...(proofUrl ? { proof_url: proofUrl } : {}),
         }).eq('id', jobId);
         if (error) { console.error('[queue] success update failed:', error.message); return { ok: false, code: 500 }; }
         return { ok: true, final: 'SUCCESS' };
+    }
+
+    // CANCELLED is a decision, not an error: the worker deliberately stopped
+    // (today: the group holds posts for admin approval, reported as CANCELLED with
+    // 'ממתין לאישור מנהל' — the convention GET /api/groups' requires_moderation,
+    // the analytics moderationRate and the 48h resume sweep all key off). It must
+    // never fall through to the retry classifier below: an unknown/absent error
+    // code classifies as retryable, which would requeue the job and could publish
+    // the same post to Facebook a second time. The resume sweep needs ended_at set,
+    // so it is stamped here.
+    if (status === 'CANCELLED') {
+        const { error } = await supabase.from('posts').update({
+            status: 'CANCELLED', failure_reason: failureReason || null,
+            error_code: errorCode || null, ended_at: now,
+            lock_expires_at: null, worker_id: null,
+            ...(proofUrl ? { proof_url: proofUrl } : {}),
+        }).eq('id', jobId);
+        if (error) { console.error('[queue] cancel update failed:', error.message); return { ok: false, code: 500 }; }
+        return { ok: true, final: 'CANCELLED' };
     }
 
     const category = classifyError(errorCode);
@@ -112,6 +164,7 @@ async function reportJobStatus({ jobId, workspaceId, status, errorCode, failureR
     await supabase.from('posts').update({
         status: finalStatus, error_code: errorCode || null, failure_reason: failureReason || null,
         ended_at: now, lock_expires_at: null, worker_id: null,
+        ...(proofUrl ? { proof_url: proofUrl } : {}),
     }).eq('id', jobId);
     return { ok: true, final: finalStatus };
 }

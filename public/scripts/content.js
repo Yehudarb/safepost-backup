@@ -19,11 +19,215 @@ async function logRemote(message, metadata = {}) {
     }
 }
 
-// Get current Facebook user from dashboard (stored in localStorage)
-function getCurrentFacebookUser() {
-    // Read from localStorage that dashboard sets
-    return localStorage.getItem('safepost_currentUser') || null;
+const FACEBOOK_USER_STORAGE_KEYS = ['fb_session', 'safepost_currentUser', 'safepost_detectedFacebookUser', 'safepost_currentUserId'];
+const FACEBOOK_USER_GENERIC_LABELS = new Set([
+    'facebook', 'home', 'profile', 'profiles', 'groups', 'marketplace',
+    'notifications', 'settings', 'menu', 'search', 'create', 'posts',
+    'your profile', 'your profiles', 'switch profile', 'view profile'
+]);
+
+function normalizeFacebookUser(value) {
+    if (!value || typeof value !== 'string') return null;
+    const cleaned = value
+        .replace(/\s+/g, ' ')
+        .replace(/\(.*?\)/g, '')
+        .replace(/\s*[-|•·]\s*Facebook.*$/i, '')
+        .trim();
+    if (!cleaned || cleaned.length < 2) return null;
+    if (FACEBOOK_USER_GENERIC_LABELS.has(cleaned.toLowerCase())) return null;
+    return cleaned;
 }
+
+async function getStoredFacebookUser() {
+    try {
+        if (chrome.storage?.local?.get) {
+            const data = await chrome.storage.local.get(FACEBOOK_USER_STORAGE_KEYS);
+            return {
+                name: data.fb_session || data.safepost_currentUser || data.safepost_detectedFacebookUser || null,
+                id: data.safepost_currentUserId || null
+            };
+        }
+    } catch (e) {
+        console.warn('[SafePost] Could not read chrome.storage.local for FB user', e);
+    }
+    return {
+        name: localStorage.getItem('safepost_currentUser') || null,
+        id: localStorage.getItem('safepost_currentUserId') || null
+    };
+}
+
+function getActiveUserIdFromCookie() {
+    const m = document.cookie.match(/(?:^|;\s*)c_user=(\d+)/);
+    return m ? m[1] : null;
+}
+
+function decodeUnicodeEscapes(s) {
+    try { return JSON.parse('"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\\\\u/g, '\\u') + '"'); }
+    catch { return s; }
+}
+
+function extractNameFromUserScopedScripts(activeUserId) {
+    if (!activeUserId) return null;
+    const patterns = [
+        new RegExp(`"USER_ID"\\s*:\\s*"${activeUserId}"[\\s\\S]{0,800}?"NAME"\\s*:\\s*"([^"]+)"`),
+        new RegExp(`"ACCOUNT_ID"\\s*:\\s*"${activeUserId}"[\\s\\S]{0,800}?"NAME"\\s*:\\s*"([^"]+)"`),
+        new RegExp(`"NAME"\\s*:\\s*"([^"]+)"[\\s\\S]{0,800}?"USER_ID"\\s*:\\s*"${activeUserId}"`),
+        new RegExp(`"NAME"\\s*:\\s*"([^"]+)"[\\s\\S]{0,800}?"ACCOUNT_ID"\\s*:\\s*"${activeUserId}"`),
+    ];
+
+    for (const script of Array.from(document.querySelectorAll('script'))) {
+        const text = script.textContent || '';
+        if (!text || !text.includes(activeUserId)) continue;
+        for (const pattern of patterns) {
+            const match = text.match(pattern);
+            const normalized = normalizeFacebookUser(decodeUnicodeEscapes(match?.[1] || ''));
+            if (normalized) return normalized;
+        }
+    }
+    return null;
+}
+
+function extractNameFromInitialData(activeUserId) {
+    const exactScopedName = extractNameFromUserScopedScripts(activeUserId);
+    if (exactScopedName) return exactScopedName;
+
+    const scripts = Array.from(document.querySelectorAll('script'));
+    for (const script of scripts) {
+        const text = script.textContent;
+        if (!text || !text.includes('CurrentUserInitialData')) continue;
+        const idx = text.indexOf('CurrentUserInitialData');
+        const slice = text.slice(idx, idx + 4000);
+        if (activeUserId) {
+            const idMatch = slice.match(/"USER_ID"\s*:\s*"(\d+)"/);
+            if (idMatch && idMatch[1] !== activeUserId) continue;
+        }
+        const nameMatch = slice.match(/"NAME"\s*:\s*"([^"]+)"/);
+        if (nameMatch && nameMatch[1]) {
+            const normalized = normalizeFacebookUser(decodeUnicodeEscapes(nameMatch[1]));
+            if (normalized) return normalized;
+        }
+    }
+    return null;
+}
+
+function extractNameFromActiveProfileLinks(activeUserId) {
+    if (!activeUserId) return null;
+    const linkSelectors = [
+        `a[href*="id=${activeUserId}"]`,
+        `a[href*="/${activeUserId}"]`,
+        `a[data-hovercard*="${activeUserId}"]`,
+    ];
+
+    for (const selector of linkSelectors) {
+        for (const el of Array.from(document.querySelectorAll(selector))) {
+            const candidates = [
+                el.innerText,
+                el.textContent,
+                el.getAttribute('aria-label'),
+                el.getAttribute('title'),
+            ];
+            for (const candidate of candidates) {
+                const normalized = normalizeFacebookUser(candidate);
+                if (normalized) return normalized;
+            }
+        }
+    }
+    return null;
+}
+
+function collectFacebookUserCandidates() {
+    const candidates = [];
+    const visited = new Set();
+    const push = (value) => {
+        const normalized = normalizeFacebookUser(value);
+        if (normalized && !visited.has(normalized)) {
+            visited.add(normalized);
+            candidates.push(normalized);
+        }
+    };
+    const activeUserId = getActiveUserIdFromCookie();
+
+    const nameFromData = extractNameFromInitialData(activeUserId);
+    if (nameFromData) push(nameFromData);
+
+    const nameFromProfileLink = extractNameFromActiveProfileLinks(activeUserId);
+    if (nameFromProfileLink) push(nameFromProfileLink);
+
+    const selectors = [
+        'a[href*="/me/"]',
+        'a[href*="profile.php"]',
+        '[role="navigation"] a',
+        '[role="banner"] a',
+        'a[aria-label*="Profile"]',
+        'button[aria-label*="Profile"]',
+    ];
+
+    selectors.forEach((selector) => {
+        document.querySelectorAll(selector).forEach((el) => {
+            const values = [
+                el.innerText,
+                el.textContent,
+                el.getAttribute('aria-label'),
+                el.getAttribute('title'),
+            ];
+            values.forEach((raw) => {
+                push(raw);
+            });
+        });
+    });
+
+    push(document.querySelector('meta[property="og:title"]')?.content);
+    push(document.title);
+
+    return candidates;
+}
+
+async function detectCurrentFacebookUser() {
+    const activeId = getActiveUserIdFromCookie();
+    const candidates = collectFacebookUserCandidates();
+    const detected = normalizeFacebookUser(candidates[0]);
+    if (detected) {
+        try {
+            localStorage.setItem('safepost_currentUser', detected);
+            if (activeId) localStorage.setItem('safepost_currentUserId', activeId);
+        } catch { /* noop */ }
+        return { facebook_user: detected, facebook_user_id: activeId || null };
+    }
+
+    const storedProfile = await getStoredFacebookUser();
+    const storedName = normalizeFacebookUser(storedProfile?.name);
+    const storedId = storedProfile?.id || localStorage.getItem('safepost_currentUserId') || null;
+    if (storedName && (!activeId || !storedId || storedId === activeId)) {
+        return { facebook_user: storedName, facebook_user_id: activeId || storedId || null };
+    }
+    return { facebook_user: null, facebook_user_id: activeId || null };
+}
+
+async function syncDetectedFacebookUser() {
+    const profile = await detectCurrentFacebookUser();
+    const fbUser = profile?.facebook_user || null;
+    const fbUserId = profile?.facebook_user_id || getActiveUserIdFromCookie() || null;
+    if (!fbUser) return null;
+
+    try {
+        localStorage.setItem('safepost_currentUser', fbUser);
+        if (fbUserId) localStorage.setItem('safepost_currentUserId', fbUserId);
+    } catch { /* noop */ }
+
+    if (chrome.runtime?.id) {
+        try {
+            chrome.runtime.sendMessage({
+                action: 'SET_FACEBOOK_USER',
+                facebook_user: fbUser,
+                facebook_user_id: fbUserId
+            });
+        } catch { /* noop */ }
+    }
+
+    return { facebook_user: fbUser, facebook_user_id: fbUserId };
+}
+
+syncDetectedFacebookUser().catch(() => {});
 
 // 1. Inject Manual Sync Button
 function injectButton() {
@@ -69,38 +273,22 @@ setInterval(injectButton, 5000);
 
 // 2. Scrape Logic
 async function scrapeAndSyncGroups() {
-    logRemote("Starting group scrape");
-    const fbUser = getCurrentFacebookUser();
-    logRemote("Current Facebook user", { user: fbUser });
+    logRemote("Starting group sync via background worker");
+    await syncDetectedFacebookUser().catch(() => null);
 
-    let groupElements = document.querySelectorAll('a[href*="/groups/"]');
-    let groups = [];
-
-    groupElements.forEach(el => {
-        if (el.innerText && el.innerText.length > 2 && !el.innerText.includes('Join')) {
-            let url = el.href.split('?')[0];
-            const match = url.match(/groups\/(\d+)/) || url.match(/groups\/([a-zA-Z0-9.]+)/);
-            if (match) {
-                groups.push({ id: match[1], name: el.innerText, url: url });
-            }
+    chrome.runtime.sendMessage({ action: "SCAN_AND_SYNC_GROUPS" }, (response) => {
+        if (chrome.runtime.lastError) {
+            console.error("BG Error:", chrome.runtime.lastError);
+            alert("Sync failed. Reload the extension and try again.");
+            return;
         }
+        if (!response?.success) {
+            alert(`Group sync failed: ${response?.error || 'unknown error'}`);
+            return;
+        }
+        const syncedCount = response?.synced || response?.added || 0;
+        alert(`Group sync completed: ${syncedCount} groups.`);
     });
-
-    groups = groups.filter((v, i, a) => a.findIndex(t => (t.id === v.id)) === i);
-    logRemote(`Scrape complete. Found ${groups.length} groups.`);
-
-    if (groups.length > 0) {
-        chrome.runtime.sendMessage({ action: "SYNC_GROUPS", groups: groups, facebook_user: fbUser }, (response) => {
-            if (chrome.runtime.lastError) {
-                console.error("BG Error:", chrome.runtime.lastError);
-                alert("שגיאה: וודא שרעננת את התוסף!");
-            } else {
-                alert(`✅ הצלחה! נשלחו ${groups.length} קבוצות לשרת.${fbUser ? ` (${fbUser})` : ''}`);
-            }
-        });
-    } else {
-        alert("⚠️ לא נמצאו קבוצות בדף. גלול למטה ונסה שוב.");
-    }
 }
 
 // --- Posting Logic ---
@@ -119,6 +307,11 @@ async function performPost(job) {
     console.log(`[Content] Content: ${job.content.substring(0, 50)}...`);
 
     window.hud.mount();
+    window.hud.setContext({
+        jobId: job.id,
+        groupName: job.group_name || job.group_url || 'קבוצה',
+        contentChars: job.content ? job.content.length : null
+    });
     window.hud.updateText("מתחיל עבודה", "טוען נתוני פוסט...");
 
     // Debug: Check if we're on Facebook
@@ -628,37 +821,107 @@ async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // HUD Implementation
 injectStyles();
 window.hud = {
+    elapsedInterval: null,
+    elapsedSeconds: 0,
+    timerTotal: 0,
+    timerRemaining: null,
+    context: null,
+
     mount: () => {
         if (document.getElementById('safepost-hud')) return;
         const div = document.createElement('div');
         div.id = 'safepost-hud';
-        const hudTimer = document.createElement('div');
-        hudTimer.id = 'hud-timer'; hudTimer.textContent = '--s';
-        const hudTitle = document.createElement('div');
-        hudTitle.id = 'hud-title'; hudTitle.textContent = 'מערכת אופטימיזציה';
-        const hudStatus = document.createElement('div');
-        hudStatus.id = 'hud-status'; hudStatus.textContent = 'מוכן לעבודה';
-        const hudVersion = document.createElement('div');
-        hudVersion.id = 'hud-version'; hudVersion.textContent = 'v6.2';
-        div.appendChild(hudTimer); div.appendChild(hudTitle);
-        div.appendChild(hudStatus); div.appendChild(hudVersion);
+        div.innerHTML = `
+            <div id="hud-elapsed">0s</div>
+            <div id="hud-timer">--s</div>
+            <div id="hud-title">מערכת אופטימיזציה</div>
+            <div id="hud-status">מוכן לעבודה</div>
+            <div id="hud-meta">ממתין להתחלת משימה</div>
+            <div id="hud-progress"><span></span></div>
+            <div id="hud-version">v6.2</div>
+        `;
         document.body.appendChild(div);
+        window.hud.refreshMeta();
+    },
+    formatElapsed: (totalSeconds) => {
+        const mins = Math.floor(totalSeconds / 60);
+        const secs = totalSeconds % 60;
+        return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+    },
+    refreshMeta: () => {
+        const meta = document.getElementById('hud-meta');
+        if (!meta) return;
+        const parts = [];
+        if (window.hud.context?.jobId) parts.push(`משימה #${window.hud.context.jobId}`);
+        if (window.hud.context?.groupName) parts.push(window.hud.context.groupName);
+        if (typeof window.hud.context?.contentChars === 'number') parts.push(`${window.hud.context.contentChars} תווים`);
+        if (window.hud.elapsedSeconds > 0) parts.push(`רץ ${window.hud.formatElapsed(window.hud.elapsedSeconds)}`);
+        meta.innerText = parts.length ? parts.join(' · ') : 'ממתין להתחלת משימה';
+    },
+    setContext: (ctx = {}) => {
+        window.hud.context = {
+            jobId: ctx.jobId || null,
+            groupName: ctx.groupName || ctx.group_url || 'קבוצה',
+            contentChars: typeof ctx.contentChars === 'number' ? ctx.contentChars : null,
+        };
+        window.hud.refreshMeta();
+    },
+    updateProgress: () => {
+        const bar = document.querySelector('#hud-progress span');
+        if (!bar) return;
+        if (window.hud.timerTotal > 0 && window.hud.timerRemaining !== null) {
+            const pct = Math.max(0, Math.min(100, ((window.hud.timerTotal - window.hud.timerRemaining) / window.hud.timerTotal) * 100));
+            bar.style.width = `${pct}%`;
+        } else if (window.hud.elapsedSeconds > 0) {
+            bar.style.width = `${Math.min(100, (window.hud.elapsedSeconds % 30) * (100 / 30))}%`;
+        } else {
+            bar.style.width = '18%';
+        }
     },
     updateText: (t, s) => {
         const title = document.getElementById('hud-title');
         const status = document.getElementById('hud-status');
         if (title) title.innerText = t;
         if (status) status.innerText = s;
+        window.hud.refreshMeta();
     },
     startTimer: async (s) => {
         const timer = document.getElementById('hud-timer');
+        window.hud.timerTotal = s;
+        window.hud.timerRemaining = s;
+        window.hud.updateProgress();
         for (let i = s; i > 0; i--) {
+            window.hud.timerRemaining = i;
             if (timer) timer.innerText = `${i}s`;
+            window.hud.updateProgress();
             await sleep(1000);
         }
+        window.hud.timerRemaining = 0;
         if (timer) timer.innerText = "GO!";
+        window.hud.updateProgress();
+    },
+    startElapsedTimer: () => {
+        if (window.hud.elapsedInterval) clearInterval(window.hud.elapsedInterval);
+        window.hud.elapsedSeconds = 0;
+        const elapsedEl = document.getElementById('hud-elapsed');
+        if (elapsedEl) elapsedEl.innerText = '0s';
+        window.hud.updateProgress();
+        window.hud.elapsedInterval = setInterval(() => {
+            window.hud.elapsedSeconds += 1;
+            if (elapsedEl) elapsedEl.innerText = window.hud.formatElapsed(window.hud.elapsedSeconds);
+            window.hud.refreshMeta();
+            window.hud.updateProgress();
+        }, 1000);
     },
     destroy: () => {
+        if (window.hud.elapsedInterval) {
+            clearInterval(window.hud.elapsedInterval);
+            window.hud.elapsedInterval = null;
+        }
+        window.hud.elapsedSeconds = 0;
+        window.hud.timerTotal = 0;
+        window.hud.timerRemaining = null;
+        window.hud.context = null;
         const h = document.getElementById('safepost-hud');
         if (h) h.remove();
     }
@@ -669,11 +932,15 @@ function injectStyles() {
     const s = document.createElement('style');
     s.id = 'hud-css';
     s.textContent = `
-        #safepost-hud { position: fixed; bottom: 20px; right: 20px; width: 280px; background: #1a1a1a; border: 3px solid #28a745; color: white; padding: 15px; border-radius: 10px; z-index: 1000000; direction: rtl; font-family: sans-serif; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
-        #hud-timer { position: absolute; top: 15px; left: 15px; background: #007bff; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 14px; }
-        #hud-title { font-weight: bold; margin-bottom: 5px; color: #007bff; font-size: 16px; margin-left: 50px; }
-        #hud-status { font-size: 13px; opacity: 0.8; }
-        #hud-version { position: absolute; bottom: 5px; left: 5px; font-size: 9px; opacity: 0.3; }
+        #safepost-hud { position: fixed; bottom: 18px; right: 18px; width: 320px; background: linear-gradient(180deg, #1a1a1a 0%, #111 100%); border: 2px solid #28a745; color: white; padding: 14px 14px 12px; border-radius: 14px; z-index: 1000000; direction: rtl; font-family: sans-serif; box-shadow: 0 10px 28px rgba(0,0,0,0.38); backdrop-filter: blur(10px); }
+        #hud-elapsed { position: absolute; top: 12px; left: 12px; background: #28a745; padding: 4px 10px; border-radius: 999px; font-weight: 800; font-size: 12px; font-family: monospace; min-width: 44px; text-align: center; color: white; direction: ltr; box-shadow: 0 0 0 1px rgba(255,255,255,0.1) inset; }
+        #hud-timer { position: absolute; top: 12px; right: 12px; background: #007bff; padding: 4px 10px; border-radius: 999px; font-weight: 800; font-size: 12px; min-width: 44px; text-align: center; }
+        #hud-title { font-weight: 800; margin: 26px 52px 4px; color: #c8dcff; font-size: 14px; line-height: 1.1; }
+        #hud-status { font-size: 12px; opacity: 0.92; margin: 0 0 4px; color: #f3f4f6; }
+        #hud-meta { font-size: 10px; opacity: 0.72; line-height: 1.35; min-height: 14px; margin-bottom: 8px; color: #cbd5e1; }
+        #hud-progress { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; margin-bottom: 8px; }
+        #hud-progress span { display:block; height:100%; width:18%; border-radius:inherit; background: linear-gradient(90deg, #28a745, #63e6be); transition: width .25s ease; }
+        #hud-version { position: absolute; bottom: 8px; left: 12px; font-size: 9px; opacity: 0.32; letter-spacing: 0.12em; }
     `;
     document.head.appendChild(s);
 }

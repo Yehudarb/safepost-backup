@@ -82,7 +82,23 @@ const getJob = async (id) => (await admin.from('posts').select('*').eq('id', id)
     const missed = await q.sweepMissedSchedules({ graceMs: 15 * 60 * 1000 });
     assert('missed schedule handled per policy', missed.handled >= 1 && (await getJob(j5)).status === 'SENT');
 
+    // 7. REGRESSION (2026-08-31): claimNextJob used a PostgREST embed
+    //    (`groups(name, url)`) that needs a posts→groups FK — the very FK
+    //    migration 0008 drops. Every claim failed with PGRST200 and returned
+    //    null, so nothing could ever be published. The worker also needs
+    //    group_url: background.js opens the Facebook tab with it.
+    const gid = `qa-regression-${Date.now()}`;
+    await admin.from('groups').insert({
+        id: gid, name: 'QA Regression Group', url: 'https://facebook.com/groups/qa-regression',
+        workspace_id: wsId, facebook_user: '',
+    });
+    const j6 = await seedJob(wsId, { group_id: gid, facebook_user: '' });
+    const c6 = await q.claimNextJob({ workspaceId: wsId, workerId: worker.id });
+    assert('claim succeeds for a job with a group (no FK embed)', c6 && String(c6.id) === String(j6));
+    assert('claimed job carries group_url for the worker', c6 && c6.group_url === 'https://facebook.com/groups/qa-regression');
+
     // Cleanup.
+    await admin.from('groups').delete().eq('workspace_id', wsId);
     await admin.from('posts').delete().eq('workspace_id', wsId);
     await admin.from('browser_workers').delete().eq('workspace_id', wsId);
     await admin.from('workspaces').delete().eq('id', wsId);

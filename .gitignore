@@ -30,3 +30,16 @@ dist/
 
 # Packaged extension archives
 *.zip
+
+# Snapshot of an older tree taken before the refactor. It embeds real Supabase
+# service keys in several files (verify_supabase.js, src/supabaseClient.js,
+# scripts/emergency_clear_v2.cjs) — never commit it.
+safepost-claude-plan/backups/
+
+# QA evidence: screenshots of real Facebook groups/posts and log trails.
+# Local-only — personal data, and large binaries.
+tests/artifacts/
+
+# Scratch
+.tmp/
+*.repaired

@@ -36,7 +36,11 @@ const assert = (n, c) => { c ? (passed++, console.log(`  ✅ ${n}`)) : (failed++
     if (error) { console.error('Demo sign-in failed:', error.message); process.exit(2); }
 
     const token = data.session.access_token;
-    const { data: mem } = await createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } })
+    // Use the SIGNED-IN client: `workspace_members` is protected by the
+    // p_members_self RLS policy (auth.uid()), so a fresh unauthenticated anon
+    // client reads nothing and every assertion below silently degrades. This
+    // only passed before because migration 0004 (RLS) had not been applied yet.
+    const { data: mem } = await anon
         .from('workspace_members').select('workspace_id, workspaces(is_demo)').eq('user_id', data.user.id).limit(1);
     const wsId = mem?.[0]?.workspace_id;
 

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { supabase, isSupabaseConfigured } from '@/lib/supabaseClient';
+import { supabase, isSupabaseConfigured, isAuthRequired, authConfigError } from '@/lib/supabaseClient';
 import { setActiveWorkspaceId, getActiveWorkspaceId } from '@/lib/session';
 
 const AuthContext = createContext(null);
@@ -57,9 +57,12 @@ export function AuthProvider({ children }) {
     const demoPassword = import.meta.env.VITE_DEMO_PASSWORD;
     const demoEnabled = Boolean(demoEmail && demoPassword);
     const isDemoWorkspace = workspaces.some(w => w.id === activeWorkspace && w.isDemo);
+    const missingConfigResult = async () => ({ error: new Error(authConfigError || 'Authentication is not configured.') });
 
     const value = {
         isConfigured: isSupabaseConfigured,
+        isAuthRequired,
+        authConfigError,
         loading,
         session,
         user: session?.user || null,
@@ -68,13 +71,13 @@ export function AuthProvider({ children }) {
         selectWorkspace,
         demoEnabled,
         isDemoWorkspace,
-        signInDemo: () => supabase.auth.signInWithPassword({ email: demoEmail, password: demoPassword }),
-        signIn: (email, password) => supabase.auth.signInWithPassword({ email, password }),
+        signInDemo: () => supabase ? supabase.auth.signInWithPassword({ email: demoEmail, password: demoPassword }) : missingConfigResult(),
+        signIn: (email, password) => supabase ? supabase.auth.signInWithPassword({ email, password }) : missingConfigResult(),
         signUp: (email, password, fullName) =>
-            supabase.auth.signUp({ email, password, options: { data: { full_name: fullName } } }),
-        signOut: () => supabase.auth.signOut(),
+            supabase ? supabase.auth.signUp({ email, password, options: { data: { full_name: fullName } } }) : missingConfigResult(),
+        signOut: () => supabase ? supabase.auth.signOut() : Promise.resolve(),
         resetPassword: (email) =>
-            supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin }),
+            supabase ? supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin }) : missingConfigResult(),
     };
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

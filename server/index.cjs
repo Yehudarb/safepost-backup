@@ -360,6 +360,12 @@ const {
     scopeToWorkspace,
     workspaceFields,
 } = require('./middleware/auth.cjs');
+const {
+    AUTH_ENFORCED,
+    WORKER_AUTH_ENFORCED,
+    isSecureRuntime,
+    assertSecureRuntimeConfig,
+} = require('./lib/runtimeMode.cjs');
 const { resetDemoWorkspace } = require('./demo/seed.cjs');
 const {
     generateDeviceToken,
@@ -377,6 +383,7 @@ const {
 } = require('./lib/queue.cjs');
 // Convenience: dashboard routes require auth + a resolved workspace.
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
+assertSecureRuntimeConfig();
 io.use(async (socket, next) => {
     try {
         const token = socket.handshake.auth?.token || null;
@@ -396,8 +403,11 @@ io.use(async (socket, next) => {
                 }
             }
         }
+        if (AUTH_ENFORCED && isSecureRuntime && !socket.data.userId) {
+            return next(new Error('Authentication required.'));
+        }
     } catch (e) {
-        // Stay permissive during transition.
+        if (AUTH_ENFORCED && isSecureRuntime) return next(new Error('Authentication required.'));
     }
     next();
 });
@@ -507,7 +517,15 @@ app.use((req, res, next) => {
         res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS,HEAD');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-requested-with,x-workspace-id');
+    // This manual block answers OPTIONS itself (res.end below), so the cors()
+    // package further down NEVER sees a preflight — this list is the effective
+    // one and must stay in sync with it. The extension's content script calls the
+    // API from origin https://www.facebook.com with x-device-token/x-worker-id,
+    // which were missing here: every /api/profile/sync from content.js failed
+    // preflight with "Request header field x-device-token is not allowed by
+    // Access-Control-Allow-Headers". Background service-worker fetches bypass CORS
+    // via host_permissions, which is why /api/groups/sync worked and this did not.
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,x-requested-with,x-workspace-id,x-device-token,x-worker-id,x-extension-key');
     res.setHeader('Access-Control-Max-Age', '86400');
 
     if (req.method === 'OPTIONS') {
@@ -552,7 +570,17 @@ app.use(cors({
     },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with'],
+    // Every custom header the app actually reads must be listed, or the browser
+    // fails the preflight and the request never reaches Express. The extension's
+    // CONTENT SCRIPT calls the API from origin https://www.facebook.com and sends
+    // x-device-token/x-worker-id (see syncDetectedFacebookUser → /api/profile/sync),
+    // which was rejected with "Request header field x-device-token is not allowed
+    // by Access-Control-Allow-Headers". Background service-worker fetches are not
+    // affected — host_permissions exempt them — so this only ever broke the
+    // content-script leg. x-workspace-id is the same class of bug for the
+    // dashboard whenever it is not same-origin (i.e. deployed, talking to Render).
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-requested-with',
+        'x-device-token', 'x-worker-id', 'x-extension-key', 'x-workspace-id'],
     optionsSuccessStatus: 200
 }));
 
@@ -588,6 +616,25 @@ app.get('/api/debug/state', requireAuth, requireWorkspaceAccess, (req, res) => {
 // extension, which is the only kind that exists while the deployment is
 // single-tenant. See broadcastSSE for what that means for delivery.
 const sseClients = new Set();
+
+function emitWorkspaceEvent(workspaceId, event, payload = {}) {
+    if (workspaceId) {
+        io.to(`ws:${workspaceId}`).emit(event, payload);
+        return;
+    }
+    if (!isSecureRuntime) {
+        io.emit(event, payload);
+    }
+}
+
+function emitWorkspaceRefresh(workspaceId, { queue = false, data = false } = {}) {
+    if (queue) emitWorkspaceEvent(workspaceId, 'queue_updated');
+    if (data) emitWorkspaceEvent(workspaceId, 'data_updated');
+}
+
+function emitWorkspaceStatus(workspaceId, payload) {
+    emitWorkspaceEvent(workspaceId, 'status_update', payload);
+}
 
 app.get('/api/stream/jobs', optionalWorker, (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -644,7 +691,7 @@ app.get('/api/stream/jobs', optionalWorker, (req, res) => {
 //     behaviour; once enforcement is on, an unpaired client cannot receive
 //     workspace-scoped events at all, because it has no proven tenant.
 function broadcastSSE(data, workspaceId = null) {
-    const enforced = process.env.WORKER_AUTH_ENFORCED === 'true';
+    const enforced = WORKER_AUTH_ENFORCED;
     sseClients.forEach(client => {
         if (workspaceId) {
             if (client.workspaceId) {
@@ -686,7 +733,12 @@ async function updateTaskStatus(taskId, status, message = null, metadata = null)
         }
 
         // 2. Broadcast to dashboard
-        io.emit('status_update', { taskId, status, message, metadata });
+        let workspaceId = metadata?.workspaceId || null;
+        if (!workspaceId && taskId !== 'DEBUG' && status !== 'LOG') {
+            const { data: taskRow } = await supabase.from('posts').select('workspace_id').eq('id', taskId).maybeSingle();
+            workspaceId = taskRow?.workspace_id || null;
+        }
+        emitWorkspaceStatus(workspaceId, { taskId, status, message, metadata });
         return true;
     } catch (e) {
         console.error("Update Status Error:", e.message);
@@ -698,7 +750,7 @@ async function updateTaskStatus(taskId, status, message = null, metadata = null)
 
 // The detected Facebook identity is per tenant — see tenantState. Sharing one
 // value meant whichever account synced last was reported to everyone.
-app.get('/api/profile/current', optionalWorker, (req, res) => {
+app.get('/api/profile/current', ...dashboardAuth, (req, res) => {
     const state = tenantState(req.workspaceId);
     console.log(`📋 [PROFILE] GET /api/profile/current → returning: "${state.lastFacebookUser || '(none)'}"`);
     res.json({
@@ -1024,8 +1076,8 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
         if (staleDeleteError) console.warn('Delete stale groups warning:', staleDeleteError.message);
     }
 
-    io.emit('groups_updated');
-    io.emit('data_updated');
+    emitWorkspaceEvent(workspaceId, 'groups_updated');
+    emitWorkspaceRefresh(workspaceId, { data: true });
     console.log(`[GROUPS] Sync complete: upserted ${dedupedGroups.length} groups`);
     res.json({
         success: true,
@@ -1075,8 +1127,7 @@ app.post('/api/demo/reset', ...dashboardAuth, async (req, res) => {
     if (!req.isDemo) return res.status(403).json({ error: 'Reset is only available in demo mode.' });
     try {
         await resetDemoWorkspace(req.workspaceId, req.user.id);
-        io.emit('queue_updated');
-        io.emit('data_updated');
+        emitWorkspaceRefresh(req.workspaceId, { queue: true, data: true });
         res.json({ success: true, message: 'Demo data reset.' });
     } catch (e) {
         console.error('[DEMO] reset error:', e.message);
@@ -1087,7 +1138,11 @@ app.post('/api/demo/reset', ...dashboardAuth, async (req, res) => {
 // ===================== PHASE 5: EXTENSION PAIRING / WORKERS =====================
 
 // Dashboard: generate a short-lived, single-use pairing code
-app.post('/api/workers/pairing-code', ...dashboardAuth, async (req, res) => {
+// denyDemo: a pairing code is a bearer credential that lets a real browser
+// extension join this workspace and claim its jobs. Demo workspaces must never
+// hand one out — every other real-effect route (upload, worker stop/resume) is
+// already guarded, this one was missed when Phase 5 was added.
+app.post('/api/workers/pairing-code', ...dashboardAuth, denyDemo, async (req, res) => {
     const code = generatePairingCode();
     const expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min
     const { error } = await supabase.from('pairing_codes').insert({
@@ -1163,9 +1218,18 @@ app.post('/api/workers/:workerId/jobs/claim', requireWorker, async (req, res) =>
 // Worker: report job status (retry/backoff + idempotency; workspace-scoped).
 app.post('/api/workers/:workerId/jobs/:jobId/status', requireWorker, async (req, res) => {
     const { status, failure_reason, proof_url, error_code } = req.body || {};
+    // content.js's findPostPermalink() falls back to the GROUP url when it cannot
+    // locate the new post's permalink, so `proof_url` is not always a post URL.
+    // external_post_url must only ever hold a real permalink — reportJobStatus
+    // treats a present external_post_url as proof the job already published and
+    // short-circuits as idempotent, so a group URL there would make any later
+    // report for that job a no-op. The unverified value is still kept in proof_url.
+    const isPermalink = typeof proof_url === 'string' && /\/(permalink|posts)\//.test(proof_url);
     const result = await reportJobStatus({
         jobId: req.params.jobId, workspaceId: req.workspaceId,
-        status, errorCode: error_code, failureReason: failure_reason, externalUrl: proof_url,
+        status, errorCode: error_code, failureReason: failure_reason,
+        externalUrl: isPermalink ? proof_url : null,
+        proofUrl: proof_url || null,
     });
     if (!result.ok) return res.status(result.code || 400).json({ error: 'Status update rejected.' });
     await supabase.from('browser_workers').update({ current_job_id: null, status: 'online', last_seen_at: new Date().toISOString() }).eq('id', req.worker.id);
@@ -1221,7 +1285,7 @@ app.delete('/api/workers/:workerId', ...dashboardAuth, async (req, res) => {
 app.post('/api/groups/sync-failed', optionalWorker, (req, res) => {
     const { error } = req.body;
     console.warn(`⚠️ Group sync failed: ${error}`);
-    io.emit('groups_sync_failed', { error });
+    emitWorkspaceEvent(req.workspaceId || null, 'groups_sync_failed', { error });
     res.json({ success: true });
 });
 
@@ -1797,13 +1861,16 @@ app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res)
     if (nextScheduleTime < new Date()) nextScheduleTime = new Date();
 
     try {
-        const { data: lastTasks } = await supabase
-            .from('posts')
-            .select('scheduled_time')
-            .eq('app_source', 'backup')
-            .in('status', ['PENDING', 'SENT', 'PROCESSING'])
-            .order('scheduled_time', { ascending: false })
-            .limit(1);
+        const { data: lastTasks } = await scopeToWorkspace(
+            supabase
+                .from('posts')
+                .select('scheduled_time')
+                .eq('app_source', 'backup')
+                .in('status', ['PENDING', 'SENT', 'PROCESSING'])
+                .order('scheduled_time', { ascending: false })
+                .limit(1),
+            req
+        );
 
         if (lastTasks && lastTasks.length > 0) {
             const lastTime = new Date(lastTasks[0].scheduled_time);
@@ -1934,7 +2001,7 @@ app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res)
 
     console.log(`✅ [POSTS] Successfully created ${tasks.length} tasks`);
     res.json({ success: true, count: group_ids.length, mediaCount: mediaPaths ? mediaPaths.length : 0 });
-    io.emit('queue_updated');
+    emitWorkspaceRefresh(req.workspaceId, { queue: true });
 });
 
 // --- 2. WORKER ACKNOWLEDGEMENT ---
@@ -2000,7 +2067,7 @@ async function dispatchTask(nextTask) {
         message: `📡 Dispatched Task #${nextTask.id} to group: ${group?.url || nextTask.group_id}`
     }]);
 
-    io.emit('queue_updated');
+    emitWorkspaceRefresh(nextTask.workspace_id, { queue: true });
 }
 
 // Dispatch runs PER TENANT.
@@ -2182,7 +2249,7 @@ setInterval(async () => {
         // (e.g. server restarted while task was mid-flight and startup populate failed)
         const { data: dbStuck } = await supabase
             .from('posts')
-            .select('id, created_at, attempt_count, group_id')
+            .select('id, created_at, attempt_count, group_id, workspace_id')
             .in('status', ['PROCESSING', 'SENT'])
             .eq('app_source', 'backup');
         if (!dbStuck) return;
@@ -2211,9 +2278,24 @@ setInterval(async () => {
         const MODERATION_COOLDOWN_MS = 48 * 60 * 60 * 1000; // 48h
         const MODERATION_RESUME_CAP = 2;
         const modCutoff = new Date(now - MODERATION_COOLDOWN_MS).toISOString();
+        // RESUME ONLY WHAT WAS PROVABLY NEVER SUBMITTED.
+        //
+        // The comment above was written when the pre-flight check was the ONLY way a
+        // post reached moderation-CANCELLED, and there nothing had been sent — so
+        // re-queueing was harmless. content.js now also reports CANCELLED with the
+        // same 'ממתין לאישור מנהל' marker for a post that WAS submitted and is
+        // waiting in the group's approval queue. Resuming that one republishes
+        // content a moderator may already have approved: a duplicate Facebook post.
+        //
+        // The two cases are told apart by error_code, not by the reason prose.
+        // Selecting positively on MODERATION_BLOCKED_NOT_SENT also makes the default
+        // safe: anything unmarked (legacy rows, or a report that came through the
+        // legacy PATCH route, which does not persist error_code) is left CANCELLED
+        // for a human rather than republished on a guess.
         const { data: modCancelled } = await supabase
-            .from('posts').select('id, group_id, attempt_count')
+            .from('posts').select('id, group_id, attempt_count, workspace_id')
             .eq('status', 'CANCELLED').eq('app_source', 'backup')
+            .eq('error_code', 'MODERATION_BLOCKED_NOT_SENT')
             .like('failure_reason', '%ממתין לאישור מנהל%')
             .not('ended_at', 'is', null).lte('ended_at', modCutoff);
 
@@ -2224,13 +2306,18 @@ setInterval(async () => {
             await supabase.from('posts').update({
                 status: 'PENDING', attempt_count: attempts + 1,
                 scheduled_time: new Date(now).toISOString(),
-                failure_reason: null
+                // Clear the moderation marker too: the row is an ordinary queued job
+                // again, and a stale code would misreport this attempt's outcome.
+                failure_reason: null, error_code: null
             }).eq('id', p.id).eq('status', 'CANCELLED');
             resumedAny = true;
             console.log(`[Heartbeat] Task ${p.id} (group ${p.group_id}) auto-resumed after 48h moderation cooldown (attempt ${attempts + 1}/${MODERATION_RESUME_CAP}).`);
             logEvent(p.id, 'PENDING', `Auto-resumed after 48h moderation cooldown (attempt ${attempts + 1}/${MODERATION_RESUME_CAP})`, { group_id: p.group_id, reset_by: 'moderation_resume_sweep' });
         }
-        if (resumedAny) { io.emit('queue_updated'); io.emit('data_updated'); }
+        if (resumedAny) {
+            const workspaceIds = [...new Set((modCancelled || []).map(p => p.workspace_id).filter(Boolean))];
+            workspaceIds.forEach(workspaceId => emitWorkspaceRefresh(workspaceId, { queue: true, data: true }));
+        }
 
         if (staleTasks.length === 0) return;
 
@@ -2259,20 +2346,44 @@ setInterval(async () => {
                 logEvent(t.id, 'STUCK', 'Heartbeat auto-reset stuck task to PENDING', { reset_by: 'heartbeat', attempts });
             }
         }
-        io.emit('queue_updated');
-        io.emit('data_updated');
+        const staleWorkspaceIds = [...new Set(staleTasks.map(t => t.workspace_id).filter(Boolean))];
+        staleWorkspaceIds.forEach(workspaceId => emitWorkspaceRefresh(workspaceId, { queue: true, data: true }));
     } catch (e) {
         console.error('[Heartbeat] Unexpected error:', e);
     }
 }, 60000);
 
 // --- SYSTEM STATUS ---
-app.get('/api/system/status', requireAuth, requireWorkspaceAccess, (req, res) => {
+app.get('/api/system/status', requireAuth, requireWorkspaceAccess, async (req, res) => {
     const now = new Date();
     // Worker presence is per tenant: without this the dashboard reported
     // whichever extension checked in last, no matter whose it was.
     const state = tenantState(req.workspaceId);
-    const checkinAge = state.lastWorkerCheckin ? (now - new Date(state.lastWorkerCheckin)) / 1000 : null;
+
+    // A PAIRED extension heartbeats to /api/workers/:id/heartbeat, which writes to
+    // browser_workers — it never touches this in-memory state, which only the
+    // legacy /api/worker/heartbeat fills. Reading the memory alone therefore
+    // reported a paired (and perfectly healthy) worker as OFFLINE with version
+    // UNKNOWN forever. Take whichever source checked in more recently, so paired
+    // and unpaired installs both report correctly.
+    let dbWorker = null;
+    if (req.workspaceId) {
+        const { data } = await supabase.from('browser_workers')
+            .select('last_seen_at, extension_version, browser_version, status')
+            .eq('workspace_id', req.workspaceId).is('revoked_at', null)
+            .order('last_seen_at', { ascending: false, nullsFirst: false }).limit(1);
+        dbWorker = (data && data[0]) || null;
+    }
+
+    const memAt = state.lastWorkerCheckin ? new Date(state.lastWorkerCheckin) : null;
+    const dbAt = dbWorker && dbWorker.last_seen_at ? new Date(dbWorker.last_seen_at) : null;
+    const dbIsFresher = dbAt && (!memAt || dbAt > memAt);
+    const lastCheckin = dbIsFresher ? dbAt.toISOString() : state.lastWorkerCheckin;
+    const version = (dbIsFresher && dbWorker.extension_version)
+        ? dbWorker.extension_version
+        : state.lastWorkerVersion;
+
+    const checkinAge = lastCheckin ? (now - new Date(lastCheckin)) / 1000 : null;
     // Extension heartbeats fire on a chrome.alarms 1-minute period (MV3's minimum
     // resolution, and its actual firing time can drift/lag when the service worker
     // was suspended). A 60s window flaps to OFFLINE between ticks; 90s gives slack.
@@ -2281,8 +2392,8 @@ app.get('/api/system/status', requireAuth, requireWorkspaceAccess, (req, res) =>
     res.json({
         worker_status: workerActive ? 'ACTIVE' : 'OFFLINE',
         worker_message: workerActive ? 'Worker is active' : 'No recent worker check-in',
-        last_worker_checkin: state.lastWorkerCheckin,
-        worker_version: state.lastWorkerVersion,
+        last_worker_checkin: lastCheckin,
+        worker_version: version,
         worker_origin: state.lastWorkerOrigin,
         worker_extension_id: state.lastWorkerExtensionId,
         worker_stopped: state.workerStopSignal,
@@ -2305,7 +2416,7 @@ app.get('/api/system/status', requireAuth, requireWorkspaceAccess, (req, res) =>
 // someone hunting through the queue instead of the env vars.
 function refuseIfUnscoped(req, res) {
     if (req.workspaceId) return false;
-    if (process.env.WORKER_AUTH_ENFORCED !== 'true') return false;
+    if (!WORKER_AUTH_ENFORCED) return false;
     console.warn('[jobs] refused an unscoped job request — pair the extension, or set EXTENSION_KEY_WORKSPACE_ID');
     res.status(409).json({
         error: 'This extension is not bound to a workspace. Pair it from the dashboard, or set EXTENSION_KEY_WORKSPACE_ID on the server.',
@@ -2435,7 +2546,7 @@ app.post('/api/tasks/update-status', optionalWorker, validate(updateStatusSchema
 
     // First, fetch the task to get group_id. Scoped to the caller's workspace
     // when paired, so one tenant's worker cannot report on another's task.
-    let taskLookup = supabase.from('posts').select('group_id').eq('id', numericId);
+    let taskLookup = supabase.from('posts').select('group_id, workspace_id').eq('id', numericId);
     if (req.workspaceId) taskLookup = taskLookup.eq('workspace_id', req.workspaceId);
     const { data: taskData } = await taskLookup.maybeSingle();
 
@@ -2464,9 +2575,9 @@ app.post('/api/tasks/update-status', optionalWorker, validate(updateStatusSchema
     }
 
     // Emit with group_id for real-time dashboard update
-    io.emit('status_update', { taskId: numericId, status, group_id: taskData?.group_id });
+    emitWorkspaceStatus(req.workspaceId || taskData?.workspace_id || null, { taskId: numericId, status, group_id: taskData?.group_id });
     // Delayed queue_updated to let status_update settle in frontend first
-    setTimeout(() => io.emit('queue_updated'), 500);
+    setTimeout(() => emitWorkspaceRefresh(req.workspaceId || taskData?.workspace_id || null, { queue: true }), 500);
     res.json({ success: true });
 });
 
@@ -2498,7 +2609,7 @@ app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), 
 
     // Fetch task data including group_id before updating. Scoped to the
     // caller's workspace when paired — see /api/tasks/update-status above.
-    let taskLookup = supabase.from('posts').select('group_id').eq('id', id);
+    let taskLookup = supabase.from('posts').select('group_id, workspace_id').eq('id', id);
     if (req.workspaceId) taskLookup = taskLookup.eq('workspace_id', req.workspaceId);
     const { data: taskData } = await taskLookup.maybeSingle();
 
@@ -2548,8 +2659,8 @@ app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), 
     }
 
     // Emit with group_id for real-time dashboard update
-    io.emit('status_update', { taskId: parseInt(id) || id, status, group_id: taskData?.group_id });
-    io.emit('queue_updated');
+    emitWorkspaceStatus(req.workspaceId || taskData?.workspace_id || null, { taskId: parseInt(id) || id, status, group_id: taskData?.group_id });
+    emitWorkspaceRefresh(req.workspaceId || taskData?.workspace_id || null, { queue: true });
     res.json({ success: true });
 
     // Kick the dispatcher immediately when the worker just finished a task —
@@ -2629,7 +2740,7 @@ app.post('/api/tasks/:id/cancel', ...dashboardAuth, async (req, res) => {
         .in('status', ['PENDING']), req);
     if (error) return res.status(500).json({ error: error.message });
     logEvent(id, 'CANCELLED', 'Task manually cancelled', { reason: 'ביטול ידני' });
-    io.emit('queue_updated');
+    emitWorkspaceRefresh(req.workspaceId, { queue: true });
     res.json({ success: true });
 });
 
@@ -2641,7 +2752,7 @@ app.post('/api/tasks/cancel-all-pending', ...dashboardAuth, async (req, res) => 
         .eq('status', 'PENDING')
         .eq('app_source', 'backup'), req);
     if (error) return res.status(500).json({ error: error.message });
-    io.emit('queue_updated');
+    emitWorkspaceRefresh(req.workspaceId, { queue: true });
     res.json({ success: true });
 });
 
@@ -2652,7 +2763,7 @@ app.post('/api/tasks/bulk-delete', ...dashboardAuth, async (req, res) => {
         return res.status(400).json({ error: 'Missing ids' });
     const { error } = await scopeToWorkspace(supabase.from('posts').delete().in('id', ids), req);
     if (error) return res.status(500).json({ error: error.message });
-    io.emit('queue_updated');
+    emitWorkspaceRefresh(req.workspaceId, { queue: true });
     res.json({ success: true });
 });
 
@@ -2665,7 +2776,7 @@ app.patch('/api/tasks/:id', ...dashboardAuth, async (req, res) => {
     delete updates.created_by;
     const { error } = await scopeToWorkspace(supabase.from('posts').update(updates).eq('id', id), req);
     if (error) return res.status(500).json({ error: error.message });
-    io.emit('queue_updated');
+    emitWorkspaceRefresh(req.workspaceId, { queue: true });
     res.json({ success: true });
 });
 
@@ -2674,7 +2785,7 @@ app.delete('/api/tasks/:id', ...dashboardAuth, async (req, res) => {
     const { id } = req.params;
     const { error } = await scopeToWorkspace(supabase.from('posts').delete().eq('id', id), req);
     if (error) return res.status(500).json({ error: error.message });
-    io.emit('queue_updated');
+    emitWorkspaceRefresh(req.workspaceId, { queue: true });
     res.json({ success: true });
 });
 
@@ -2686,7 +2797,7 @@ app.post('/api/worker/stop', ...dashboardAuth, denyDemo, (req, res) => {
     state.workerStopSignal = true;
     state.workerStopUntil  = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h safety
     broadcastSSE({ type: 'stop_worker' }, req.workspaceId || null);
-    io.emit('worker_stop_signal');
+    emitWorkspaceEvent(req.workspaceId, 'worker_stop_signal');
     console.log('🛑 Worker stop signal sent');
     res.json({ success: true });
 });
@@ -2695,7 +2806,7 @@ app.post('/api/worker/resume', ...dashboardAuth, denyDemo, (req, res) => {
     const state = tenantState(req.workspaceId);
     state.workerStopSignal = false;
     state.workerStopUntil  = null;
-    io.emit('worker_resumed');
+    emitWorkspaceEvent(req.workspaceId, 'worker_resumed');
     console.log('▶️ Worker resumed');
     res.json({ success: true });
 });
@@ -2759,8 +2870,7 @@ app.post('/api/tasks/reset-stuck', ...dashboardAuth, async (req, res) => {
             logEvent(id, 'STUCK', 'Manually reset from stuck state', { reset_by: 'manual' });
         });
 
-        io.emit('queue_updated');
-        io.emit('data_updated');
+        emitWorkspaceRefresh(req.workspaceId, { queue: true, data: true });
 
         console.log(`[ManualReset] Reset ${toReset.length} stuck task(s): ${toReset.join(', ')}`);
         res.json({ success: true, message: `Reset ${toReset.length} stuck task(s)`, reset_count: toReset.length, task_ids: toReset });

@@ -424,15 +424,73 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    if (request.action === "SCAN_AND_SYNC_GROUPS") {
+        console.log("[Background] SCAN_AND_SYNC_GROUPS received from content");
+        scanAndSyncGroups()
+            .then((result) => sendResponse(result))
+            .catch((err) => sendResponse({ success: false, error: err.toString() }));
+        return true;
+    }
+
     if (request.action === "REPORT_STATUS") {
         // async IIFE for the same reason as SYNC_GROUPS above.
         (async () => {
+            const payload = request.payload || {};
+            let headers = { 'Content-Type': 'application/json' };
+            const legacyReport = () => fetch(`${BASE_URL}/api/tasks/${payload.taskId}/status`, {
+                method: 'PATCH',
+                headers,
+                body: JSON.stringify(payload),
+            });
             try {
-                await fetch(`${BASE_URL}/api/tasks/${request.payload.taskId}/status`, {
-                    method: 'PATCH',
-                    headers: await authedHeaders({ 'Content-Type': 'application/json' }),
-                    body: JSON.stringify(request.payload)
-                });
+                headers = await authedHeaders({ 'Content-Type': 'application/json' });
+
+                // A job claimed through the hardened worker queue must be COMPLETED
+                // through it too. The legacy PATCH only writes `status`, so reporting
+                // there left every finished job with its lock and worker still
+                // attached (ended_at null, lock_expires_at set, worker_id set,
+                // browser_workers.current_job_id stuck) and — far worse — bypassed
+                // reportJobStatus()'s error classification, so the Phase 6
+                // retry/backoff/NEEDS_USER_ACTION logic never ran for real failures.
+                //
+                // Only genuine terminal reports for a real job id go the hardened
+                // route. logRemote() reuses this same message with status 'LOG' and
+                // taskId 'DEBUG'; those are not job state and must stay on the legacy
+                // route, which is what records them in system_logs.
+                const pairing = await getPairing();
+                const isRealJob = payload.taskId != null && /^\d+$/.test(String(payload.taskId));
+                const isJobState = payload.status && payload.status !== 'LOG';
+
+                if (pairing && isRealJob && isJobState) {
+                    const res = await fetch(
+                        `${BASE_URL}/api/workers/${pairing.workerId}/jobs/${payload.taskId}/status`,
+                        {
+                            method: 'POST',
+                            headers,
+                            body: JSON.stringify({
+                                status: payload.status,
+                                failure_reason: payload.failure_reason || null,
+                                error_code: payload.error_code || null,
+                                proof_url: payload.proof_url || null,
+                            }),
+                        }
+                    );
+                    if (res.ok) return;
+                    // A 4xx is a real rejection (bad auth, wrong workspace, unknown
+                    // job) — surface it rather than laundering it through the legacy
+                    // route, which would silently re-open the bypass this fixes.
+                    if (res.status >= 400 && res.status < 500) {
+                        console.error(`[Worker] status rejected: HTTP ${res.status}`);
+                        return;
+                    }
+                    // 5xx only: fall through. Never losing a terminal report matters
+                    // more than the route it took — an unreported SUCCESS is swept
+                    // back into the queue by sweepExpiredLocks and would publish the
+                    // same post to Facebook a second time.
+                    console.warn(`[Worker] status HTTP ${res.status}; falling back to legacy route`);
+                }
+
+                await legacyReport();
             } catch (err) {
                 console.error("Status Network Error:", err);
             } finally {
