@@ -381,6 +381,10 @@ const {
     sweepExpiredLocks,
     sweepMissedSchedules,
 } = require('./lib/queue.cjs');
+const {
+    createTenantEventLog,
+    selectWorkspaceEventLogs,
+} = require('./lib/logIsolation.cjs');
 // Convenience: dashboard routes require auth + a resolved workspace.
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
 assertSecureRuntimeConfig();
@@ -707,6 +711,11 @@ function broadcastSSE(data, workspaceId = null) {
 // --- HELPER: Transactional Status Update ---
 async function updateTaskStatus(taskId, status, message = null, metadata = null) {
     console.log(`[StatusUpdate] Task ${taskId}: ${status} - ${message || ''}`);
+    let workspaceId = null;
+    if (taskId !== 'DEBUG' && status !== 'LOG') {
+        const { data: taskRow } = await supabase.from('posts').select('workspace_id').eq('id', taskId).maybeSingle();
+        workspaceId = taskRow?.workspace_id || null;
+    }
     // Track processing start/end for heartbeat
     if (status === 'PROCESSING') {
         if (!processingStartTimestamps.has(taskId)) {
@@ -716,7 +725,7 @@ async function updateTaskStatus(taskId, status, message = null, metadata = null)
         processingStartTimestamps.delete(taskId);
         sentTaskTimestamps.delete(taskId);
         if (status === 'CANCELLED') {
-            logEvent(taskId, 'CANCELLED', `Task cancelled`, { failure_reason: message });
+            logEvent(workspaceId, taskId, 'CANCELLED', `Task cancelled`, { failure_reason: message });
         }
     }
     try {
@@ -733,11 +742,6 @@ async function updateTaskStatus(taskId, status, message = null, metadata = null)
         }
 
         // 2. Broadcast to dashboard
-        let workspaceId = metadata?.workspaceId || null;
-        if (!workspaceId && taskId !== 'DEBUG' && status !== 'LOG') {
-            const { data: taskRow } = await supabase.from('posts').select('workspace_id').eq('id', taskId).maybeSingle();
-            workspaceId = taskRow?.workspace_id || null;
-        }
         emitWorkspaceStatus(workspaceId, { taskId, status, message, metadata });
         return true;
     } catch (e) {
@@ -1750,38 +1754,33 @@ app.get('/api/report/tasks', ...dashboardAuth, async (req, res) => {
 const eventLogs = [];
 const MAX_LOGS = 500; // Keep last 500 events
 
-function logEvent(taskId, type, message, metadata = {}) {
-    const entry = {
-        taskId,
-        type, // 'FAILED', 'STUCK', 'SUCCESS', 'ERROR', etc.
-        message,
-        metadata,
-        timestamp: new Date().toISOString(),
-        age_seconds: 0
-    };
-    eventLogs.unshift(entry);
-    if (eventLogs.length > MAX_LOGS) eventLogs.pop();
-    console.log(`[EVENT] ${type} - Task #${taskId}: ${message}`);
+function logEvent(workspaceId, taskId, type, message, metadata = {}) {
+    try {
+        const entry = createTenantEventLog({ workspaceId, taskId, type, message, metadata });
+        eventLogs.unshift(entry);
+        if (eventLogs.length > MAX_LOGS) eventLogs.pop();
+        console.log(`[EVENT] ${type} - Task #${taskId}: ${message}`);
+        return true;
+    } catch (error) {
+        console.error(`[EVENT] Refused unscoped tenant log for task #${taskId}: ${error.message}`);
+        return false;
+    }
 }
 
-app.get('/api/logs', requireAuth, (req, res) => {
+app.get('/api/logs', ...dashboardAuth, (req, res) => {
+    // This endpoint is always closed, even when the wider development runtime
+    // is intentionally permissive. Logs can contain customer and job data.
+    if (!req.user) return res.status(401).json({ error: 'Authentication required.' });
+    if (!req.workspaceId) return res.status(403).json({ error: 'Workspace access required.' });
+
     const limit = Math.min(parseInt(req.query.limit) || 50, 200);
     const type = req.query.type; // Optional filter by type
-
-    let filtered = eventLogs;
-    if (type) {
-        filtered = filtered.filter(log => log.type === type);
-    }
-
-    const logsWithAge = filtered.map(log => ({
-        ...log,
-        age_seconds: Math.floor((Date.now() - new Date(log.timestamp).getTime()) / 1000)
-    })).slice(0, limit);
+    const selected = selectWorkspaceEventLogs(eventLogs, req.workspaceId, { type, limit });
 
     res.json({
-        total: filtered.length,
-        returned: logsWithAge.length,
-        logs: logsWithAge
+        total: selected.total,
+        returned: selected.logs.length,
+        logs: selected.logs
     });
 });
 
@@ -2123,7 +2122,7 @@ async function runDispatchTick() {
                                 status: 'FAILED', attempt_count: attempts,
                                 failure_reason: `No worker handshake after ${MAX_DISPATCH_RETRIES} attempts (stopped to avoid repeated navigation to the same group)`
                             }).eq('id', active.id);
-                            logEvent(active.id, 'FAILED', 'Retry cap reached — stopped re-dispatching to protect the account from rate limiting', { attempts, group_id: active.group_id });
+                            logEvent(active.workspace_id, active.id, 'FAILED', 'Retry cap reached — stopped re-dispatching to protect the account from rate limiting', { attempts, group_id: active.group_id });
                         } else {
                             const delayMs = dispatchBackoffMs(attempts);
                             console.log(`⏳ [Timeout] Task ${active.id} stuck in SENT for >${SENT_HANDSHAKE_TIMEOUT_MS/1000}s (attempt ${attempts}/${MAX_DISPATCH_RETRIES}). Backing off ${Math.round(delayMs / 1000)}s before retry.`);
@@ -2312,7 +2311,7 @@ setInterval(async () => {
             }).eq('id', p.id).eq('status', 'CANCELLED');
             resumedAny = true;
             console.log(`[Heartbeat] Task ${p.id} (group ${p.group_id}) auto-resumed after 48h moderation cooldown (attempt ${attempts + 1}/${MODERATION_RESUME_CAP}).`);
-            logEvent(p.id, 'PENDING', `Auto-resumed after 48h moderation cooldown (attempt ${attempts + 1}/${MODERATION_RESUME_CAP})`, { group_id: p.group_id, reset_by: 'moderation_resume_sweep' });
+            logEvent(p.workspace_id, p.id, 'PENDING', `Auto-resumed after 48h moderation cooldown (attempt ${attempts + 1}/${MODERATION_RESUME_CAP})`, { group_id: p.group_id, reset_by: 'moderation_resume_sweep' });
         }
         if (resumedAny) {
             const workspaceIds = [...new Set((modCancelled || []).map(p => p.workspace_id).filter(Boolean))];
@@ -2335,7 +2334,7 @@ setInterval(async () => {
                     failure_reason: `Stuck > 4 minutes, ${MAX_DISPATCH_RETRIES} attempts exhausted (stopped to avoid repeated navigation to the same group)`
                 }).in('id', [t.id]).in('status', ['PROCESSING', 'SENT']);
                 console.log(`🛑 [Heartbeat Retry Cap] Task ${t.id} (group ${t.group_id}) exceeded ${MAX_DISPATCH_RETRIES} attempts — marked FAILED.`);
-                logEvent(t.id, 'FAILED', 'Retry cap reached via heartbeat — stopped re-dispatching to protect the account from rate limiting', { attempts, group_id: t.group_id, reset_by: 'heartbeat' });
+                logEvent(t.workspace_id, t.id, 'FAILED', 'Retry cap reached via heartbeat — stopped re-dispatching to protect the account from rate limiting', { attempts, group_id: t.group_id, reset_by: 'heartbeat' });
             } else {
                 const delayMs = dispatchBackoffMs(attempts);
                 await supabase.from('posts').update({
@@ -2343,7 +2342,7 @@ setInterval(async () => {
                     scheduled_time: new Date(now + delayMs).toISOString()
                 }).in('id', [t.id]).in('status', ['PROCESSING', 'SENT']);
                 console.log(`[Heartbeat] Task ${t.id} stale, attempt ${attempts}/${MAX_DISPATCH_RETRIES}, backing off ${Math.round(delayMs / 1000)}s.`);
-                logEvent(t.id, 'STUCK', 'Heartbeat auto-reset stuck task to PENDING', { reset_by: 'heartbeat', attempts });
+                logEvent(t.workspace_id, t.id, 'STUCK', 'Heartbeat auto-reset stuck task to PENDING', { reset_by: 'heartbeat', attempts });
             }
         }
         const staleWorkspaceIds = [...new Set(staleTasks.map(t => t.workspace_id).filter(Boolean))];
@@ -2566,7 +2565,7 @@ app.post('/api/tasks/update-status', optionalWorker, validate(updateStatusSchema
 
     if (status === 'FAILED') {
         await supabase.from('system_logs').insert([{ log_level: 'error', source: 'extension_worker', message: `Task #${numericId} FAILED: ${failure_reason || 'Unknown error'}` }]);
-        logEvent(numericId, 'FAILED', failure_reason || 'Task failed with unknown error', { source: 'extension_worker' });
+        logEvent(req.workspaceId || taskData?.workspace_id, numericId, 'FAILED', failure_reason || 'Task failed with unknown error', { source: 'extension_worker' });
     }
 
     if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(status)) {
@@ -2639,7 +2638,7 @@ app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), 
             source: 'extension_worker',
             message: `Task #${id} FAILED: ${failReason || 'Unknown error'}`
         }]);
-        logEvent(id, 'FAILED', failReason || 'Task failed with unknown error', { source: 'extension_worker' });
+        logEvent(req.workspaceId || taskData?.workspace_id, id, 'FAILED', failReason || 'Task failed with unknown error', { source: 'extension_worker' });
     }
 
     // Task Cancellation LOG
@@ -2649,7 +2648,7 @@ app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), 
             source: 'extension_worker',
             message: `Task #${id} CANCELLED: ${failReason || 'Manual cancellation'}`
         }]);
-        logEvent(id, 'CANCELLED', failReason || 'Task cancelled', { source: 'extension_worker', reason: failReason });
+        logEvent(req.workspaceId || taskData?.workspace_id, id, 'CANCELLED', failReason || 'Task cancelled', { source: 'extension_worker', reason: failReason });
     }
 
     // Clear from tracking maps on end states
@@ -2739,7 +2738,7 @@ app.post('/api/tasks/:id/cancel', ...dashboardAuth, async (req, res) => {
         .eq('id', id)
         .in('status', ['PENDING']), req);
     if (error) return res.status(500).json({ error: error.message });
-    logEvent(id, 'CANCELLED', 'Task manually cancelled', { reason: 'ביטול ידני' });
+    logEvent(req.workspaceId, id, 'CANCELLED', 'Task manually cancelled', { reason: 'ביטול ידני' });
     emitWorkspaceRefresh(req.workspaceId, { queue: true });
     res.json({ success: true });
 });
@@ -2867,7 +2866,7 @@ app.post('/api/tasks/reset-stuck', ...dashboardAuth, async (req, res) => {
         toReset.forEach(id => {
             processingStartTimestamps.delete(id);
             sentTaskTimestamps.delete(id);
-            logEvent(id, 'STUCK', 'Manually reset from stuck state', { reset_by: 'manual' });
+            logEvent(req.workspaceId, id, 'STUCK', 'Manually reset from stuck state', { reset_by: 'manual' });
         });
 
         emitWorkspaceRefresh(req.workspaceId, { queue: true, data: true });
@@ -2916,7 +2915,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     try {
         const { data } = await supabase
             .from('posts')
-            .select('id, created_at, status')
+            .select('id, created_at, status, workspace_id')
             .in('status', ['PROCESSING', 'SENT'])
             .eq('app_source', 'backup');
         if (data && data.length > 0) {
@@ -2937,7 +2936,7 @@ server.listen(PORT, '0.0.0.0', async () => {
 
                 // If already stuck >4 mins (based on created_at), mark for immediate reset
                 if (ageMs > FOUR_MINUTES) {
-                    stuckTasks.push({ id: t.id, age: Math.round(ageMs / 1000) });
+                    stuckTasks.push({ id: t.id, workspaceId: t.workspace_id, age: Math.round(ageMs / 1000) });
                 }
             });
 
@@ -2955,7 +2954,7 @@ server.listen(PORT, '0.0.0.0', async () => {
 
                 // Log stuck task resets
                 stuckTasks.forEach(t => {
-                    logEvent(t.id, 'STUCK', `Task was stuck for ${t.age}s on startup, reset to PENDING`, { age_seconds: t.age });
+                    logEvent(t.workspaceId, t.id, 'STUCK', `Task was stuck for ${t.age}s on startup, reset to PENDING`, { age_seconds: t.age });
                 });
             }
         }
