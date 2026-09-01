@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "SafePost Automation",
-    "version": "9.0",
+    "version": "9.1",
     "description": "Automated Facebook Group Posting (Supabase Storage Sync). Configurable API server via popup settings.",
     "permissions": [
         "activeTab",
@@ -18,14 +18,6 @@
         "https://safepost-backup.onrender.com/*",
         "https://*.supabase.co/*"
     ],
-    "externally_connectable": {
-        "matches": [
-            "http://localhost:5173/*",
-            "http://127.0.0.1:5173/*",
-            "http://localhost:3001/*",
-            "http://127.0.0.1:3001/*"
-        ]
-    },
     "background": {
         "service_worker": "background.js"
     },
