@@ -61,9 +61,62 @@ function selectWorkspaceEventLogs(logs, workspaceId, { type = null, limit = 50, 
     };
 }
 
+function systemLogFields({ log_level = 'info', source = 'server', message = '' } = {}) {
+    return {
+        log_level: typeof log_level === 'string' ? log_level : 'info',
+        source: typeof source === 'string' ? source : 'server',
+        message: typeof message === 'string' ? message : String(message || ''),
+    };
+}
+
+function createTenantSystemLog(workspaceId, fields) {
+    return {
+        ...systemLogFields(fields),
+        workspace_id: requireWorkspaceId(workspaceId),
+    };
+}
+
+function createGlobalSystemLog(fields) {
+    return {
+        ...systemLogFields(fields),
+        workspace_id: null,
+    };
+}
+
+async function persistTenantSystemLog(database, workspaceId, fields, logger = console) {
+    let row;
+    try {
+        row = createTenantSystemLog(workspaceId, fields);
+    } catch (error) {
+        logger.error(`[SYSTEM_LOG] Refused unscoped tenant log: ${error.message}`);
+        return { ok: false, code: error.code, error };
+    }
+
+    const { error } = await database.from('system_logs').insert([row]);
+    if (error) {
+        logger.error(`[SYSTEM_LOG] Insert failed: ${error.message || error}`);
+        return { ok: false, code: 'LOG_INSERT_FAILED', error };
+    }
+    return { ok: true, row };
+}
+
+async function persistGlobalSystemLog(database, fields, logger = console) {
+    const row = createGlobalSystemLog(fields);
+    const { error } = await database.from('system_logs').insert([row]);
+    if (error) {
+        logger.error(`[SYSTEM_LOG] Global insert failed: ${error.message || error}`);
+        return { ok: false, code: 'LOG_INSERT_FAILED', error };
+    }
+    return { ok: true, row };
+}
+
 module.exports = {
     requireWorkspaceId,
     createTenantEventLog,
     createGlobalEventLog,
     selectWorkspaceEventLogs,
+    createTenantSystemLog,
+    createGlobalSystemLog,
+    persistTenantSystemLog,
+    persistGlobalSystemLog,
 };

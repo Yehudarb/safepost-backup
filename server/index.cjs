@@ -384,6 +384,8 @@ const {
 const {
     createTenantEventLog,
     selectWorkspaceEventLogs,
+    persistTenantSystemLog,
+    persistGlobalSystemLog,
 } = require('./lib/logIsolation.cjs');
 // Convenience: dashboard routes require auth + a resolved workspace.
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
@@ -1244,9 +1246,10 @@ app.post('/api/workers/:workerId/jobs/:jobId/status', requireWorker, async (req,
 // Worker: append a log (scoped to the worker's workspace).
 app.post('/api/workers/:workerId/logs', requireWorker, async (req, res) => {
     const { level, message } = req.body || {};
-    await supabase.from('system_logs').insert({
-        log_level: level || 'info', source: 'worker', message: message || '', workspace_id: req.workspaceId,
+    const result = await persistTenantSystemLog(supabase, req.workspaceId, {
+        log_level: level || 'info', source: 'worker', message: message || '',
     });
+    if (!result.ok) return res.status(500).json({ error: 'Worker log could not be persisted.' });
     res.json({ success: true });
 });
 
@@ -2060,11 +2063,11 @@ async function dispatchTask(nextTask) {
 
     await updateTaskStatus(nextTask.id, 'SENT', 'Waiting for worker handshake...');
 
-    await supabase.from('system_logs').insert([{
+    await persistTenantSystemLog(supabase, nextTask.workspace_id, {
         log_level: 'info',
         source: 'server_scheduler',
         message: `📡 Dispatched Task #${nextTask.id} to group: ${group?.url || nextTask.group_id}`
-    }]);
+    });
 
     emitWorkspaceRefresh(nextTask.workspace_id, { queue: true });
 }
@@ -2189,11 +2192,11 @@ async function runDispatchTick() {
     } catch (e) {
         console.error("Queue Poller Error:", e);
         try {
-            await supabase.from('system_logs').insert([{
+            await persistGlobalSystemLog(supabase, {
                 log_level: 'error',
                 source: 'server_scheduler',
                 message: `🔴 Poller Critical Error: ${e.message || e}`
-            }]);
+            });
         } catch (inner) { console.error("Logger failed:", inner); }
     } finally {
         dispatchLockActive = false;
@@ -2525,9 +2528,26 @@ app.post('/api/tasks/update-status', optionalWorker, validate(updateStatusSchema
     const numericId = parseInt(taskId) || taskId;
     console.log(`📝 [POST] /api/tasks/update-status → Task ${numericId}: ${status}`);
 
+    // Resolve tenant identity from the paired worker and/or the stored job. A
+    // workspace value in the request body is intentionally ignored.
+    const isRealTask = /^\d+$/.test(String(numericId));
+    let taskData = null;
+    if (isRealTask) {
+        let taskLookup = supabase.from('posts').select('group_id, workspace_id').eq('id', numericId);
+        if (req.workspaceId) taskLookup = taskLookup.eq('workspace_id', req.workspaceId);
+        ({ data: taskData } = await taskLookup.maybeSingle());
+        if (req.workspaceId && !taskData) {
+            return res.status(404).json({ error: 'Task not found in this workspace.' });
+        }
+    }
+    const logWorkspaceId = req.workspaceId || taskData?.workspace_id || null;
+
     if (status === 'LOG') {
         if (failure_reason) {
-            await supabase.from('system_logs').insert([{ log_level: 'info', source: 'extension_worker', message: `Task #${numericId}: ${failure_reason}` }]);
+            const logged = await persistTenantSystemLog(supabase, logWorkspaceId, {
+                log_level: 'info', source: 'extension_worker', message: `Task #${numericId}: ${failure_reason}`,
+            });
+            if (!logged.ok) return res.status(422).json({ error: 'Tenant log workspace could not be resolved.' });
         }
         return res.json({ success: true, logged: true });
     }
@@ -2543,16 +2563,6 @@ app.post('/api/tasks/update-status', optionalWorker, validate(updateStatusSchema
     if (failure_reason) update.failure_reason = failure_reason;
     if (proof_url) update.proof_url = proof_url;
 
-    // First, fetch the task to get group_id. Scoped to the caller's workspace
-    // when paired, so one tenant's worker cannot report on another's task.
-    let taskLookup = supabase.from('posts').select('group_id, workspace_id').eq('id', numericId);
-    if (req.workspaceId) taskLookup = taskLookup.eq('workspace_id', req.workspaceId);
-    const { data: taskData } = await taskLookup.maybeSingle();
-
-    if (req.workspaceId && !taskData) {
-        return res.status(404).json({ error: 'Task not found in this workspace.' });
-    }
-
     let updateQuery = supabase.from('posts').update(update).eq('id', numericId);
     if (req.workspaceId) updateQuery = updateQuery.eq('workspace_id', req.workspaceId);
     const { error } = await updateQuery;
@@ -2564,8 +2574,10 @@ app.post('/api/tasks/update-status', optionalWorker, validate(updateStatusSchema
     console.log(`✅ [POST] Task ${numericId} updated to ${status} in DB`);
 
     if (status === 'FAILED') {
-        await supabase.from('system_logs').insert([{ log_level: 'error', source: 'extension_worker', message: `Task #${numericId} FAILED: ${failure_reason || 'Unknown error'}` }]);
-        logEvent(req.workspaceId || taskData?.workspace_id, numericId, 'FAILED', failure_reason || 'Task failed with unknown error', { source: 'extension_worker' });
+        await persistTenantSystemLog(supabase, logWorkspaceId, {
+            log_level: 'error', source: 'extension_worker', message: `Task #${numericId} FAILED: ${failure_reason || 'Unknown error'}`,
+        });
+        logEvent(logWorkspaceId, numericId, 'FAILED', failure_reason || 'Task failed with unknown error', { source: 'extension_worker' });
     }
 
     if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(status)) {
@@ -2587,6 +2599,18 @@ app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), 
     const failReason = failure_reason || bodyError;
     console.log(`📝 [PATCH] /api/tasks/${id}/status → ${status} (${failReason || 'No error'})`);
 
+    const isRealTask = /^\d+$/.test(String(id));
+    let taskData = null;
+    if (isRealTask) {
+        let taskLookup = supabase.from('posts').select('group_id, workspace_id').eq('id', id);
+        if (req.workspaceId) taskLookup = taskLookup.eq('workspace_id', req.workspaceId);
+        ({ data: taskData } = await taskLookup.maybeSingle());
+        if (req.workspaceId && !taskData) {
+            return res.status(404).json({ error: 'Task not found in this workspace.' });
+        }
+    }
+    const logWorkspaceId = req.workspaceId || taskData?.workspace_id || null;
+
     // Idempotency check: prevent duplicate updates
     const idempotencyKey = generateIdempotencyKey(id, status, failReason);
     if (isIdempotentDuplicate(id, idempotencyKey)) {
@@ -2597,23 +2621,14 @@ app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), 
     // SPECIAL: If status is 'LOG', don't update post status, just insert into system_logs
     if (status === 'LOG') {
         if (failReason) {
-            await supabase.from('system_logs').insert([{
+            const logged = await persistTenantSystemLog(supabase, logWorkspaceId, {
                 log_level: 'info',
                 source: 'extension_worker',
                 message: `Task #${id}: ${failReason}`
-            }]);
+            });
+            if (!logged.ok) return res.status(422).json({ error: 'Tenant log workspace could not be resolved.' });
         }
         return res.json({ success: true, logged: true });
-    }
-
-    // Fetch task data including group_id before updating. Scoped to the
-    // caller's workspace when paired — see /api/tasks/update-status above.
-    let taskLookup = supabase.from('posts').select('group_id, workspace_id').eq('id', id);
-    if (req.workspaceId) taskLookup = taskLookup.eq('workspace_id', req.workspaceId);
-    const { data: taskData } = await taskLookup.maybeSingle();
-
-    if (req.workspaceId && !taskData) {
-        return res.status(404).json({ error: 'Task not found in this workspace.' });
     }
 
     const update = { status };
@@ -2633,22 +2648,22 @@ app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), 
 
     // Automation Failure AUDIT LOG
     if (status === 'FAILED') {
-        await supabase.from('system_logs').insert([{
+        await persistTenantSystemLog(supabase, logWorkspaceId, {
             log_level: 'error',
             source: 'extension_worker',
             message: `Task #${id} FAILED: ${failReason || 'Unknown error'}`
-        }]);
-        logEvent(req.workspaceId || taskData?.workspace_id, id, 'FAILED', failReason || 'Task failed with unknown error', { source: 'extension_worker' });
+        });
+        logEvent(logWorkspaceId, id, 'FAILED', failReason || 'Task failed with unknown error', { source: 'extension_worker' });
     }
 
     // Task Cancellation LOG
     if (status === 'CANCELLED') {
-        await supabase.from('system_logs').insert([{
+        await persistTenantSystemLog(supabase, logWorkspaceId, {
             log_level: 'warn',
             source: 'extension_worker',
             message: `Task #${id} CANCELLED: ${failReason || 'Manual cancellation'}`
-        }]);
-        logEvent(req.workspaceId || taskData?.workspace_id, id, 'CANCELLED', failReason || 'Task cancelled', { source: 'extension_worker', reason: failReason });
+        });
+        logEvent(logWorkspaceId, id, 'CANCELLED', failReason || 'Task cancelled', { source: 'extension_worker', reason: failReason });
     }
 
     // Clear from tracking maps on end states
@@ -2739,6 +2754,9 @@ app.post('/api/tasks/:id/cancel', ...dashboardAuth, async (req, res) => {
         .in('status', ['PENDING']), req);
     if (error) return res.status(500).json({ error: error.message });
     logEvent(req.workspaceId, id, 'CANCELLED', 'Task manually cancelled', { reason: 'ביטול ידני' });
+    await persistTenantSystemLog(supabase, req.workspaceId, {
+        log_level: 'warn', source: 'dashboard', message: `Task #${id} manually cancelled`,
+    });
     emitWorkspaceRefresh(req.workspaceId, { queue: true });
     res.json({ success: true });
 });
