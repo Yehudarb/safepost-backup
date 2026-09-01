@@ -387,6 +387,11 @@ const {
     persistTenantSystemLog,
     persistGlobalSystemLog,
 } = require('./lib/logIsolation.cjs');
+const {
+    HEALTH_TIMEOUT_MS,
+    createSupabaseHealthReader,
+    collectHealthSnapshot,
+} = require('./lib/health.cjs');
 // Convenience: dashboard routes require auth + a resolved workspace.
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
 assertSecureRuntimeConfig();
@@ -597,9 +602,14 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/uploads', express.static(UPLOAD_DIR));
 
-// Health Check Endpoint
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', time: new Date().toISOString(), supabase: !!supabase });
+// Public aggregate health endpoint. HTTP 200 means the real DB probe and all
+// aggregate metrics completed. HTTP 503 means the DB was unreachable, timed
+// out, or could not provide metrics; no database error text is returned.
+const healthReader = createSupabaseHealthReader(supabase);
+app.get('/api/health', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const result = await collectHealthSnapshot(healthReader, { timeoutMs: HEALTH_TIMEOUT_MS });
+    res.status(result.httpStatus).json(result.body);
 });
 
 app.get('/api/debug/state', requireAuth, requireWorkspaceAccess, (req, res) => {
