@@ -1,4 +1,4 @@
-console.log("[Background] Service Worker v9.0 — Multi-anchor name extraction (LOCAL DEV)");
+console.log("[Background] Service Worker v9.1 — Multi-anchor name extraction (LOCAL DEV)");
 
 // Load extension storage and external-sender validation utilities.
 importScripts('extensionStorage.js', 'externalMessageTrust.js');
@@ -544,7 +544,7 @@ async function scanAndSyncGroups() {
         return { success: false, error: "already-running" };
     }
     isGroupScanning = true;
-    console.log("[Background] scanAndSyncGroups v9.0 (multi-anchor + upgrade) via www.facebook.com/groups/joins/");
+    console.log("[Background] scanAndSyncGroups v9.1 (multi-anchor + upgrade) via www.facebook.com/groups/joins/");
 
     // Get the current user from content.js BEFORE opening the new tab
     const fbProfileFromContent = await getFacebookUserFromContent();
