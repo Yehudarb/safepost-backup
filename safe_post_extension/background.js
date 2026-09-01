@@ -1,7 +1,7 @@
 console.log("[Background] Service Worker v9.0 — Multi-anchor name extraction (LOCAL DEV)");
 
-// Load extension storage utility
-importScripts('extensionStorage.js');
+// Load extension storage and external-sender validation utilities.
+importScripts('extensionStorage.js', 'externalMessageTrust.js');
 
 const API_PORT = 3001;
 // Default backend URL — production, so a fresh install works with zero setup.
@@ -1069,62 +1069,24 @@ async function sendHeartbeat() {
 
 // (heartbeat + watchdog now run in the single 'jobPoller' listener near the top)
 
-// 5. EXTERNAL DASHBOARD LISTENER
+// 5. EXTERNAL MESSAGING DEFENCE
+//
+// The dashboard communicates through the authenticated backend queue; it does
+// not need direct web-page -> extension messaging. The production manifest has
+// no externally_connectable origins, and this listener is a second barrier for
+// extension-to-extension messages or an accidentally widened future manifest.
 chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
-    console.log("[Background] External Message Received:", request);
-
-    if (request.action === "START_AUTOMATION") {
-        let targetUrl = "https://www.facebook.com/groups/feed/";
-
-        const groupList = request.postData?.group_ids || request.postData?.groups;
-        if (groupList && groupList.length > 0) {
-            const firstGroup = groupList[0];
-            if (typeof firstGroup === 'object' && firstGroup !== null) {
-                if (firstGroup.url) targetUrl = firstGroup.url;
-                else if (firstGroup.id) targetUrl = `https://www.facebook.com/groups/${firstGroup.id}/`;
-                else if (firstGroup.fb_id) targetUrl = `https://www.facebook.com/groups/${firstGroup.fb_id}/`;
-            } else if (typeof firstGroup === 'string') {
-                targetUrl = `https://www.facebook.com/groups/${firstGroup}/`;
-            }
-        }
-
-        chrome.tabs.create({ url: targetUrl }, (tab) => {
-            const listener = (tabId, info) => {
-                if (tabId === tab.id && info.status === 'complete') {
-                    chrome.tabs.onUpdated.removeListener(listener);
-                    function trySendMessage(attemptsLeft) {
-                        chrome.tabs.get(tabId, (targetTab) => {
-                            if (chrome.runtime.lastError || !targetTab) return;
-                            chrome.tabs.sendMessage(tabId, {
-                                action: 'EXECUTE_POST',
-                                job: request.postData || { id: 'MANUAL', content: 'Test Post' }
-                            }, (res) => {
-                                if (chrome.runtime.lastError && attemptsLeft > 0) {
-                                    setTimeout(() => trySendMessage(attemptsLeft - 1), 3000);
-                                }
-                            });
-                        });
-                    }
-                    setTimeout(() => trySendMessage(3), 5000);
-                }
-            };
-            chrome.tabs.onUpdated.addListener(listener);
-        });
-
-        sendResponse({ success: true, status: "STARTED" });
+    const trust = globalThis.SafePostExternalTrust.validateExternalSender(sender);
+    if (!trust.ok) {
+        console.warn('[Background] Rejected external message:', trust.reason);
+        sendResponse({ success: false, error: 'External sender is not trusted.' });
+        return false;
     }
 
-    // A second "GET_COOKIES" handler used to live here. This listener is
-    // onMessageExternal, so it was reachable from any page in the manifest's
-    // externally_connectable list — meaning a web page could ask the extension
-    // for the user's full Facebook session cookies. Nothing ever called it.
-    // Removed; see the matching note in the onMessage listener above.
-
-    if (request.action === "SCAN_AND_SYNC_GROUPS") {
-        console.log("[Background] SCAN_AND_SYNC_GROUPS received from Dashboard");
-        scanAndSyncGroups().then(result => sendResponse(result));
-        return true;
-    }
-
+    // No external actions are supported in beta. In particular, automation,
+    // publishing, and group sync are reachable only through authenticated
+    // internal/runtime or backend worker paths.
+    console.warn('[Background] Rejected unsupported external action.');
+    sendResponse({ success: false, error: 'External actions are disabled.' });
     return false;
 });
