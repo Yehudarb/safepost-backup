@@ -1,0 +1,103 @@
+name: Production health monitor
+
+# Polls the public aggregate health endpoint and fails the run when production
+# is genuinely unwell. A failed run emails the repository owner through GitHub's
+# default Actions notification, so no third-party service or account is needed.
+#
+# Interval: GitHub's cron minimum is 5 minutes and scheduled runs are best-effort,
+# so the real spacing is roughly 5-15 minutes rather than the 60 seconds an uptime
+# service would give. Each run therefore performs its own consecutive checks
+# internally: a single transient blip never raises an alert, and the "N
+# consecutive failures" rule holds within one run instead of depending on state
+# carried between runs.
+#
+# Nothing here is secret. The endpoint is public and returns aggregate counts
+# only — no workspace, user, post, group or worker identifiers.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: health-monitor
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe production health
+        env:
+          HEALTH_URL: https://safepost-backup.onrender.com/api/health
+        run: |
+          node <<'NODE'
+          const URL = process.env.HEALTH_URL;
+          const CHECKS = 3;          // health needs 3 consecutive failures
+          const OPS_CHECKS = 2;      // operational signals need 2
+          const GAP_MS = 20000;
+
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+          async function probe() {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 20000);
+            try {
+              const res = await fetch(URL, { signal: controller.signal });
+              const body = await res.json().catch(() => null);
+              return { ok: res.status === 200 && body?.status === 'healthy', status: res.status, body };
+            } catch (error) {
+              return { ok: false, status: 0, body: null, error: error.message };
+            } finally {
+              clearTimeout(timer);
+            }
+          }
+
+          (async () => {
+            const results = [];
+            for (let i = 0; i < CHECKS; i++) {
+              const r = await probe();
+              results.push(r);
+              const b = r.body || {};
+              console.log(
+                `check ${i + 1}/${CHECKS}  http=${r.status}  status=${b.status ?? '-'}  ` +
+                `db=${b.database?.status ?? '-'}  online_workers=${b.online_workers ?? '-'}  ` +
+                `processing_over_10m=${b.processing_over_10m ?? '-'}  queue_depth=${b.queue_depth ?? '-'}` +
+                (r.error ? `  error=${r.error}` : '')
+              );
+              if (i < CHECKS - 1) await sleep(GAP_MS);
+            }
+
+            const failures = [];
+
+            // Health: only alert when every check failed. One blip is not an outage.
+            if (results.every(r => !r.ok)) {
+              failures.push(`health: ${CHECKS} consecutive checks failed (last http=${results.at(-1).status})`);
+            }
+
+            // Operational signals are read from the checks that actually returned
+            // a body; a transport failure is already covered by the health rule.
+            const bodies = results.filter(r => r.body).map(r => r.body);
+            const recent = bodies.slice(-OPS_CHECKS);
+
+            if (recent.length === OPS_CHECKS && recent.every(b => b.online_workers === 0)) {
+              failures.push(`workers: online_workers == 0 for ${OPS_CHECKS} consecutive checks — nothing can pick up a job`);
+            }
+
+            if (recent.length === OPS_CHECKS && recent.every(b => Number(b.processing_over_10m) > 0)) {
+              failures.push(`queue: processing_over_10m > 0 for ${OPS_CHECKS} consecutive checks — a claimed job is stuck`);
+            }
+
+            if (failures.length) {
+              console.error('\nALERT:');
+              failures.forEach(f => console.error(`  - ${f}`));
+              process.exit(1);
+            }
+
+            console.log('\nOK: production healthy, a worker is online, no stuck jobs.');
+          })();
+          NODE
