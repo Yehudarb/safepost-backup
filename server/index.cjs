@@ -387,6 +387,11 @@ const {
     persistTenantSystemLog,
     persistGlobalSystemLog,
 } = require('./lib/logIsolation.cjs');
+const {
+    HEALTH_TIMEOUT_MS,
+    createSupabaseHealthReader,
+    collectHealthSnapshot,
+} = require('./lib/health.cjs');
 // Convenience: dashboard routes require auth + a resolved workspace.
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
 assertSecureRuntimeConfig();
@@ -597,9 +602,14 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/uploads', express.static(UPLOAD_DIR));
 
-// Health Check Endpoint
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', time: new Date().toISOString(), supabase: !!supabase });
+// Public aggregate health endpoint. HTTP 200 means the real DB probe and all
+// aggregate metrics completed. HTTP 503 means the DB was unreachable, timed
+// out, or could not provide metrics; no database error text is returned.
+const healthReader = createSupabaseHealthReader(supabase);
+app.get('/api/health', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const result = await collectHealthSnapshot(healthReader, { timeoutMs: HEALTH_TIMEOUT_MS });
+    res.status(result.httpStatus).json(result.body);
 });
 
 app.get('/api/debug/state', requireAuth, requireWorkspaceAccess, (req, res) => {
@@ -2773,15 +2783,56 @@ app.post('/api/tasks/cancel-all-pending', ...dashboardAuth, async (req, res) => 
     res.json({ success: true });
 });
 
-// Bulk delete tasks
+// Bulk delete tasks.
+//
+// Destructive and irreversible, so the request is bounded and audited. The cap
+// exists because the dashboard's select-all can enumerate an entire queue into
+// one call; an operator who means to clear 20 rows and clears 200 has no undo.
+// Over-sized requests are refused outright rather than truncated — silently
+// deleting a prefix of what was asked is worse than an error the caller can see.
+const MAX_BULK_DELETE = 100;
+
+// Audit lines are workspace-scoped operational metadata only: the operation, how
+// many rows went, and who asked. Never the id list, post content, group names,
+// or Facebook data. A failed audit write must not change the HTTP outcome of a
+// delete that already happened, so this never throws.
+async function auditBulkDelete(req, level, detail) {
+    const actor = req.user ? req.user.id : 'unknown';
+    try {
+        await persistTenantSystemLog(supabase, req.workspaceId, {
+            log_level: level,
+            source: 'dashboard',
+            message: `operation=bulk_delete_posts ${detail} actor=${actor}`,
+        });
+    } catch (error) {
+        console.error(`[AUDIT] bulk_delete_posts audit write failed: ${error.message}`);
+    }
+}
+
 app.post('/api/tasks/bulk-delete', ...dashboardAuth, async (req, res) => {
-    const { ids } = req.body;
-    if (!ids || !Array.isArray(ids) || ids.length === 0)
+    const { ids } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+        await auditBulkDelete(req, 'warn', 'outcome=rejected reason=invalid_ids');
         return res.status(400).json({ error: 'Missing ids' });
-    const { error } = await scopeToWorkspace(supabase.from('posts').delete().in('id', ids), req);
+    }
+    if (ids.length > MAX_BULK_DELETE) {
+        // Only the count is recorded — the supplied ids are never logged.
+        await auditBulkDelete(req, 'warn', `outcome=rejected reason=batch_too_large requested_count=${ids.length}`);
+        return res.status(400).json({
+            error: `Too many ids. Delete at most ${MAX_BULK_DELETE} tasks per request.`,
+            max_batch: MAX_BULK_DELETE,
+            received: ids.length,
+        });
+    }
+    // .select('id') makes the delete report exactly which rows it removed, so the
+    // audit count is the real post-scoping figure rather than the requested one.
+    const { data, error } = await scopeToWorkspace(
+        supabase.from('posts').delete().in('id', ids).select('id'), req);
     if (error) return res.status(500).json({ error: error.message });
+    const deletedCount = Array.isArray(data) ? data.length : 0;
+    await auditBulkDelete(req, 'warn', `outcome=success deleted_count=${deletedCount}`);
     emitWorkspaceRefresh(req.workspaceId, { queue: true });
-    res.json({ success: true });
+    res.json({ success: true, deleted_count: deletedCount });
 });
 
 // Update a task
