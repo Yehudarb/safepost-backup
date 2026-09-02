@@ -95,6 +95,11 @@ async function seedPost(workspaceId, marker) {
     assert('preserves ids beyond Number.MAX_SAFE_INTEGER as strings',
         normalizeDbId('9223372036854775807') === '9223372036854775807');
     assert('rejects an unsafe integer supplied as a number', normalizeDbId(9223372036854775807) === null);
+    // Digit-shaped but unstorable: bigint tops out at 2^63-1, and anything past
+    // it would overflow the column and come back as a 22003 server error.
+    assert('rejects one past bigint max', normalizeDbId('9223372036854775808') === null);
+    assert('rejects an absurdly long digit string', normalizeDbId('9'.repeat(40)) === null);
+    assert('still accepts the largest storable id', normalizeDbId('9223372036854775807') !== null);
     assert('isValidDbId agrees with normalizeDbId', isValidDbId('5') === true && isValidDbId('5x') === false);
 
     assert('list rejects a non-array', normalizeDbIdList('all').ok === false);

@@ -9,16 +9,22 @@
 // error where it belongs — a 400 the caller can act on — and stops malformed
 // input reaching the database at all.
 //
-// Types are not interchangeable: `posts.id`, `post_templates.id` and
-// `group_sets.id` are bigint, while `browser_workers.id` and `workspaces.id` are
-// uuid and `groups.id` is text. Applying the wrong check is its own bug — the
-// delete routes for templates and group sets previously guarded a bigint column
-// with a uuid-shaped regexp, which rejected every real id.
+// Types are not interchangeable: `posts.id` and `post_templates.id` are bigint,
+// `browser_workers.id` and `workspaces.id` are uuid, and `groups.id` is text.
+// (`group_sets.id` differs by environment — see normalizeDbIdOrUuid.) Applying
+// the wrong check is its own bug: the delete routes for templates and group sets
+// previously guarded a bigint column with a uuid-shaped regexp, which rejected
+// every real id.
 
 // Digits only, no sign, no decimal point, no leading zero, and at least one
 // digit. Kept as a string so ids beyond Number.MAX_SAFE_INTEGER survive intact:
 // bigint reaches 2^63 and JSON numbers silently lose precision past 2^53.
 const DB_ID_RE = /^[1-9][0-9]*$/;
+// Digit-shaped is not the same as storable. A value above bigint's range parses
+// as an id but overflows the column, and PostgREST answers 22003 — another 5xx
+// for what is a client mistake. Bound it here so it never reaches the database.
+const BIGINT_MAX = 9223372036854775807n;
+const BIGINT_MAX_DIGITS = 19;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Returns the canonical string form of a positive integer id, or null.
@@ -33,7 +39,12 @@ function normalizeDbId(value) {
         return String(value);
     }
     if (typeof value !== 'string') return null;
-    return DB_ID_RE.test(value) ? value : null;
+    if (!DB_ID_RE.test(value)) return null;
+    // Length is checked first so an absurdly long digit string is rejected
+    // without building a BigInt for it.
+    if (value.length > BIGINT_MAX_DIGITS) return null;
+    if (value.length === BIGINT_MAX_DIGITS && BigInt(value) > BIGINT_MAX) return null;
+    return value;
 }
 
 function isValidDbId(value) {
