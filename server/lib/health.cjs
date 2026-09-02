@@ -7,6 +7,14 @@ const PROCESSING_STUCK_MS = 10 * 60 * 1000;
 const WORKER_STALE_MS = 5 * 60 * 1000;
 const RETRY_OVERDUE_MS = 30 * 60 * 1000;
 const RECENT_RETRY_MS = 15 * 60 * 1000;
+// Jobs that exhausted their retries are only interesting while they are recent.
+// Counting them for all time makes the metric monotonic: a workspace with an old
+// failed backlog reports a permanently non-zero value that can never clear, so it
+// cannot be alerted on. `posts` has no column recording when a job reached its
+// attempt cap, so `ended_at` — set when the job was finalised — is the closest
+// correct timestamp. Legacy rows with a NULL `ended_at` fall outside the window,
+// which under-reports rather than over-reports.
+const MAX_ATTEMPTS_WINDOW_MS = 24 * 60 * 60 * 1000;
 // The schema default is 3 and application code never overrides max_attempts.
 const JOB_MAX_ATTEMPTS = 3;
 
@@ -93,12 +101,14 @@ function createSupabaseHealthReader(database) {
                 .or(`last_seen_at.is.null,last_seen_at.lt.${cutoff}`), signal));
         },
 
-        async jobsAtMaxAttempts(signal) {
+        async jobsAtMaxAttempts24h(signal, nowMs) {
+            const cutoff = new Date(nowMs - MAX_ATTEMPTS_WINDOW_MS).toISOString();
             return countValue(await queryResult(database.from('posts')
                 .select('id', { count: 'exact', head: true })
                 .eq('status', 'FAILED')
                 .eq('max_attempts', JOB_MAX_ATTEMPTS)
-                .gte('attempt_count', JOB_MAX_ATTEMPTS), signal));
+                .gte('attempt_count', JOB_MAX_ATTEMPTS)
+                .gte('ended_at', cutoff), signal));
         },
 
         async retryableOverdue30m(signal, nowMs) {
@@ -136,7 +146,7 @@ function emptyOperationalFields() {
         oldest_processing_age_seconds: null,
         online_workers: null,
         stale_workers: null,
-        jobs_at_max_attempts: null,
+        jobs_at_max_attempts_24h: null,
         retryable_overdue_30m: null,
         recent_retries_15m: null,
     };
@@ -192,7 +202,7 @@ async function collectHealthSnapshot(reader, {
             oldestProcessingClaimedAt,
             onlineWorkers,
             staleWorkers,
-            jobsAtMaxAttempts,
+            jobsAtMaxAttempts24h,
             retryableOverdue30m,
             recentRetries15m,
         ] = await Promise.all([
@@ -202,7 +212,7 @@ async function collectHealthSnapshot(reader, {
             reader.oldestProcessingClaimedAt(controller.signal, nowMs),
             reader.onlineWorkers(controller.signal, nowMs),
             reader.staleWorkers(controller.signal, nowMs),
-            reader.jobsAtMaxAttempts(controller.signal, nowMs),
+            reader.jobsAtMaxAttempts24h(controller.signal, nowMs),
             reader.retryableOverdue30m(controller.signal, nowMs),
             reader.recentRetries15m(controller.signal, nowMs),
         ]);
@@ -224,7 +234,7 @@ async function collectHealthSnapshot(reader, {
                     : null,
                 online_workers: onlineWorkers,
                 stale_workers: staleWorkers,
-                jobs_at_max_attempts: jobsAtMaxAttempts,
+                jobs_at_max_attempts_24h: jobsAtMaxAttempts24h,
                 retryable_overdue_30m: retryableOverdue30m,
                 recent_retries_15m: recentRetries15m,
             },
@@ -252,6 +262,7 @@ module.exports = {
     WORKER_STALE_MS,
     RETRY_OVERDUE_MS,
     RECENT_RETRY_MS,
+    MAX_ATTEMPTS_WINDOW_MS,
     JOB_MAX_ATTEMPTS,
     createSupabaseHealthReader,
     collectHealthSnapshot,
