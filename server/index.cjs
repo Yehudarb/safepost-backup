@@ -398,7 +398,19 @@ const { normalizeDbId, normalizeDbIdList, isValidUuid, normalizeDbIdOrUuid } = r
 // declared types, constraint names. Log them where operators can see them and
 // answer the caller with a generic message. Used by the routes whose identifier
 // handling is fixed in this change; not a global error-handling rewrite.
+//
+// SQLSTATE 22P02 (invalid_text_representation) is the one case that is not a
+// server fault: it means the caller supplied a value the column cannot parse.
+// That is a 400. Front-line validation catches this for columns whose type is
+// known, but `group_sets.id` is bigint in production and uuid in QA, so a value
+// that is legitimate in one environment reaches the other as a parse error.
+// Answering 400 keeps a client mistake out of the 5xx rate the health alerting
+// treats as meaningful.
 function dbFailure(res, context, error) {
+    if (error?.code === '22P02') {
+        console.warn(`[DB] ${context}: rejected unparseable identifier`);
+        return res.status(400).json({ error: 'Invalid id' });
+    }
     console.error(`[DB] ${context}: ${error?.message || error}`);
     return res.status(500).json({ error: 'Database operation failed.' });
 }

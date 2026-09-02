@@ -192,6 +192,17 @@ async function seedPost(workspaceId, marker) {
         const wellFormedForeign = await req(owner, 'DELETE', '/api/workers/1463a919-3577-459c-b32a-b765a4497080');
         assert('a well-formed uuid that is not the caller\'s worker still returns 403',
             wellFormedForeign.status === 403, `HTTP ${wellFormedForeign.status}`);
+
+        console.log('\n G. an id the column cannot parse is a 400, not a 500');
+        // group_sets.id is uuid here and bigint in production, so each environment
+        // sees the other's legitimate shape as a parse error. This exercises the
+        // QA side of that: a numeric id passes the dual-shape validator and only
+        // the database can reject it. It must not surface as a server fault.
+        const wrongShape = await req(owner, 'DELETE', '/api/group-sets/42');
+        assert('wrong-shaped group-set id returns 400', wrongShape.status === 400, `HTTP ${wrongShape.status}`);
+        assert('wrong-shaped group-set id never returns 5xx', wrongShape.status < 500);
+        assert('wrong-shaped group-set id leaks no database detail', !leaks(wrongShape.body),
+            JSON.stringify(wrongShape.body));
     } finally {
         for (const u of [owner, outsider]) {
             await admin.from('system_logs').delete().eq('workspace_id', u.workspaceId);
