@@ -28,7 +28,8 @@
     "test:phase15": "node -r ./server/tests/loadTestEnv.cjs tests/phase15-dry-run-guard.test.cjs",
     "test:phase16": "node -r ./server/tests/loadTestEnv.cjs tests/phase16-worker-telemetry.test.cjs",
     "test:p1-security": "node -r ./server/tests/loadTestEnv.cjs tests/p1-beta-security-hardening.test.cjs",
-    "test:observability": "node -r ./server/tests/loadTestEnv.cjs tests/phase17-observability.test.cjs"
+    "test:observability": "node -r ./server/tests/loadTestEnv.cjs tests/phase17-observability.test.cjs",
+    "test:id-validation": "node -r ./server/tests/loadTestEnv.cjs tests/phase18-id-validation.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

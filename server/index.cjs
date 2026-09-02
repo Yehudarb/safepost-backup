@@ -392,6 +392,28 @@ const {
     createSupabaseHealthReader,
     collectHealthSnapshot,
 } = require('./lib/health.cjs');
+const { normalizeDbId, normalizeDbIdList, isValidUuid, normalizeDbIdOrUuid } = require('./lib/ids.cjs');
+
+// Driver errors describe the database, not the request: table and column names,
+// declared types, constraint names. Log them where operators can see them and
+// answer the caller with a generic message. Used by the routes whose identifier
+// handling is fixed in this change; not a global error-handling rewrite.
+//
+// SQLSTATE 22P02 (invalid_text_representation) is the one case that is not a
+// server fault: it means the caller supplied a value the column cannot parse.
+// That is a 400. Front-line validation catches this for columns whose type is
+// known, but `group_sets.id` is bigint in production and uuid in QA, so a value
+// that is legitimate in one environment reaches the other as a parse error.
+// Answering 400 keeps a client mistake out of the 5xx rate the health alerting
+// treats as meaningful.
+function dbFailure(res, context, error) {
+    if (error?.code === '22P02') {
+        console.warn(`[DB] ${context}: rejected unparseable identifier`);
+        return res.status(400).json({ error: 'Invalid id' });
+    }
+    console.error(`[DB] ${context}: ${error?.message || error}`);
+    return res.status(500).json({ error: 'Database operation failed.' });
+}
 // Convenience: dashboard routes require auth + a resolved workspace.
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
 assertSecureRuntimeConfig();
@@ -1275,6 +1297,10 @@ app.get('/api/workers', ...dashboardAuth, async (req, res) => {
 
 // Dashboard: revoke a worker (own workspace only).
 app.post('/api/workers/:workerId/revoke', ...dashboardAuth, async (req, res) => {
+    // browser_workers.id is uuid, so this takes the uuid check rather than the
+    // numeric one. Without it a malformed value reached PostgREST and the failed
+    // lookup surfaced as "Not your worker" — a 403 for what is really a 400.
+    if (!isValidUuid(req.params.workerId)) return res.status(400).json({ error: 'Invalid id' });
     const { data: w } = await supabase.from('browser_workers').select('id, workspace_id').eq('id', req.params.workerId).maybeSingle();
     if (!w || w.workspace_id !== req.workspaceId) return res.status(403).json({ error: 'Not your worker.' });
     await supabase.from('browser_workers').update({ revoked_at: new Date().toISOString(), status: 'offline' }).eq('id', w.id);
@@ -1284,6 +1310,10 @@ app.post('/api/workers/:workerId/revoke', ...dashboardAuth, async (req, res) => 
 // Dashboard: rename a worker (own workspace only).
 app.patch('/api/workers/:workerId', ...dashboardAuth, async (req, res) => {
     const { worker_name } = req.body || {};
+    // browser_workers.id is uuid, so this takes the uuid check rather than the
+    // numeric one. Without it a malformed value reached PostgREST and the failed
+    // lookup surfaced as "Not your worker" — a 403 for what is really a 400.
+    if (!isValidUuid(req.params.workerId)) return res.status(400).json({ error: 'Invalid id' });
     const { data: w } = await supabase.from('browser_workers').select('id, workspace_id').eq('id', req.params.workerId).maybeSingle();
     if (!w || w.workspace_id !== req.workspaceId) return res.status(403).json({ error: 'Not your worker.' });
     await supabase.from('browser_workers').update({ worker_name: worker_name || 'Chrome Extension' }).eq('id', w.id);
@@ -1292,6 +1322,10 @@ app.patch('/api/workers/:workerId', ...dashboardAuth, async (req, res) => {
 
 // Dashboard: remove a worker (own workspace only).
 app.delete('/api/workers/:workerId', ...dashboardAuth, async (req, res) => {
+    // browser_workers.id is uuid, so this takes the uuid check rather than the
+    // numeric one. Without it a malformed value reached PostgREST and the failed
+    // lookup surfaced as "Not your worker" — a 403 for what is really a 400.
+    if (!isValidUuid(req.params.workerId)) return res.status(400).json({ error: 'Invalid id' });
     const { data: w } = await supabase.from('browser_workers').select('id, workspace_id').eq('id', req.params.workerId).maybeSingle();
     if (!w || w.workspace_id !== req.workspaceId) return res.status(403).json({ error: 'Not your worker.' });
     await supabase.from('browser_workers').delete().eq('id', w.id);
@@ -1330,13 +1364,15 @@ app.post('/api/group-sets', ...dashboardAuth, async (req, res) => {
 });
 
 app.delete('/api/group-sets/:id', ...dashboardAuth, async (req, res) => {
-    const id = req.params.id;
-    if (!/^[0-9a-f-]{8,}$/i.test(id)) return res.status(400).json({ error: 'Invalid ID format' });
+    // group_sets.id is bigint in production and uuid in QA, so this one route
+    // accepts either legitimate shape rather than breaking one environment.
+    const id = normalizeDbIdOrUuid(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid id' });
     const { error } = await scopeToWorkspace(supabase
         .from('group_sets')
         .delete()
         .eq('id', id), req);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return dbFailure(res, 'delete group set', error);
     res.json({ success: true });
 });
 
@@ -1393,13 +1429,13 @@ app.post('/api/templates', ...dashboardAuth, async (req, res) => {
 });
 
 app.delete('/api/templates/:id', ...dashboardAuth, async (req, res) => {
-    const id = req.params.id;
-    if (!/^[0-9a-f-]{8,}$/i.test(id)) return res.status(400).json({ error: 'Invalid ID format' });
+    const id = normalizeDbId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid id' });
     const { error } = await scopeToWorkspace(supabase
         .from('post_templates')
         .delete()
         .eq('id', id), req);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return dbFailure(res, 'delete template', error);
     res.json({ success: true });
 });
 
@@ -2018,7 +2054,8 @@ app.post('/api/posts', validate(postsSchema), ...dashboardAuth, async (req, res)
 
 // --- 2. WORKER ACKNOWLEDGEMENT ---
 app.post('/api/worker/ack', optionalWorker, async (req, res) => {
-    const { taskId } = req.body;
+    const taskId = normalizeDbId((req.body || {}).taskId);
+    if (!taskId) return res.status(400).json({ error: 'Invalid id' });
     console.log(`🤝 Handshake: Worker acknowledged task ${taskId}`);
 
     const { error } = await supabase
@@ -2027,7 +2064,7 @@ app.post('/api/worker/ack', optionalWorker, async (req, res) => {
         .eq('id', taskId)
         .eq('status', 'SENT'); // Only if it was in SENT state
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return dbFailure(res, 'worker ack', error);
 
     sentTaskTimestamps.delete(taskId);
     processingStartTimestamps.set(taskId, Date.now());
@@ -2535,12 +2572,17 @@ app.get('/api/jobs/for-url', optionalWorker, async (req, res) => {
 // POST task status update (called by backup extension background.js REPORT_STATUS)
 app.post('/api/tasks/update-status', optionalWorker, validate(updateStatusSchema), async (req, res) => {
     const { taskId, status, failure_reason, proof_url } = req.validated;
-    const numericId = parseInt(taskId) || taskId;
+    // Non-numeric ids such as 'DEBUG' are legitimate for LOG-only reports, which
+    // never filter posts by id. Anything that will reach a posts filter has to be
+    // a real id, so it is validated rather than coerced with parseInt — which
+    // turned '12abc' into 12 and passed 'not-a-number' straight through.
+    const validId = normalizeDbId(taskId);
+    const numericId = validId || taskId;
     console.log(`📝 [POST] /api/tasks/update-status → Task ${numericId}: ${status}`);
 
     // Resolve tenant identity from the paired worker and/or the stored job. A
     // workspace value in the request body is intentionally ignored.
-    const isRealTask = /^\d+$/.test(String(numericId));
+    const isRealTask = validId !== null;
     let taskData = null;
     if (isRealTask) {
         let taskLookup = supabase.from('posts').select('group_id, workspace_id').eq('id', numericId);
@@ -2573,12 +2615,15 @@ app.post('/api/tasks/update-status', optionalWorker, validate(updateStatusSchema
     if (failure_reason) update.failure_reason = failure_reason;
     if (proof_url) update.proof_url = proof_url;
 
-    let updateQuery = supabase.from('posts').update(update).eq('id', numericId);
+    // Past this point the id addresses a row, so a non-numeric one is a client
+    // error rather than something to hand to the database.
+    if (!validId) return res.status(400).json({ error: 'Invalid id' });
+    let updateQuery = supabase.from('posts').update(update).eq('id', validId);
     if (req.workspaceId) updateQuery = updateQuery.eq('workspace_id', req.workspaceId);
     const { error } = await updateQuery;
     if (error) {
         console.error('Status update error:', error.message);
-        return res.status(500).json({ error: error.message });
+        return res.status(500).json({ error: 'Database operation failed.' });
     }
 
     console.log(`✅ [POST] Task ${numericId} updated to ${status} in DB`);
@@ -2609,10 +2654,13 @@ app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), 
     const failReason = failure_reason || bodyError;
     console.log(`📝 [PATCH] /api/tasks/${id}/status → ${status} (${failReason || 'No error'})`);
 
-    const isRealTask = /^\d+$/.test(String(id));
+    // As in /api/tasks/update-status: 'DEBUG'-style ids are valid for LOG-only
+    // reports and must not reach a posts filter.
+    const validId = normalizeDbId(id);
+    const isRealTask = validId !== null;
     let taskData = null;
     if (isRealTask) {
-        let taskLookup = supabase.from('posts').select('group_id, workspace_id').eq('id', id);
+        let taskLookup = supabase.from('posts').select('group_id, workspace_id').eq('id', validId);
         if (req.workspaceId) taskLookup = taskLookup.eq('workspace_id', req.workspaceId);
         ({ data: taskData } = await taskLookup.maybeSingle());
         if (req.workspaceId && !taskData) {
@@ -2651,7 +2699,8 @@ app.patch('/api/tasks/:id/status', optionalWorker, validate(patchStatusSchema), 
     else if (status === 'CANCELLED') update.ended_at = new Date().toISOString();
     if (proof_url) update.proof_url = proof_url;
 
-    let patchQuery = supabase.from('posts').update(update).eq('id', id);
+    if (!validId) return res.status(400).json({ error: 'Invalid id' });
+    let patchQuery = supabase.from('posts').update(update).eq('id', validId);
     if (req.workspaceId) patchQuery = patchQuery.eq('workspace_id', req.workspaceId);
     const { error } = await patchQuery;
     if (error) console.error('Status update error:', error.message);
@@ -2756,13 +2805,14 @@ app.get('/api/queue', ...dashboardAuth, async (req, res) => {
 
 // Cancel a single task
 app.post('/api/tasks/:id/cancel', ...dashboardAuth, async (req, res) => {
-    const { id } = req.params;
+    const id = normalizeDbId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid id' });
     const { error } = await scopeToWorkspace(supabase
         .from('posts')
         .update({ status: 'CANCELLED', failure_reason: 'ביטול ידני' })
         .eq('id', id)
         .in('status', ['PENDING']), req);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return dbFailure(res, 'cancel task', error);
     logEvent(req.workspaceId, id, 'CANCELLED', 'Task manually cancelled', { reason: 'ביטול ידני' });
     await persistTenantSystemLog(supabase, req.workspaceId, {
         log_level: 'warn', source: 'dashboard', message: `Task #${id} manually cancelled`,
@@ -2811,24 +2861,27 @@ async function auditBulkDelete(req, level, detail) {
 
 app.post('/api/tasks/bulk-delete', ...dashboardAuth, async (req, res) => {
     const { ids } = req.body || {};
-    if (!Array.isArray(ids) || ids.length === 0) {
-        await auditBulkDelete(req, 'warn', 'outcome=rejected reason=invalid_ids');
-        return res.status(400).json({ error: 'Missing ids' });
-    }
-    if (ids.length > MAX_BULK_DELETE) {
+    // Validates length and every element before anything reaches PostgREST. A
+    // batch containing one malformed id is a bad batch, not a batch to trim.
+    const parsed = normalizeDbIdList(ids, { max: MAX_BULK_DELETE });
+    if (!parsed.ok && parsed.reason === 'too_many') {
         // Only the count is recorded — the supplied ids are never logged.
-        await auditBulkDelete(req, 'warn', `outcome=rejected reason=batch_too_large requested_count=${ids.length}`);
+        await auditBulkDelete(req, 'warn', `outcome=rejected reason=batch_too_large requested_count=${parsed.count}`);
         return res.status(400).json({
             error: `Too many ids. Delete at most ${MAX_BULK_DELETE} tasks per request.`,
             max_batch: MAX_BULK_DELETE,
-            received: ids.length,
+            received: parsed.count,
         });
+    }
+    if (!parsed.ok) {
+        await auditBulkDelete(req, 'warn', 'outcome=rejected reason=invalid_ids');
+        return res.status(400).json({ error: 'Invalid ids' });
     }
     // .select('id') makes the delete report exactly which rows it removed, so the
     // audit count is the real post-scoping figure rather than the requested one.
     const { data, error } = await scopeToWorkspace(
-        supabase.from('posts').delete().in('id', ids).select('id'), req);
-    if (error) return res.status(500).json({ error: error.message });
+        supabase.from('posts').delete().in('id', parsed.ids).select('id'), req);
+    if (error) return dbFailure(res, 'bulk delete tasks', error);
     const deletedCount = Array.isArray(data) ? data.length : 0;
     await auditBulkDelete(req, 'warn', `outcome=success deleted_count=${deletedCount}`);
     emitWorkspaceRefresh(req.workspaceId, { queue: true });
@@ -2837,22 +2890,24 @@ app.post('/api/tasks/bulk-delete', ...dashboardAuth, async (req, res) => {
 
 // Update a task
 app.patch('/api/tasks/:id', ...dashboardAuth, async (req, res) => {
-    const { id } = req.params;
+    const id = normalizeDbId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid id' });
     const updates = { ...req.body };
     // Never allow the client to move a row between workspaces or reassign ownership.
     delete updates.workspace_id;
     delete updates.created_by;
     const { error } = await scopeToWorkspace(supabase.from('posts').update(updates).eq('id', id), req);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return dbFailure(res, 'update task', error);
     emitWorkspaceRefresh(req.workspaceId, { queue: true });
     res.json({ success: true });
 });
 
 // Delete a task
 app.delete('/api/tasks/:id', ...dashboardAuth, async (req, res) => {
-    const { id } = req.params;
+    const id = normalizeDbId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid id' });
     const { error } = await scopeToWorkspace(supabase.from('posts').delete().eq('id', id), req);
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) return dbFailure(res, 'delete task', error);
     emitWorkspaceRefresh(req.workspaceId, { queue: true });
     res.json({ success: true });
 });
