@@ -82,6 +82,7 @@ The extension keeps one `facebookActivityLock` record in
   "owner": "publishing | group_sync | engagement",
   "operationId": "owner-specific stable identifier",
   "jobId": null,
+  "scanId": null,
   "tabId": null,
   "acquiredAt": 0,
   "heartbeatAt": 0
@@ -105,6 +106,12 @@ can therefore recover the persisted operation identity after an MV3 restart;
 they never reconstruct an operation ID from a job ID. The claim request has a
 30-second abort timeout, and all no-job, network-failure and timeout paths stop
 the reservation heartbeat and release the pending lock.
+
+Engagement follows the same identity rule with `scanId`: it reserves the lock
+before claiming, attaches the backend-issued scan UUID before opening Facebook,
+and accepts batches only from the exact scan and owned tab. Group identity for
+ingest always comes from the validated server-resolved task, never from a
+content-script message.
 
 - Heartbeat interval: 30 seconds.
 - Stale threshold: 10 minutes, measured from `heartbeatAt`. Group sync has a
@@ -130,6 +137,26 @@ the reservation heartbeat and release the pending lock.
   recovered.
 - Engagement Phase 1B provides the `engagement` owner and pre-emption handler
   contract only. It does not claim scans, open tabs or parse Facebook DOM.
+
+### Phase 1C read-only scanner
+
+Phase 1C adds an isolated extension scanner under
+`safe_post_extension/engagement/`. `background.js` owns orchestration only:
+paired-worker claim, lock identity, one inactive Facebook tab, script injection,
+small result batches, status reporting and idempotent cleanup. The parser reads
+semantic article, anchor, text and time attributes without relying on generated
+Facebook class names.
+
+The controlled product limit is one server-resolved synced group and at most ten
+unique visible posts per run. Scrolling is bounded and posts are parsed as they
+appear, before Facebook can virtualize older DOM nodes away. The scanner never
+opens a composer, types, clicks, reacts, comments or publishes.
+
+Publishing pre-empts Engagement cooperatively. The scanner stops extraction,
+gets a bounded opportunity to flush its already-collected batch, reports
+`SCAN_PREEMPTED_BY_PUBLISH`, closes its owned tab and releases the exact lock.
+After an MV3 restart, a persisted Engagement tab is aborted and the scan is
+reported as `WORKER_DISCONNECTED` for safe retry; scroll position is not resumed.
 
 The publish cooldown keys remain separate and unchanged. Group sync and future
 engagement operations never write `last_post_timestamp`.
@@ -358,6 +385,8 @@ checkpoint is how an account gets restricted further.
 ```bash
 npm run test:engagement-dedup   # pure unit, no database
 npm run test:engagement         # two real tenants against a running backend
+npm run test:engagement-parser  # pure DOM parser fixtures
+npm run test:engagement-scanner # read-only scanner and MV3 lifecycle
 ```
 
 `test:engagement` requires the backend running with `ENGAGEMENT_ENABLED=true`,
@@ -366,3 +395,18 @@ and refuses to run against the production project.
 The fleet kill switch is exercised against an in-process Express app mounting the
 real router, because `server/index.cjs` hardcodes port 3001 and the flag is read
 from the server process's own environment.
+
+### Controlled manual Phase 1C procedure
+
+1. Enable `ENGAGEMENT_ENABLED=true` only in the QA backend and enable
+   `workspaces.engagement_enabled` for one beta QA workspace.
+2. Keep Publishing Dry Run enabled and pair one QA extension worker.
+3. Select one previously synced Facebook group and request at most ten posts.
+4. Trigger the scan manually and verify only one group tab opens.
+5. Verify no composer opens and no Facebook content is typed, clicked or written.
+6. Verify discovered posts arrive in small batches and appear in the QA database.
+7. During a second scan, trigger a Dry Run publish and verify Engagement reports
+   `SCAN_PREEMPTED_BY_PUBLISH`, closes its tab, releases the lock and lets
+   publishing acquire Facebook ownership.
+
+This procedure is intentionally not a high-volume or unattended scanner test.

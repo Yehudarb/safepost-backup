@@ -59,6 +59,14 @@
             return /^[1-9]\d*$/.test(value) ? value : null;
         }
 
+        function normalizeScanId(scanId) {
+            if (scanId == null) return null;
+            const value = String(scanId);
+            return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+                ? value.toLowerCase()
+                : null;
+        }
+
         function normalizeLock(value) {
             if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
             if (!VALID_OWNERS.has(value.owner)) return null;
@@ -67,6 +75,7 @@
                 owner: value.owner,
                 operationId: value.operationId,
                 jobId: normalizeJobId(value.jobId),
+                scanId: normalizeScanId(value.scanId),
                 tabId: Number.isInteger(value.tabId) && value.tabId > 0 ? value.tabId : null,
                 acquiredAt: Number(value.acquiredAt),
                 heartbeatAt: Number(value.heartbeatAt),
@@ -238,6 +247,7 @@
                         owner,
                         operationId,
                         jobId: null,
+                        scanId: null,
                         tabId: null,
                         acquiredAt: timestamp,
                         heartbeatAt: timestamp,
@@ -304,6 +314,23 @@
                 const verified = await readLock();
                 return sameIdentity(verified, owner, operationId) &&
                     verified.jobId === normalizedJobId;
+            });
+        }
+
+        async function attachFacebookActivityScan(owner, operationId, scanId) {
+            validateIdentity(owner, operationId);
+            if (owner !== FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT) return false;
+            const normalizedScanId = normalizeScanId(scanId);
+            if (!normalizedScanId) return false;
+            return serializeMutation(async () => {
+                const current = await readLock();
+                if (!sameIdentity(current, owner, operationId)) return false;
+                if (current.scanId != null && current.scanId !== normalizedScanId) return false;
+                const updated = { ...current, scanId: normalizedScanId, heartbeatAt: now() };
+                await storage.writeFacebookActivityLock(updated);
+                const verified = await readLock();
+                return sameIdentity(verified, owner, operationId) &&
+                    verified.scanId === normalizedScanId;
             });
         }
 
@@ -465,6 +492,7 @@
             refreshFacebookActivityLock,
             attachFacebookActivityTab,
             attachFacebookActivityJob,
+            attachFacebookActivityScan,
             releaseFacebookActivityLock,
             isFacebookActivityBusy,
             isFacebookActivityLockStale,

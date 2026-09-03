@@ -34,7 +34,9 @@
     "test:engagement-dedup": "node tests/phase19-dedup.test.cjs",
     "test:facebook-lock": "node tests/phase20-facebook-activity-lock.test.cjs",
     "test:facebook-lock-hardening": "node tests/phase21-facebook-lock-hardening.test.cjs",
-    "test:facebook-lock-identity": "node tests/phase22-publishing-lock-identity.test.cjs"
+    "test:facebook-lock-identity": "node tests/phase22-publishing-lock-identity.test.cjs",
+    "test:engagement-parser": "node tests/phase23-engagement-post-parser.test.cjs",
+    "test:engagement-scanner": "node tests/phase24-engagement-scanner.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

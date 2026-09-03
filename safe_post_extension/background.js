@@ -2,7 +2,14 @@ console.log("[Background] Service Worker v9.1 — Multi-anchor name extraction (
 
 // Load extension storage, the shared Facebook mutex and external-sender
 // validation utilities. The lock module depends on ExtStorage, so order matters.
-importScripts('extensionStorage.js', 'facebookActivityLock.js', 'externalMessageTrust.js');
+importScripts(
+    'extensionStorage.js',
+    'facebookActivityLock.js',
+    'externalMessageTrust.js',
+    'engagement/navigation.js',
+    'engagement/postParser.js',
+    'engagement/scanner.js'
+);
 
 const FacebookActivity = globalThis.SafePostFacebookActivityLock;
 const {
@@ -10,15 +17,21 @@ const {
     FACEBOOK_ACTIVITY_HEARTBEAT_MS,
     FACEBOOK_ACTIVITY_PREEMPT_WAIT_MS,
 } = globalThis.SafePostFacebookActivityLockFactory;
-const facebookActivityReady = FacebookActivity.reconcileFacebookActivityLock({
-    recoverOrphanedGroupSync: true,
-}).catch(error => {
+const facebookActivityReady = (async () => {
+    await FacebookActivity.reconcileFacebookActivityLock({ recoverOrphanedGroupSync: true });
+    await reconcileOrphanedEngagementActivity();
+    return { recovered: true };
+})().catch(error => {
     console.warn('[Background] Facebook activity startup reconciliation failed:', error?.message || error);
     return { recovered: false, reason: 'reconciliation-error' };
 });
 
 const API_PORT = 3001;
 const PUBLISH_CLAIM_TIMEOUT_MS = 30 * 1000;
+const ENGAGEMENT_REQUEST_TIMEOUT_MS = 10 * 1000;
+const ENGAGEMENT_PREEMPT_FLUSH_MS = 2 * 1000;
+const ENGAGEMENT_SCAN_TIMEOUT_MS = 45 * 1000;
+const ENGAGEMENT_UNAVAILABLE_BACKOFF_MS = 5 * 60 * 1000;
 // Default backend URL — production, so a fresh install works with zero setup.
 // Overridden at runtime by the value saved in the extension settings popup
 // (chrome.storage.local 'apiUrl'), e.g. to http://localhost:3001 for local
@@ -129,16 +142,16 @@ setupAlarm();
 // Poll IMMEDIATELY on every service worker start
 setTimeout(() => {
     console.log("[Background] Startup immediate poll...");
-    checkJobs();
+    pollAvailableWork();
     sendHeartbeat();
 }, 500);
 
 chrome.runtime.onInstalled.addListener(() => {
     chrome.alarms.clear('jobPoller', () => setupAlarm());
-    checkJobs();
+    pollAvailableWork();
     sendHeartbeat();
 });
-chrome.runtime.onStartup.addListener(() => { setupAlarm(); checkJobs(); sendHeartbeat(); });
+chrome.runtime.onStartup.addListener(() => { setupAlarm(); pollAvailableWork(); sendHeartbeat(); });
 
 // 2. Alarm Listener — the single handler for 'jobPoller'.
 // There used to be a second onAlarm listener further down this file that also
@@ -147,7 +160,7 @@ chrome.runtime.onStartup.addListener(() => { setupAlarm(); checkJobs(); sendHear
 chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name === 'jobPoller') {
         console.log(`[Background] Alarm fired at ${new Date().toLocaleTimeString()}`);
-        checkJobs();
+        pollAvailableWork();
         sendHeartbeat();
         checkWatchdog();
     }
@@ -200,6 +213,10 @@ async function connectSSE() {
                 else if (data.type === 'job_available') {
                     recordContact();
                     checkJobs({ preemptLowerPriority: true });
+                }
+                else if (data.type === 'engagement_scan_available') {
+                    recordContact();
+                    checkEngagementScans();
                 }
                 else if (data.type === 'sync_groups') {
                     console.log("[Background] sync_groups received via SSE — starting scan...");
@@ -315,6 +332,8 @@ async function acquirePublishingActivity(operationId, preemptLowerPriority = fal
 chrome.tabs.onRemoved.addListener((tabId) => {
     finishPublishingActivity(null, tabId)
         .catch(error => console.warn('[Background] Publishing tab cleanup failed:', error?.message || error));
+    handleEngagementTabRemoved(tabId)
+        .catch(error => console.warn('[Background] Engagement tab cleanup failed:', error?.message || error));
 });
 
 async function claimPublishingJob(pairing) {
@@ -491,6 +510,459 @@ async function checkJobs({ preemptLowerPriority = false } = {}) {
     }
 }
 
+// Engagement Phase 1C is an independent, read-only worker path. Publishing is
+// always polled first; Engagement reserves the shared Facebook lock before its
+// backend claim, so activity contention cannot consume a scan attempt.
+let isEngagementPolling = false;
+let engagementUnavailableUntil = 0;
+let activeEngagementActivity = null;
+const engagementOwnedTabClosures = new Set();
+
+async function pollAvailableWork() {
+    await checkJobs();
+    await checkEngagementScans();
+}
+
+async function engagementRequest(pairing, path, {
+    method = 'POST',
+    body,
+    timeoutMs = ENGAGEMENT_REQUEST_TIMEOUT_MS,
+    signal,
+} = {}) {
+    const controller = new AbortController();
+    const forwardAbort = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener('abort', forwardAbort, { once: true });
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        return await fetch(`${BASE_URL}/api/engagement${path}`, {
+            method,
+            headers: {
+                ...workerHeaders(pairing),
+                ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+            },
+            body: body === undefined ? undefined : JSON.stringify(body),
+            signal: controller.signal,
+        });
+    } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener('abort', forwardAbort);
+    }
+}
+
+function sendEngagementTabMessage(tabId, message, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            reject(new Error('Engagement tab message timed out.'));
+        }, timeoutMs);
+        try {
+            chrome.tabs.sendMessage(tabId, message, response => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                if (chrome.runtime.lastError) {
+                    reject(new Error(chrome.runtime.lastError.message));
+                    return;
+                }
+                resolve(response);
+            });
+        } catch (error) {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            reject(error);
+        }
+    });
+}
+
+async function waitForEngagementTabLoad(activity) {
+    const tab = await chrome.tabs.get(activity.tabId);
+    if (tab?.status === 'complete') return tab;
+    return new Promise((resolve, reject) => {
+        const finish = (error, value) => {
+            if (activity.loadTimer) clearTimeout(activity.loadTimer);
+            if (activity.loadListener) chrome.tabs.onUpdated.removeListener(activity.loadListener);
+            activity.loadTimer = null;
+            activity.loadListener = null;
+            if (error) reject(error); else resolve(value);
+        };
+        activity.loadListener = (tabId, info, updatedTab) => {
+            if (tabId === activity.tabId && info.status === 'complete') finish(null, updatedTab);
+        };
+        activity.loadTimer = setTimeout(() => {
+            const error = new Error('Engagement group page load timed out.');
+            error.code = 'PAGE_LOAD_TIMEOUT';
+            finish(error);
+        }, ENGAGEMENT_SCAN_TIMEOUT_MS);
+        chrome.tabs.onUpdated.addListener(activity.loadListener);
+    });
+}
+
+async function reportEngagementStatus(activity, outcome, timeoutMs = ENGAGEMENT_REQUEST_TIMEOUT_MS) {
+    if (!activity.scanId || !activity.pairing || !outcome?.status) return false;
+    const response = await engagementRequest(activity.pairing, `/scans/${activity.scanId}/status`, {
+        body: {
+            status: outcome.status,
+            error_code: outcome.errorCode || null,
+            failure_reason: outcome.reason || null,
+            groups_scanned: outcome.groupsScanned || 0,
+        },
+        timeoutMs,
+    });
+    return response.ok;
+}
+
+async function finishEngagementActivity(operationId, outcome = {}) {
+    const activity = activeEngagementActivity;
+    if (!activity || activity.operationId !== operationId) return false;
+    if (activity.finishing) return activity.finishing;
+
+    activity.finishing = (async () => {
+        if (outcome.abortScanner && activity.tabId != null) {
+            activity.acceptingFinalBatch = true;
+            await sendEngagementTabMessage(
+                activity.tabId,
+                { action: 'ABORT_ENGAGEMENT_SCAN', reason: outcome.errorCode || 'SCAN_ABORTED' },
+                750
+            ).catch(() => null);
+            if (activity.scanPromise) {
+                await Promise.race([
+                    activity.scanPromise.catch(() => null),
+                    new Promise(resolve => setTimeout(resolve, ENGAGEMENT_PREEMPT_FLUSH_MS)),
+                ]);
+            }
+            activity.acceptingFinalBatch = false;
+        }
+
+        activity.controller.abort();
+        if (activity.loadTimer) clearTimeout(activity.loadTimer);
+        if (activity.loadListener) chrome.tabs.onUpdated.removeListener(activity.loadListener);
+        if (activity.unregisterPreemption) activity.unregisterPreemption();
+        activity.stopHeartbeat();
+
+        if (outcome.status && activity.scanId) {
+            await reportEngagementStatus(
+                activity,
+                outcome,
+                outcome.errorCode === 'SCAN_PREEMPTED_BY_PUBLISH' ? 1500 : ENGAGEMENT_REQUEST_TIMEOUT_MS
+            ).catch(error => console.warn('[Engagement] Status report failed:', error?.message || error));
+        }
+
+        const tabId = activity.tabId;
+        activity.tabId = null;
+        let tabClosed = true;
+        if (tabId != null && !outcome.tabAlreadyClosed) {
+            engagementOwnedTabClosures.add(tabId);
+            try {
+                await chrome.tabs.remove(tabId);
+            } catch (error) {
+                engagementOwnedTabClosures.delete(tabId);
+                tabClosed = /no tab|not found|invalid tab/i.test(String(error?.message || error));
+                if (!tabClosed) {
+                    console.warn('[Engagement] Owned tab could not be closed; lock remains held.');
+                }
+            }
+        }
+        if (activeEngagementActivity === activity) activeEngagementActivity = null;
+        if (!tabClosed) return false;
+        await FacebookActivity.releaseFacebookActivityLock(
+            FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT,
+            operationId
+        );
+        return true;
+    })();
+    return activity.finishing;
+}
+
+async function inspectEngagementGroupPage(tabId, expectedUrl) {
+    const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: expected => {
+            const state = globalThis.SafePostFB?.detectFacebookState(document) || {
+                ok: false,
+                errorCode: 'PARSER_NO_STRATEGY_MATCHED',
+            };
+            return globalThis.SafePostEngagementNavigation.classifyGroupPage({
+                expectedUrl: expected,
+                currentUrl: location.href,
+                facebookState: state,
+                bodyText: document.body?.textContent || '',
+            });
+        },
+        args: [expectedUrl],
+    });
+    return results?.[0]?.result || { ok: false, errorCode: 'PARSER_NO_STRATEGY_MATCHED' };
+}
+
+async function runEngagementScan(activity, validated) {
+    try {
+        const tab = await chrome.tabs.create({ url: validated.group.url, active: false });
+        if (!tab?.id || activeEngagementActivity !== activity || activity.finishing) {
+            if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
+            return;
+        }
+        const attached = await FacebookActivity.attachFacebookActivityTab(
+            FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT,
+            activity.operationId,
+            tab.id
+        );
+        if (!attached) {
+            await chrome.tabs.remove(tab.id).catch(() => {});
+            throw new Error('Engagement tab could not be attached to its Facebook activity lock.');
+        }
+        activity.tabId = tab.id;
+        await waitForEngagementTabLoad(activity);
+        if (activity.finishing) return;
+
+        await chrome.scripting.executeScript({
+            target: { tabId: activity.tabId },
+            files: [
+                'fbUtils.js',
+                'engagement/navigation.js',
+                'engagement/postParser.js',
+                'engagement/scanner.js',
+            ],
+        });
+        const pageState = await inspectEngagementGroupPage(activity.tabId, validated.group.url);
+        if (!pageState.ok) {
+            await finishEngagementActivity(activity.operationId, {
+                status: 'FAILED',
+                errorCode: pageState.errorCode,
+                reason: pageState.detail?.signal || 'Facebook group page unavailable.',
+                abortScanner: true,
+            });
+            return;
+        }
+
+        activity.scanPromise = sendEngagementTabMessage(activity.tabId, {
+            action: 'START_ENGAGEMENT_SCAN',
+            scanId: activity.scanId,
+            group: validated.group,
+            limit: validated.limit,
+        }, ENGAGEMENT_SCAN_TIMEOUT_MS);
+        const result = await activity.scanPromise;
+        if (activity.finishing) return;
+        if (!result?.success) {
+            await finishEngagementActivity(activity.operationId, {
+                status: 'FAILED',
+                errorCode: result?.errorCode || 'PARSER_NO_STRATEGY_MATCHED',
+                reason: result?.error || 'Engagement scanner stopped.',
+                groupsScanned: 0,
+                abortScanner: true,
+            });
+            return;
+        }
+        await finishEngagementActivity(activity.operationId, {
+            status: 'COMPLETED',
+            groupsScanned: 1,
+        });
+    } catch (error) {
+        if (activity.finishing) return;
+        await finishEngagementActivity(activity.operationId, {
+            status: 'FAILED',
+            errorCode: error?.code === 'PAGE_LOAD_TIMEOUT' ? 'PAGE_LOAD_TIMEOUT' : 'TEMPORARY_SERVER_ERROR',
+            reason: error?.message || String(error),
+            abortScanner: true,
+        });
+    }
+}
+
+async function checkEngagementScans() {
+    if (isEngagementPolling || activeEngagementActivity || Date.now() < engagementUnavailableUntil) return;
+    const pairing = await getPairing();
+    if (!pairing) return;
+    isEngagementPolling = true;
+    const operationId = facebookActivityOperationId(
+        FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT,
+        `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    );
+    try {
+        await facebookActivityReady;
+        const acquired = await FacebookActivity.acquireFacebookActivityLock(
+            FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT,
+            operationId
+        );
+        if (!acquired.acquired) return;
+
+        const activity = {
+            operationId,
+            scanId: null,
+            tabId: null,
+            pairing,
+            controller: new AbortController(),
+            stopHeartbeat: startFacebookActivityHeartbeat(FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT, operationId),
+            unregisterPreemption: null,
+            loadListener: null,
+            loadTimer: null,
+            scanPromise: null,
+            finishing: null,
+            acceptingFinalBatch: false,
+            group: null,
+        };
+        activeEngagementActivity = activity;
+        activity.unregisterPreemption = FacebookActivity.registerFacebookActivityPreemptionHandler(
+            FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT,
+            request => {
+                if (request.targetOperationId !== operationId) return false;
+                return finishEngagementActivity(operationId, {
+                    status: 'FAILED',
+                    errorCode: 'SCAN_PREEMPTED_BY_PUBLISH',
+                    reason: 'Publishing requested Facebook activity ownership.',
+                    abortScanner: true,
+                });
+            }
+        );
+
+        const response = await engagementRequest(pairing, '/scans/claim', { signal: activity.controller.signal });
+        recordContact();
+        if (response.status === 404) {
+            engagementUnavailableUntil = Date.now() + ENGAGEMENT_UNAVAILABLE_BACKOFF_MS;
+            await finishEngagementActivity(operationId);
+            return;
+        }
+        if (!response.ok) {
+            await finishEngagementActivity(operationId);
+            return;
+        }
+        const payload = await response.json();
+        if (!payload?.scan) {
+            await finishEngagementActivity(operationId);
+            return;
+        }
+        if (activity.finishing) return;
+
+        const scanAttached = await FacebookActivity.attachFacebookActivityScan(
+            FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT,
+            operationId,
+            payload.scan.id
+        );
+        if (!scanAttached) throw new Error('Claimed scan could not be attached to its Facebook activity lock.');
+        activity.scanId = String(payload.scan.id).toLowerCase();
+
+        const validated = globalThis.SafePostEngagementNavigation.validateEngagementScan(payload.scan);
+        if (!validated.ok) {
+            await finishEngagementActivity(operationId, {
+                status: 'ABORTED',
+                errorCode: validated.errorCode,
+                reason: validated.reason,
+            });
+            return;
+        }
+        activity.group = validated.group;
+        await runEngagementScan(activity, validated);
+    } catch (error) {
+        if (activeEngagementActivity?.operationId === operationId) {
+            await finishEngagementActivity(operationId, activeEngagementActivity.scanId ? {
+                status: 'FAILED',
+                errorCode: error?.name === 'AbortError' ? 'WORKER_DISCONNECTED' : 'TEMPORARY_SERVER_ERROR',
+                reason: error?.message || String(error),
+                abortScanner: true,
+            } : {});
+        }
+    } finally {
+        isEngagementPolling = false;
+    }
+}
+
+async function uploadEngagementBatch(request, sender) {
+    const activity = activeEngagementActivity;
+    if (!activity || (activity.finishing && !activity.acceptingFinalBatch) ||
+        String(request.scanId || '').toLowerCase() !== activity.scanId ||
+        sender.tab?.id !== activity.tabId) return { ok: false, error: 'Engagement activity identity mismatch.' };
+    if (!Array.isArray(request.posts) || request.posts.length < 1 || request.posts.length > 10) {
+        return { ok: false, error: 'Invalid Engagement batch.' };
+    }
+
+    const group = activity.group;
+    if (!group?.id) return { ok: false, error: 'Engagement group identity is unavailable.' };
+    const posts = request.posts.map(post => ({
+        facebook_group_id: group.id,
+        facebook_group_name: group.name || null,
+        facebook_post_id: post.facebookPostId || null,
+        facebook_post_url: post.facebookPostUrl || null,
+        author_name: post.authorName || null,
+        author_profile_url: post.authorProfileUrl || null,
+        post_text: post.postText || '',
+        posted_at: post.postedAt || null,
+        posted_at_raw: post.postedAtRaw || null,
+        is_truncated: post.isTruncated === true,
+        raw_metadata: post.rawMetadata || {},
+    }));
+    const response = await engagementRequest(activity.pairing, `/scans/${activity.scanId}/posts`, {
+        body: { posts },
+        signal: activity.controller.signal,
+    });
+    if (!response.ok) return { ok: false, error: `Engagement ingest HTTP ${response.status}` };
+    await FacebookActivity.refreshFacebookActivityLock(
+        FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT,
+        activity.operationId
+    );
+    return { ok: true, ...(await response.json().catch(() => ({}))) };
+}
+
+async function handleEngagementTabRemoved(tabId) {
+    if (engagementOwnedTabClosures.delete(tabId)) return;
+    const active = activeEngagementActivity;
+    if (active?.tabId === tabId) {
+        active.tabId = null;
+        await finishEngagementActivity(active.operationId, {
+            status: 'FAILED',
+            errorCode: 'WORKER_DISCONNECTED',
+            reason: 'Engagement tab was closed.',
+            tabAlreadyClosed: true,
+        });
+        return;
+    }
+    const persisted = await FacebookActivity.getFacebookActivityLock();
+    if (persisted?.owner === FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT && persisted.tabId === tabId) {
+        await finishPersistedEngagementActivity(persisted, 'Engagement tab closed after worker restart.');
+    }
+}
+
+async function finishPersistedEngagementActivity(lock, reason) {
+    if (!lock || lock.owner !== FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT) return false;
+    const pairing = await getPairing();
+    if (pairing && lock.scanId) {
+        await engagementRequest(pairing, `/scans/${lock.scanId}/status`, {
+            body: {
+                status: 'FAILED',
+                error_code: 'WORKER_DISCONNECTED',
+                failure_reason: reason,
+                groups_scanned: 0,
+            },
+            timeoutMs: 2000,
+        }).catch(() => null);
+    }
+    return FacebookActivity.releaseFacebookActivityLock(
+        FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT,
+        lock.operationId
+    );
+}
+
+async function reconcileOrphanedEngagementActivity() {
+    const lock = await FacebookActivity.getFacebookActivityLock();
+    if (!lock || lock.owner !== FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT) return false;
+    if (lock.tabId != null) {
+        try {
+            await chrome.tabs.get(lock.tabId);
+            await sendEngagementTabMessage(
+                lock.tabId,
+                { action: 'ABORT_ENGAGEMENT_SCAN', reason: 'WORKER_DISCONNECTED' },
+                500
+            ).catch(() => null);
+            engagementOwnedTabClosures.add(lock.tabId);
+            await chrome.tabs.remove(lock.tabId);
+        } catch (error) {
+            engagementOwnedTabClosures.delete(lock.tabId);
+            if (!/no tab|not found|invalid tab/i.test(String(error?.message || error))) throw error;
+        }
+    }
+    return finishPersistedEngagementActivity(lock, 'Service worker restarted during Engagement scan.');
+}
+
 // Safety Cooldown Check (3-Minute Delay)
 async function checkSafetyCooldown() {
     const last_post_timestamp = await ExtStorage.getCooldownTimestamp();
@@ -509,6 +981,27 @@ async function checkSafetyCooldown() {
 
 // 4. Unified Message Listener
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'ENGAGEMENT_SCAN_BATCH') {
+        uploadEngagementBatch(request, sender)
+            .then(sendResponse)
+            .catch(error => sendResponse({ ok: false, error: error?.message || String(error) }));
+        return true;
+    }
+
+    if (request.action === 'ENGAGEMENT_SCAN_PROGRESS') {
+        const activity = activeEngagementActivity;
+        if (!activity || activity.finishing || sender.tab?.id !== activity.tabId ||
+            String(request.scanId || '').toLowerCase() !== activity.scanId) {
+            sendResponse({ ok: false });
+            return false;
+        }
+        FacebookActivity.refreshFacebookActivityLock(
+            FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT,
+            activity.operationId
+        ).then(ok => sendResponse({ ok })).catch(() => sendResponse({ ok: false }));
+        return true;
+    }
+
     if (request.action === 'JOB_COMPLETE' || request.action === 'CLOSE_TAB') {
         const missionId = request.missionId || "Unknown";
         console.log(`[BG] Received ${request.action} for tab ${sender.tab?.id}`);
