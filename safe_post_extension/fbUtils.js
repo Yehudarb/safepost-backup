@@ -63,13 +63,46 @@
         return { state, strategy, matchedSignal, signal: strategy, ...extra };
     }
 
+    // Elements whose text is Facebook's own chrome rather than somebody's post.
+    // Scanning ONLY these would miss a real interstitial: Facebook renders
+    // security screens in plain divs at least as often as in a dialog or a
+    // heading, and an allowlist of ARIA roles let those through as "ok" — which
+    // for the publish path means retrying against a security screen.
+    //
+    // Scanning the whole document is the other failure: `body.textContent`
+    // concatenates <script>, <style> and hidden nodes, which is what produced the
+    // captcha-text false positive. So the rule is neither "any text" nor "these
+    // roles" — it is VISIBLE text that is not user-generated content.
+    const NON_TEXT_TAGS = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'SVG', 'IFRAME']);
+    // A post or comment quoting "security check" is ordinary content, not a
+    // challenge. Facebook marks both with role=article inside role=feed.
+    const USER_CONTENT_SELECTOR = '[role="article"], [role="feed"], [role="textbox"], [contenteditable="true"]';
+
+    function isUserGeneratedContent(el) {
+        return Boolean(el && el.closest && el.closest(USER_CONTENT_SELECTOR));
+    }
+
+    // Leaf-ish visible elements: a node whose own text is short enough to be a
+    // label rather than a page dump. Walking leaves keeps the per-node text small
+    // without needing to read the whole body.
     function visibleSecuritySurfaces(root) {
         if (!root.querySelectorAll) return [];
-        return Array.from(root.querySelectorAll([
-            '[role="dialog"]', '[role="alert"]', '[role="status"]',
-            'form[action*="captcha" i]', 'form[action*="checkpoint" i]',
-            'h1', 'h2', '[role="heading"]',
-        ].join(','))).filter(isStructurallyVisible);
+        const surfaces = [];
+        const candidates = root.querySelectorAll(
+            'div, span, p, h1, h2, h3, li, td, label, strong, b, a, button, ' +
+            '[role="dialog"], [role="alert"], [role="status"], [role="heading"], ' +
+            'form[action*="captcha" i], form[action*="checkpoint" i]'
+        );
+        for (const el of candidates) {
+            if (NON_TEXT_TAGS.has(el.tagName)) continue;
+            if (!isStructurallyVisible(el)) continue;
+            if (isUserGeneratedContent(el)) continue;
+            surfaces.push(el);
+            // Bounded: a security interstitial announces itself near the top of
+            // the page, and this keeps a large feed from being walked in full.
+            if (surfaces.length >= 400) break;
+        }
+        return surfaces;
     }
     function isEnabled(el) {
         if (!el) return false;
@@ -205,10 +238,21 @@
         for (const surface of visibleSecuritySurfaces(root)) {
             const text = norm(surface.textContent || surface.getAttribute?.('aria-label'));
             if (!text || text.length > 300) continue;
+            // "Security check" as Facebook's own challenge heading. Requiring it
+            // to be paired with "complete" meant a real interstitial reading only
+            // "Security check" was classified ok.
+            //
+            // It must LEAD the label, not merely appear in it: "Security check"
+            // and "Security check required" are the screen, while "Learn about
+            // security checks" is a help link and must not block anything.
+            const startsWith = phrase => text === phrase || text.startsWith(phrase + ' ');
+            const standaloneSecurityCheck =
+                startsWith('security check') || startsWith('\u05d1\u05d3\u05d9\u05e7\u05ea \u05d0\u05d1\u05d8\u05d7\u05d4');
             const strongPhrase = text.includes('i am not a robot') ||
                 text.includes('\u05d0\u05e0\u05d9 \u05dc\u05d0 \u05e8\u05d5\u05d1\u05d5\u05d8') ||
                 text.includes('\u05d4\u05e9\u05dc\u05dd \u05d0\u05ea \u05d1\u05d3\u05d9\u05e7\u05ea \u05d4\u05d0\u05d1\u05d8\u05d7\u05d4') ||
                 text === 'captcha' ||
+                standaloneSecurityCheck ||
                 (text.includes('complete') && text.includes('security check')) ||
                 (text.includes('enter') && (text.includes('characters you see') || text.includes('code shown')));
             if (strongPhrase) {
@@ -226,9 +270,19 @@
         for (const surface of visibleSecuritySurfaces(root)) {
             const text = norm(surface.textContent || surface.getAttribute?.('aria-label'));
             if (!text || text.length > 300) continue;
-            if (text.includes('confirm your identity') || text.includes("we need to confirm it's you") ||
-                text.includes('\u05d0\u05e9\u05e8 \u05d0\u05ea \u05d6\u05d4\u05d5\u05ea\u05da') ||
-                text.includes('\u05e0\u05d3\u05e8\u05e9 \u05d0\u05d9\u05de\u05d5\u05ea')) {
+            // "checkpoint" in a short label is Facebook's own wording for the
+            // screen. Bounded by length so it reads a UI label rather than a
+            // sentence, and user content is already excluded upstream.
+            const checkpointLabel = text.length <= 60 && text.includes('checkpoint');
+            // Explicit identity-challenge phrases only. Deliberately no clever
+            // word combinations: a heuristic here would reintroduce exactly the
+            // class of false positive that stopped the first live QA.
+            if (checkpointLabel ||
+                text.includes('confirm your identity') || text.includes('verify your identity') ||
+                text.includes("we need to confirm it's you") ||
+                text.includes('we need to confirm its you') ||
+                text.includes('\u05d0\u05e9\u05e8 \u05d0\u05ea \u05d6\u05d4\u05d5\u05ea\u05da') || text.includes('\u05d0\u05de\u05ea \u05d0\u05ea \u05d6\u05d4\u05d5\u05ea\u05da') ||
+                text.includes('\u05e0\u05d3\u05e8\u05e9 \u05d0\u05d9\u05de\u05d5\u05ea') || text.includes('\u05e2\u05dc\u05d9\u05e0\u05d5 \u05dc\u05d5\u05d5\u05d3\u05d0 \u05e9\u05d6\u05d4 \u05d0\u05ea\u05d4')) {
                 return { checkpoint: true, ...stateDiagnostic('checkpoint', 'visible_checkpoint_text', 'identity_confirmation_phrase') };
             }
         }

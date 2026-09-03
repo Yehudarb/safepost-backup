@@ -99,6 +99,20 @@ async function audit(workspaceId, event, detail = '') {
     }
 }
 
+// Explicit column list for DASHBOARD responses.
+//
+// facebook_user_id is deliberately absent. It is a real Facebook account
+// identifier used for internal consistency checks; the dashboard has no need
+// for it, and select('*') was returning it on every scan listing and detail
+// fetch. Worker routes still receive it, because the extension must compare it.
+const DASHBOARD_SCAN_FIELDS = [
+    'id', 'workspace_id', 'created_by', 'name', 'status',
+    'target_groups', 'search_instructions', 'max_groups', 'max_posts_per_group',
+    'facebook_user', 'worker_id', 'claimed_at', 'lock_expires_at',
+    'attempt_count', 'max_attempts', 'error_code', 'failure_reason',
+    'groups_scanned', 'posts_discovered', 'created_at', 'started_at', 'completed_at',
+].join(', ');
+
 const invalidId = (res) => res.status(400).json({ error: 'Invalid id' });
 
 function isMissingFacebookIdentityColumn(error) {
@@ -114,7 +128,7 @@ function isMissingFacebookIdentityColumn(error) {
 router.get('/scans', ...dashboardAuth, requireEngagementEnabled, async (req, res) => {
     const { data, error } = await scopeToWorkspace(
         supabase.from('engagement_scan_tasks')
-            .select('*')
+            .select(DASHBOARD_SCAN_FIELDS)
             .order('created_at', { ascending: false })
             .limit(MAX_PAGE_SIZE),
         req,
@@ -193,25 +207,45 @@ router.post('/scans', ...dashboardAuth, denyDemo, requireEngagementEnabled, asyn
 
     if (groupError) return dbFailure(res, 'resolve engagement groups', groupError);
 
-    const resolved = groups || [];
-    if (resolved.length !== groupIds.length) {
+    // Resolve BY GROUP ID rather than by row count. Migration 0014 makes a
+    // second row per (workspace_id, id) impossible, but counting rows was the
+    // wrong test even so: if duplicates ever exist, `resolved.length !==
+    // groupIds.length` reports "not found" for groups that were found twice,
+    // which is both misleading and unfixable by the user.
+    const byGroupId = new Map();
+    for (const group of groups || []) {
+        const existing = byGroupId.get(group.id);
+        // Deterministic collapse: a row carrying a verified account id wins, so
+        // the choice does not depend on row order.
+        if (!existing || (!existing.facebook_user_id && group.facebook_user_id)) {
+            byGroupId.set(group.id, group);
+        }
+    }
+
+    const missing = groupIds.filter(id => !byGroupId.has(id));
+    if (missing.length) {
         // Deliberately does not name which ids were missing: that would let a
         // caller probe which group ids exist in other workspaces.
         return res.status(400).json({
             error: 'One or more groups were not found in this workspace.',
             requested: groupIds.length,
-            resolved: resolved.length,
+            resolved: byGroupId.size,
         });
     }
+    const resolved = groupIds.map(id => byGroupId.get(id));
 
     const stableIds = [...new Set(resolved
         .map(group => typeof group.facebook_user_id === 'string' ? group.facebook_user_id.trim() : '')
         .filter(id => /^\d{3,30}$/.test(id)))];
     if (stableIds.length > 1) {
+        // Two verified accounts in one selection is a real conflict, not
+        // something to resolve silently.
         return res.status(409).json({
             error: 'Selected groups do not share one verified Facebook account. Sync the groups again before scanning.',
         });
     }
+    // A selection mixing one verified id with not-yet-bound groups keeps that id:
+    // the scan must match it, and the unbound rows are upgraded to it afterwards.
     const facebookUserId = stableIds[0] || null;
 
     const insert = {
@@ -229,7 +263,7 @@ router.post('/scans', ...dashboardAuth, denyDemo, requireEngagementEnabled, asyn
     const { data: created, error: insertError } = await supabase
         .from('engagement_scan_tasks')
         .insert(insert)
-        .select('*')
+        .select(DASHBOARD_SCAN_FIELDS)
         .single();
 
     if (insertError) return dbFailure(res, 'create engagement scan', insertError);
@@ -246,7 +280,7 @@ router.get('/scans/:id', ...dashboardAuth, requireEngagementEnabled, async (req,
     if (!id) return invalidId(res);
 
     const { data, error } = await scopeToWorkspace(
-        supabase.from('engagement_scan_tasks').select('*').eq('id', id), req,
+        supabase.from('engagement_scan_tasks').select(DASHBOARD_SCAN_FIELDS).eq('id', id), req,
     ).maybeSingle();
 
     if (error) return dbFailure(res, 'fetch engagement scan', error);
@@ -394,6 +428,102 @@ router.post('/scans/:id/status', requireWorker, requireEngagementEnabled, async 
     }
 
     res.json({ success: true, status: result.status, retried: Boolean(result.retried) });
+});
+
+// Bind the verified Facebook account id to a scan and to the groups it targets.
+//
+// This is the one-time upgrade path for datasets synced before migration 0013,
+// which have no stored account id. The extension reads the live c_user from the
+// group page it already opened and reports it here.
+//
+// The BACKEND stays authoritative. The extension supplies an observation, not a
+// decision: the workspace comes from the verified device token, the scan must
+// belong to it, only the groups that scan targets are touched, and an existing
+// verified id is never overwritten — a different one is a conflict, because two
+// accounts claiming the same group means something is wrong that a write would
+// hide rather than fix.
+router.post('/scans/:id/bind-identity', requireWorker, requireEngagementEnabled, async (req, res) => {
+    const id = normalizeUuid(req.params.id);
+    if (!id) return invalidId(res);
+
+    const raw = req.body?.facebook_user_id;
+    const facebookUserId = typeof raw === 'string' || typeof raw === 'number' ? String(raw).trim() : '';
+    if (!/^\d{3,30}$/.test(facebookUserId)) {
+        return res.status(400).json({ error: 'Invalid facebook_user_id' });
+    }
+
+    const { data: scan, error: scanError } = await supabase
+        .from('engagement_scan_tasks')
+        .select('id, status, worker_id, facebook_user_id, target_groups')
+        .eq('id', id)
+        .eq('workspace_id', req.workspaceId)
+        .maybeSingle();
+
+    if (scanError) return dbFailure(res, 'bind engagement identity', scanError);
+    if (!scan) return res.status(404).json({ error: 'Scan not found.' });
+    // Only the worker holding the lease may bind, and only while it is running.
+    if (scan.worker_id && scan.worker_id !== req.worker.id) {
+        return res.status(404).json({ error: 'Scan not found.' });
+    }
+    if (scan.status !== 'RUNNING') {
+        return res.status(409).json({ error: 'Scan is not running.' });
+    }
+
+    if (scan.facebook_user_id && scan.facebook_user_id !== facebookUserId) {
+        return res.status(409).json({
+            error: 'Scan is already bound to a different Facebook account.',
+        });
+    }
+
+    const targetGroupIds = Array.isArray(scan.target_groups)
+        ? scan.target_groups
+            .map(group => (typeof group?.id === 'string' || typeof group?.id === 'number' ? String(group.id).trim() : ''))
+            .filter(Boolean)
+        : [];
+    if (!targetGroupIds.length) {
+        return res.status(409).json({ error: 'Scan has no resolvable target groups.' });
+    }
+
+    // Refuse if any targeted group already carries a DIFFERENT verified account.
+    const { data: groups, error: groupError } = await supabase
+        .from('groups')
+        .select('id, facebook_user_id')
+        .eq('workspace_id', req.workspaceId)
+        .in('id', targetGroupIds);
+    if (groupError) return dbFailure(res, 'bind engagement identity groups', groupError);
+
+    const conflicting = (groups || []).filter(group =>
+        group.facebook_user_id && group.facebook_user_id !== facebookUserId);
+    if (conflicting.length) {
+        return res.status(409).json({
+            error: 'One or more groups are already bound to a different Facebook account.',
+        });
+    }
+
+    // Fill only the empty ones. `.is('facebook_user_id', null)` keeps this from
+    // ever rewriting a verified value, even under a concurrent bind.
+    const { data: boundGroups, error: bindGroupsError } = await supabase
+        .from('groups')
+        .update({ facebook_user_id: facebookUserId })
+        .eq('workspace_id', req.workspaceId)
+        .in('id', targetGroupIds)
+        .is('facebook_user_id', null)
+        .select('id');
+    if (bindGroupsError) return dbFailure(res, 'bind engagement identity groups write', bindGroupsError);
+
+    const { error: bindScanError } = await supabase
+        .from('engagement_scan_tasks')
+        .update({ facebook_user_id: facebookUserId })
+        .eq('id', id)
+        .eq('workspace_id', req.workspaceId)
+        .is('facebook_user_id', null);
+    if (bindScanError) return dbFailure(res, 'bind engagement identity scan write', bindScanError);
+
+    // The account id itself is never logged — only how many rows were upgraded.
+    await audit(req.workspaceId, 'ENGAGEMENT_IDENTITY_BOUND',
+        `scan=${id} groups=${Array.isArray(boundGroups) ? boundGroups.length : 0}`);
+
+    res.json({ success: true, bound_groups: Array.isArray(boundGroups) ? boundGroups.length : 0 });
 });
 
 module.exports = router;

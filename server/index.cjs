@@ -926,7 +926,7 @@ app.post('/api/groups', ...dashboardAuth, async (req, res) => {
             url: g.url,
             facebook_user: g.facebook_user || '',
             ...workspaceFields(req)
-        })), { onConflict: 'workspace_id,facebook_user,id' });
+        })), { onConflict: 'workspace_id,id' });
 
     if (error) return res.status(500).json({ error: error.message });
     res.json({ success: true, count: groups.length });
@@ -1071,9 +1071,18 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
         .in('id', dedupedGroups.map(g => g.id));
     const existingNameById = new Map((existingRows || []).map(r => [r.id, r.name]));
 
-    // Upsert only THIS user's rows. onConflict targets the composite key, so a
-    // group already owned by a DIFFERENT user is never touched — it gets its own
-    // row for this user instead of overwriting the other account's copy.
+    // A Facebook group is ONE row per workspace, keyed (workspace_id, id).
+    //
+    // This used to conflict on (workspace_id, facebook_user, id). Because
+    // facebook_user is only the display label content.js detected at sync time,
+    // a label change — a renamed profile, a Page label, or the '' sentinel
+    // becoming a real name — inserted the same group a second time. Engagement
+    // then asked for one group id, resolved two rows, and answered
+    // 400 "One or more groups were not found", which is the opposite of the
+    // truth. Migration 0014 collapses any such rows and enforces uniqueness.
+    //
+    // The label still travels with the row and is updated in place, so the
+    // account attribution shown in the dashboard is unchanged.
     const toUpsert = dedupedGroups.map((g) => {
         const incomingIsPlaceholder = PLACEHOLDER_NAME.test(g.name || '');
         const existing = existingNameById.get(g.id);
@@ -1091,7 +1100,7 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
 
     let { error: upsertError } = await supabase
         .from('groups')
-        .upsert(toUpsert, { onConflict: 'workspace_id,facebook_user,id' });
+        .upsert(toUpsert, { onConflict: 'workspace_id,id' });
 
     // Safe rolling migration: an older database can continue syncing groups,
     // but those rows remain identity-unverified and Engagement will refuse to
@@ -1103,7 +1112,7 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
         const legacyRows = toUpsert.map(({ facebook_user_id: _ignored, ...row }) => row);
         ({ error: upsertError } = await supabase
             .from('groups')
-            .upsert(legacyRows, { onConflict: 'workspace_id,facebook_user,id' }));
+            .upsert(legacyRows, { onConflict: 'workspace_id,id' }));
     }
 
     if (upsertError) {

@@ -247,6 +247,72 @@ is logged in. The API and group sync both tolerate a database without `0013`
 applied, so deploying the code before the migration is safe — those datasets are
 simply unverifiable until it lands and a fresh sync stores the id.
 
+### Phase 1C.3 detector scope, group identity, legacy binding
+
+Independent review found that 1C.2 fixed the false positive by over-narrowing,
+and that its own remedy could break the thing it was meant to unblock.
+
+**Detector scope.** 1C.2 matched security text only inside `role=dialog|alert|
+status`, headings and captcha forms. Facebook renders interstitials in plain divs
+at least as often, so a real checkpoint read as OK — and because
+`findPostComposer()` then fails, the publish path classified it as
+`COMPOSER_NOT_READY`, which `queue.cjs` treats as **retryable**. Publishing would
+have retried against a security screen.
+
+The rule is now neither "any text" nor "these roles" but **visible text that is
+not user-generated**: `<script>`, `<style>`, `<template>`, hidden and
+`aria-hidden` nodes are excluded, and so is anything inside `role="article"`,
+`role="feed"`, `role="textbox"` or `contenteditable` — a post or comment quoting
+"security check" is content, not a challenge. Per-node text is capped, and the
+walk is bounded at 400 elements.
+
+Phrases stay explicit and deliberately un-clever: `security check` and
+`בדיקת אבטחה` must *lead* the label (so "Learn about security checks" does not
+block), `checkpoint` must appear in a short label, and identity phrases are
+matched literally in both languages.
+
+**Group identity.** `groups` conflicted on `(workspace_id, facebook_user, id)`.
+Since `facebook_user` is only a display label, a re-sync reporting a different
+name inserted the same group twice — and scan creation, which compared row
+counts, then answered `400 "One or more groups were not found"` for a group that
+had been found **twice**. Migration `0014` collapses any such rows (preferring the
+one with a verified account id, merging metadata, preserving `group_sets`, which
+reference Facebook group ids rather than row identities) and adds
+`unique (workspace_id, id)`. The upsert conflicts on `(workspace_id, id)`, and
+scan creation now resolves **by group id** rather than by counting.
+
+**Legacy identity binding — the fail-closed policy is withdrawn.** 1C.2 aborted
+every dataset whose `facebook_user_id` was null. That was 100% of existing groups
+(363 of 363 in QA), and absence of a stored id is not evidence of a wrong account.
+
+The policy now:
+
+| Stored id | Live `c_user` | Outcome |
+|---|---|---|
+| present | matches | proceed |
+| present | differs | `FACEBOOK_IDENTITY_MISMATCH`, abort |
+| **null** | **readable** | **bind it, then proceed** |
+| any | unreadable | `FACEBOOK_IDENTITY_UNVERIFIED`, abort |
+
+Binding goes through `POST /api/engagement/scans/:id/bind-identity`. The
+extension reports an observation; the **backend decides**: workspace comes from
+the verified device token, the scan must belong to it, only that scan's target
+groups are touched, `.is('facebook_user_id', null)` means an existing verified id
+can never be overwritten, and a different id is a `409` conflict — which the
+extension surfaces as a mismatch, not a retry. A selection mixing one verified id
+with unbound groups keeps that id and upgrades the unbound rows; two different
+verified ids are refused up front.
+
+**Cached vs fresh identity.** The pre-tab check reads `chrome.storage.local`,
+which may hold a previous session's account. It is now **advisory only** — it
+logs and continues. The authoritative check is the fresh `c_user` read through
+the content script on the loaded group page, before any scrolling, parsing or
+upload. A stale cache can no longer terminate a valid scan.
+
+**Account id exposure.** `GET /scans` and `/scans/:id` used `select('*')` and
+returned `facebook_user_id`. They now use an explicit column list that omits it.
+Worker routes still receive it, because the extension must compare it.
+
 ---
 
 ## Feature flags
@@ -538,3 +604,55 @@ If it aborts again on `CAPTCHA_REQUIRED`, the `strategy` field now says which
 structural signal fired — `visible_challenge_iframe`, `visible_challenge_container`,
 `visible_challenge_control`, `captcha_url` or `visible_challenge_text` — so a
 second false positive is diagnosable instead of opaque.
+
+### Live QA #2 checklist (Phase 1C.3)
+
+The 1C.2 prerequisites are **superseded**. A re-sync is no longer required, and
+was itself risky before `0014`.
+
+**Database — apply both migrations, in order:**
+
+```
+0013_engagement_facebook_identity.sql
+0014_group_identity_uniqueness.sql
+```
+
+`0014` must be applied before any re-sync, or a label change can still create a
+duplicate row. Verify afterwards:
+
+```sql
+-- must return zero rows
+select workspace_id, id, count(*) from public.groups
+ group by workspace_id, id having count(*) > 1;
+```
+
+**Groups.** No re-sync needed. `facebook_user_id` may be null — the first scan
+binds the live account automatically. If you *do* re-sync, `0014` keeps it to one
+row per group.
+
+**Account.** Log the browser into the account you intend to scan with. There is
+no id to match yet on a legacy dataset, so **whichever account is logged in at
+the first scan becomes the bound identity for those groups.** Check it before
+starting.
+
+**Verify the browser account without touching credentials:** open Facebook and
+let the extension report through `GET_FACEBOOK_USER`; read the id from the
+extension's own log. Never copy cookie values.
+
+**Run:** one workspace · one synced group · `max_posts_per_group = 10` · manual
+trigger · Publishing Dry Run ON · developer watching.
+
+**Watch:**
+
+| Signal | Expected |
+|---|---|
+| `system_logs` source `engagement` | `SCAN_CLAIMED` → `IDENTITY_BOUND` (legacy only) → `SCAN_COMPLETED` |
+| scan `failure_reason` if it aborts | `state=…;strategy=…;signal=…` — `strategy` names the exact signal |
+| `groups.facebook_user_id` after the run | populated for the scanned group |
+| `engagement_discovered_posts` | posts, not comments; `rawMetadata.articleScope = 'top-level'` |
+| Facebook tabs | exactly one, closed at the end; no composer at any point |
+
+**Stop immediately if:** a composer opens · a second Facebook tab appears ·
+discovered rows are comments · a publish job reports `COMPOSER_NOT_READY` while
+the page shows a security notice · `bound_groups` exceeds the number of groups in
+the scan.

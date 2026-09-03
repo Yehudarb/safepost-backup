@@ -567,6 +567,30 @@ async function evaluatePreScanFacebookIdentity(validated) {
     });
 }
 
+// One-time legacy upgrade: report the live account id so the backend can fill
+// the empty facebook_user_id on this scan and its target groups.
+//
+// The extension only reports what it observed. It cannot choose which rows are
+// touched, cannot overwrite an existing verified id, and cannot reach another
+// workspace — all of that is decided server-side from the device token.
+async function bindEngagementIdentity(activity, facebookUserId) {
+    if (!activity?.scanId || !activity.pairing) return { ok: false, signal: 'no_scan_context' };
+    try {
+        const response = await engagementRequest(
+            activity.pairing,
+            `/scans/${activity.scanId}/bind-identity`,
+            { body: { facebook_user_id: facebookUserId }, timeoutMs: ENGAGEMENT_REQUEST_TIMEOUT_MS }
+        );
+        if (response.ok) return { ok: true, signal: 'bound' };
+        // 409 means another account already owns these groups. That is a real
+        // mismatch, not a transient failure, so it must not be retried.
+        if (response.status === 409) return { ok: false, conflict: true, signal: 'backend_conflict' };
+        return { ok: false, signal: `backend_http_${response.status}` };
+    } catch (error) {
+        return { ok: false, signal: error?.name === 'AbortError' ? 'bind_timeout' : 'bind_failed' };
+    }
+}
+
 function identityAbortOutcome(result) {
     return {
         status: 'ABORTED',
@@ -784,21 +808,57 @@ async function runEngagementScan(activity, validated) {
             ],
         });
 
-        // A persisted id can prove an obvious mismatch before any tab opens.
-        // Re-read c_user through the newly loaded Facebook content script before
-        // page inspection or scrolling so an account switch cannot reuse stale
-        // extension storage.
+        // AUTHORITATIVE identity check. Read through the content script that just
+        // loaded with this page, so an account switch cannot hide behind cached
+        // extension storage. Runs before any scrolling, parsing or upload.
         const liveIdentity = await getFacebookIdentityFromTab(activity.tabId);
-        const liveIdentityResult = EngagementIdentity.evaluateFacebookIdentity({
-            expectedId: validated.facebookUserId,
-            expectedName: validated.facebookUser,
-            currentId: liveIdentity.id,
-            currentName: liveIdentity.name,
-            currentStrategy: 'active_facebook_tab_c_user',
-        });
-        if (!liveIdentityResult.ok) {
-            await finishEngagementActivity(activity.operationId, identityAbortOutcome(liveIdentityResult));
+        const liveId = EngagementIdentity.normalizeFacebookUserId(liveIdentity.id);
+
+        if (!liveId) {
+            // The only genuine "unverified": we could not read the current
+            // account at all. An empty column in the database is not that.
+            await finishEngagementActivity(activity.operationId, identityAbortOutcome(
+                EngagementIdentity.evaluateFacebookIdentity({
+                    expectedId: validated.facebookUserId,
+                    expectedName: validated.facebookUser,
+                    currentId: null,
+                    currentName: liveIdentity.name,
+                })
+            ));
             return;
+        }
+
+        if (validated.facebookUserId) {
+            const liveIdentityResult = EngagementIdentity.evaluateFacebookIdentity({
+                expectedId: validated.facebookUserId,
+                expectedName: validated.facebookUser,
+                currentId: liveId,
+                currentName: liveIdentity.name,
+                currentStrategy: 'active_facebook_tab_c_user',
+            });
+            if (!liveIdentityResult.ok) {
+                await finishEngagementActivity(activity.operationId, identityAbortOutcome(liveIdentityResult));
+                return;
+            }
+        } else {
+            // Legacy dataset: synced before the account id was stored. The live
+            // session is the only evidence available and it is trustworthy — it
+            // came from the page we just opened — so bind it and continue rather
+            // than refusing every pre-0013 workspace. The BACKEND decides whether
+            // the bind is allowed; a rejection means another account already owns
+            // these groups, which is a real conflict and stops the scan.
+            const bound = await bindEngagementIdentity(activity, liveId);
+            if (!bound.ok) {
+                await finishEngagementActivity(activity.operationId, {
+                    status: 'ABORTED',
+                    errorCode: bound.conflict
+                        ? EngagementIdentity.IDENTITY_MISMATCH
+                        : EngagementIdentity.IDENTITY_UNVERIFIED,
+                    reason: `strategy=legacy_identity_bind;signal=${bound.signal}`,
+                });
+                return;
+            }
+            validated.facebookUserId = liveId;
         }
 
         const pageState = await inspectEngagementGroupPage(activity.tabId, validated.group.url);
@@ -927,10 +987,16 @@ async function checkEngagementScans() {
             return;
         }
 
-        const identity = await evaluatePreScanFacebookIdentity(validated);
-        if (!identity.ok) {
-            await finishEngagementActivity(operationId, identityAbortOutcome(identity));
-            return;
+        // ADVISORY ONLY. This read can fall back to chrome.storage.local, which
+        // holds whatever account was last seen — possibly a previous session. A
+        // cached value must never terminate a scan: the browser may well be on
+        // the right account with no Facebook tab open to prove it. The
+        // authoritative check is the fresh c_user read after the group page
+        // loads, in runEngagementScan().
+        const advisoryIdentity = await evaluatePreScanFacebookIdentity(validated);
+        if (!advisoryIdentity.ok) {
+            console.warn('[Engagement] Cached identity check did not match; deferring to the live read.',
+                EngagementIdentity.safeIdentityFailureReason(advisoryIdentity));
         }
         activity.group = validated.group;
         await runEngagementScan(activity, validated);

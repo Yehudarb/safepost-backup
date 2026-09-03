@@ -117,6 +117,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
     const statuses = [];
     const uploads = [];
     const closedTabs = [];
+    const binds = [];
     const intervals = new Set();
     const updateListeners = new Set();
     let nextTimerId = 1;
@@ -301,6 +302,12 @@ function createBackgroundHarness(baseActivity, options = {}) {
                 statuses.push(JSON.parse(fetchOptions.body));
                 return response(200, { status: 'COMPLETED' });
             }
+            if (/\/api\/engagement\/scans\/[^/]+\/bind-identity$/.test(target)) {
+                events.push('bind-identity');
+                binds.push(JSON.parse(fetchOptions.body));
+                if (options.bindStatus) return response(options.bindStatus, { error: 'bind rejected' });
+                return response(200, { success: true, bound_groups: 1 });
+            }
             if (target.includes('/jobs/')) return response(200, { job: null });
             return response(200, {});
         },
@@ -322,6 +329,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
     return {
         api: context.__phase24,
         events,
+        binds,
         statuses,
         uploads,
         closedTabs,
@@ -592,8 +600,10 @@ function createBackgroundHarness(baseActivity, options = {}) {
             await lock.getFacebookActivityLock() === null);
     }
     {
-        // A legacy dataset with no stored account id cannot be verified. It must
-        // fail closed with its own code rather than being reported as a mismatch.
+        // Phase 1C.3 policy: a legacy dataset with no stored account id is NOT a
+        // failure. The live session is trustworthy — it came from the page just
+        // opened — so it is bound and the scan proceeds. Refusing here would have
+        // blocked every workspace synced before migration 0013.
         const lock = createActivity(memoryStorage());
         const harness = createBackgroundHarness(lock, {
             scanFacebookUserId: null,
@@ -601,13 +611,67 @@ function createBackgroundHarness(baseActivity, options = {}) {
         });
         await harness.api.ready;
         await harness.api.checkEngagementScans();
-        assert('an unverifiable dataset aborts with FACEBOOK_IDENTITY_UNVERIFIED',
+        assert('a legacy dataset binds the live account instead of failing',
+            harness.binds.length === 1 && harness.binds[0].facebook_user_id === FB_USER_ID,
+            JSON.stringify(harness.binds));
+        assert('binding happens before the DOM scanner starts',
+            harness.events.indexOf('bind-identity') >= 0 &&
+            harness.events.indexOf('bind-identity') < harness.events.indexOf('message:START_ENGAGEMENT_SCAN'),
+            JSON.stringify(harness.events));
+        assert('a legacy dataset then completes normally',
+            harness.statuses.some(item => item.status === 'COMPLETED'), JSON.stringify(harness.statuses));
+    }
+    {
+        // The backend refuses the bind because another account already owns these
+        // groups. That is a real conflict, not a transient error.
+        const lock = createActivity(memoryStorage());
+        const harness = createBackgroundHarness(lock, {
+            scanFacebookUserId: null,
+            persistedFacebookUserId: null,
+            bindStatus: 409,
+        });
+        await harness.api.ready;
+        await harness.api.checkEngagementScans();
+        assert('a refused bind aborts as FACEBOOK_IDENTITY_MISMATCH',
+            harness.statuses.some(item => item.error_code === 'FACEBOOK_IDENTITY_MISMATCH'),
+            JSON.stringify(harness.statuses));
+        assert('a refused bind never starts the DOM scanner',
+            !harness.events.includes('message:START_ENGAGEMENT_SCAN'));
+        assert('a refused bind releases the lock',
+            await lock.getFacebookActivityLock() === null);
+    }
+    {
+        // The only genuine UNVERIFIED: the live account cannot be read at all.
+        const lock = createActivity(memoryStorage());
+        const harness = createBackgroundHarness(lock, {
+            scanFacebookUserId: null,
+            persistedFacebookUserId: null,
+            tabFacebookUserId: null,
+        });
+        await harness.api.ready;
+        await harness.api.checkEngagementScans();
+        assert('an unreadable live account aborts with FACEBOOK_IDENTITY_UNVERIFIED',
             harness.statuses.some(item => item.error_code === 'FACEBOOK_IDENTITY_UNVERIFIED'),
             JSON.stringify(harness.statuses));
-        assert('an unverifiable dataset never opens the DOM scanner',
+        assert('an unreadable live account never binds anything', harness.binds.length === 0);
+        assert('an unreadable live account never opens the DOM scanner',
             !harness.events.includes('message:START_ENGAGEMENT_SCAN'));
-        assert('an unverifiable dataset releases the lock',
-            await lock.getFacebookActivityLock() === null);
+    }
+    {
+        // A stale cached id must not be authoritative: the fresh post-load read
+        // matches, so the scan proceeds.
+        const lock = createActivity(memoryStorage());
+        const harness = createBackgroundHarness(lock, {
+            persistedFacebookUserId: '100000000000999',
+            tabFacebookUserId: FB_USER_ID,
+        });
+        await harness.api.ready;
+        await harness.api.checkEngagementScans();
+        assert('a stale cached mismatch does not block a scan the live read approves',
+            harness.statuses.some(item => item.status === 'COMPLETED'), JSON.stringify(harness.statuses));
+        assert('the live read still runs before the DOM scanner',
+            harness.events.includes('message:GET_FACEBOOK_USER') &&
+            harness.events.indexOf('message:GET_FACEBOOK_USER') < harness.events.indexOf('message:START_ENGAGEMENT_SCAN'));
     }
     {
         const lock = createActivity(memoryStorage());
