@@ -394,26 +394,12 @@ const {
 } = require('./lib/health.cjs');
 const { normalizeDbId, normalizeDbIdList, isValidUuid, normalizeDbIdOrUuid } = require('./lib/ids.cjs');
 
-// Driver errors describe the database, not the request: table and column names,
-// declared types, constraint names. Log them where operators can see them and
-// answer the caller with a generic message. Used by the routes whose identifier
-// handling is fixed in this change; not a global error-handling rewrite.
-//
-// SQLSTATE 22P02 (invalid_text_representation) is the one case that is not a
-// server fault: it means the caller supplied a value the column cannot parse.
-// That is a 400. Front-line validation catches this for columns whose type is
-// known, but `group_sets.id` is bigint in production and uuid in QA, so a value
-// that is legitimate in one environment reaches the other as a parse error.
-// Answering 400 keeps a client mistake out of the 5xx rate the health alerting
-// treats as meaningful.
-function dbFailure(res, context, error) {
-    if (error?.code === '22P02') {
-        console.warn(`[DB] ${context}: rejected unparseable identifier`);
-        return res.status(400).json({ error: 'Invalid id' });
-    }
-    console.error(`[DB] ${context}: ${error?.message || error}`);
-    return res.status(500).json({ error: 'Database operation failed.' });
-}
+// Generic driver-error responses, including the SQLSTATE 22P02 -> 400 mapping.
+// The implementation moved to server/lib/httpErrors.cjs (behaviour unchanged) so
+// the engagement router shares this exact one rather than carrying a copy —
+// two copies of error shaping is how a leak gets fixed in one and left in the
+// other. The full reasoning lives in that file.
+const { dbFailure } = require('./lib/httpErrors.cjs');
 // Convenience: dashboard routes require auth + a resolved workspace.
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
 assertSecureRuntimeConfig();
@@ -623,6 +609,13 @@ app.use('/api/', apiLimiter);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/uploads', express.static(UPLOAD_DIR));
+
+// Engagement / Opportunities (Phase 1A). A self-contained Router that carries
+// its own auth, feature flags and validation, so mounting it cannot affect any
+// route defined below. Every path under it answers 404 unless BOTH the
+// ENGAGEMENT_ENABLED env flag and the workspace's engagement_enabled column are
+// on, which is why this is safe to ship before the feature is usable.
+app.use('/api/engagement', require('./routes/engagement.cjs'));
 
 // Public aggregate health endpoint. HTTP 200 means the real DB probe and all
 // aggregate metrics completed. HTTP 503 means the DB was unreachable, timed
