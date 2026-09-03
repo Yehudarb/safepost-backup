@@ -158,6 +158,25 @@ gets a bounded opportunity to flush its already-collected batch, reports
 After an MV3 restart, a persisted Engagement tab is aborted and the scan is
 reported as `WORKER_DISCONNECTED` for safe retry; scroll position is not resumed.
 
+### Phase 1C.1 parser and lease correctness
+
+Only a `role="article"` with no article ancestor is a discovered post. Every
+permalink, author, text, timestamp and label candidate must belong to that same
+top-level article; nested comments, replies and shared article-like blocks are
+ignored. If no scoped permalink exists, post ID and URL remain null rather than
+borrowing identity from a comment.
+
+Batch upload removes observations from its local pending buffer only after a
+successful response and retries one transient failure. Facebook security state
+is checked during the scroll loop, not only before it starts, so a newly shown
+checkpoint, captcha or restriction stops further extraction immediately.
+
+`SCAN_PREEMPTED_BY_PUBLISH` restores the attempt consumed by its claim before
+requeueing. Other retryable failures still consume attempts normally. Expired
+Engagement leases are handled by the existing one-minute queue maintenance loop:
+rows below `max_attempts` are unlocked and requeued, while exhausted rows fail
+terminally with `WORKER_DISCONNECTED`.
+
 The publish cooldown keys remain separate and unchanged. Group sync and future
 engagement operations never write `last_post_timestamp`.
 
@@ -387,6 +406,7 @@ npm run test:engagement-dedup   # pure unit, no database
 npm run test:engagement         # two real tenants against a running backend
 npm run test:engagement-parser  # pure DOM parser fixtures
 npm run test:engagement-scanner # read-only scanner and MV3 lifecycle
+npm run test:engagement-parser-correctness # nested articles and reliability
 ```
 
 `test:engagement` requires the backend running with `ENGAGEMENT_ENABLED=true`,

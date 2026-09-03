@@ -16,7 +16,7 @@ const express = require('express');
 const { createClient } = require('@supabase/supabase-js');
 // Called directly for the one rule HTTP cannot reach: a second worker inside the
 // SAME workspace. Forging a device token for it would prove nothing extra.
-const { reportScanStatus } = require('../server/lib/engagementQueue.cjs');
+const { reportScanStatus, sweepExpiredScanLocks } = require('../server/lib/engagementQueue.cjs');
 
 const { SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, API_URL = 'http://localhost:3001' } = process.env;
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || !SUPABASE_ANON_KEY) {
@@ -413,6 +413,46 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
         assert('a retryable failure returns the scan to the queue',
             retried.body?.status === 'QUEUED' && retried.body?.retried === true, JSON.stringify(retried.body));
 
+        const neutralScan = await claimFresh();
+        for (let interruption = 1; interruption <= 3; interruption++) {
+            if (interruption > 1) {
+                const reclaimed = await work(A, 'POST', '/scans/claim', {});
+                if (reclaimed.body?.scan?.id !== neutralScan.id) {
+                    throw new Error(`preemption reclaim returned ${reclaimed.body?.scan?.id} but expected ${neutralScan.id}`);
+                }
+            }
+            const preempted = await work(A, 'POST', `/scans/${neutralScan.id}/status`, {
+                status: 'FAILED', error_code: 'SCAN_PREEMPTED_BY_PUBLISH',
+            });
+            const { data: afterPreempt } = await admin.from('engagement_scan_tasks')
+                .select('status, attempt_count').eq('id', neutralScan.id).single();
+            assert(`publishing preemption ${interruption} requeues without consuming an attempt`,
+                preempted.body?.status === 'QUEUED' && afterPreempt.status === 'QUEUED' &&
+                afterPreempt.attempt_count === 0, JSON.stringify(afterPreempt));
+        }
+
+        const realFailureClaim1 = await work(A, 'POST', '/scans/claim', {});
+        if (realFailureClaim1.body?.scan?.id !== neutralScan.id) throw new Error('real failure claim 1 selected another scan');
+        await work(A, 'POST', `/scans/${neutralScan.id}/status`, {
+            status: 'FAILED', error_code: 'NETWORK_TIMEOUT',
+        });
+        const { data: afterRealFailure1 } = await admin.from('engagement_scan_tasks')
+            .select('status, attempt_count').eq('id', neutralScan.id).single();
+        assert('real network failure consumes its claimed attempt',
+            afterRealFailure1.status === 'QUEUED' && afterRealFailure1.attempt_count === 1,
+            JSON.stringify(afterRealFailure1));
+
+        const realFailureClaim2 = await work(A, 'POST', '/scans/claim', {});
+        if (realFailureClaim2.body?.scan?.id !== neutralScan.id) throw new Error('real failure claim 2 selected another scan');
+        await work(A, 'POST', `/scans/${neutralScan.id}/status`, {
+            status: 'FAILED', error_code: 'NETWORK_TIMEOUT',
+        });
+        const { data: afterRealFailure2 } = await admin.from('engagement_scan_tasks')
+            .select('status, attempt_count').eq('id', neutralScan.id).single();
+        assert('real failures still exhaust max_attempts normally',
+            afterRealFailure2.status === 'FAILED' && afterRealFailure2.attempt_count === 2,
+            JSON.stringify(afterRealFailure2));
+
         const blockScan = await claimFresh();
         const blocked = await work(A, 'POST', `/scans/${blockScan.id}/status`, { status: 'FAILED', error_code: 'CHECKPOINT_REQUIRED' });
         assert('a checkpoint is terminal and is never retried against Facebook',
@@ -439,6 +479,36 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
         // Close it properly so the FAILED/COMPLETED audit assertions below are
         // not affected by a scan left mid-flight.
         await work(A, 'POST', `/scans/${heldScan.id}/status`, { status: 'ABORTED', error_code: 'NO_POSTS_FOUND' });
+
+        const expiredAt = new Date(Date.now() - 60_000).toISOString();
+        const { data: expiredRows, error: expiredInsertError } = await admin.from('engagement_scan_tasks').insert([
+            {
+                workspace_id: A.workspaceId, created_by: A.userId, name: `${tag} expired retry`,
+                status: 'RUNNING', target_groups: [], worker_id: A.workerId,
+                claimed_at: expiredAt, lock_expires_at: expiredAt, attempt_count: 1, max_attempts: 2,
+            },
+            {
+                workspace_id: A.workspaceId, created_by: A.userId, name: `${tag} expired exhausted`,
+                status: 'RUNNING', target_groups: [], worker_id: A.workerId,
+                claimed_at: expiredAt, lock_expires_at: expiredAt, attempt_count: 2, max_attempts: 2,
+            },
+        ]).select('id, name');
+        if (expiredInsertError) throw new Error(`expired scan fixtures: ${expiredInsertError.message}`);
+        const retryExpiredId = expiredRows.find(row => row.name.endsWith('expired retry')).id;
+        const exhaustedExpiredId = expiredRows.find(row => row.name.endsWith('expired exhausted')).id;
+        const sweepResult = await sweepExpiredScanLocks();
+        const { data: sweptRows } = await admin.from('engagement_scan_tasks')
+            .select('id, status, error_code, worker_id, lock_expires_at, completed_at')
+            .in('id', [retryExpiredId, exhaustedExpiredId]);
+        const retryExpired = sweptRows.find(row => row.id === retryExpiredId);
+        const exhaustedExpired = sweptRows.find(row => row.id === exhaustedExpiredId);
+        assert('expired Engagement sweep processes the QA fixtures', sweepResult.swept >= 2);
+        assert('expired scan below max_attempts is requeued and unlocked',
+            retryExpired.status === 'QUEUED' && retryExpired.error_code === 'WORKER_DISCONNECTED' &&
+            retryExpired.worker_id === null && retryExpired.lock_expires_at === null);
+        assert('expired scan at max_attempts fails terminally',
+            exhaustedExpired.status === 'FAILED' && exhaustedExpired.error_code === 'WORKER_DISCONNECTED' &&
+            exhaustedExpired.worker_id === null && Boolean(exhaustedExpired.completed_at));
 
         // ------------------------------------------------------------------
         console.log('\n K. audit trail');

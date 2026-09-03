@@ -5,6 +5,8 @@
     const DEFAULT_MAX_SCROLL_ATTEMPTS = 8;
     const DEFAULT_MAX_STAGNANT_SCROLLS = 3;
     const DEFAULT_SCROLL_DELAY_MS = 800;
+    const DEFAULT_BATCH_RETRY_ATTEMPTS = 2;
+    const DEFAULT_BATCH_RETRY_DELAY_MS = 250;
 
     function createReadOnlyScanner(options = {}) {
         const documentRef = options.document || global.document;
@@ -14,6 +16,7 @@
         const detectFacebookState = options.detectFacebookState ||
             (root => global.SafePostFB?.detectFacebookState(root) || { ok: false, errorCode: 'PARSER_NO_STRATEGY_MATCHED' });
         const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+        const retrySleep = options.retrySleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
         const sendBatch = options.sendBatch || (async () => ({ ok: true }));
         const onProgress = options.onProgress || (() => {});
 
@@ -24,6 +27,8 @@
             maxScrollAttempts = DEFAULT_MAX_SCROLL_ATTEMPTS,
             maxStagnantScrolls = DEFAULT_MAX_STAGNANT_SCROLLS,
             scrollDelayMs = DEFAULT_SCROLL_DELAY_MS,
+            batchRetryAttempts = DEFAULT_BATCH_RETRY_ATTEMPTS,
+            batchRetryDelayMs = DEFAULT_BATCH_RETRY_DELAY_MS,
             signal,
         }) {
             const boundedLimit = Math.max(1, Math.min(10, Number(limit) || 10));
@@ -43,40 +48,75 @@
 
             const flush = async () => {
                 if (!pending.length) return;
-                const batch = pending.splice(0, pending.length);
-                await sendBatch(batch);
+                const batch = pending.slice();
+                const attempts = Math.max(1, Math.min(3, Number(batchRetryAttempts) || DEFAULT_BATCH_RETRY_ATTEMPTS));
+                for (let attempt = 1; attempt <= attempts; attempt++) {
+                    try {
+                        await sendBatch(batch);
+                        pending.splice(0, batch.length);
+                        return;
+                    } catch (error) {
+                        if (attempt >= attempts || signal?.aborted) throw error;
+                        await retrySleep(Math.max(0, Number(batchRetryDelayMs) || 0));
+                    }
+                }
             };
 
-            while (!signal?.aborted) {
-                const before = postsFound;
-                const articles = Array.from(documentRef.querySelectorAll(
-                    'main [role="article"], [role="feed"] [role="article"]'
-                ));
-                for (const article of articles) {
-                    if (signal?.aborted || postsFound >= boundedLimit) break;
-                    const post = parser.parsePostArticle(article);
-                    if (!post) continue;
-                    const key = parser.observationKey(post);
-                    if (observed.has(key)) continue;
-                    observed.add(key);
-                    pending.push(post);
-                    postsFound++;
-                    onProgress({ postsFound, scrollAttempts });
-                    if (pending.length >= batchSize) await flush();
-                }
+            try {
+                while (!signal?.aborted) {
+                    const currentState = detectFacebookState(documentRef);
+                    if (currentState?.ok === false) {
+                        try { await flush(); } catch {}
+                        return {
+                            success: false,
+                            errorCode: currentState.errorCode || 'PARSER_NO_STRATEGY_MATCHED',
+                            postsFound,
+                            scrollAttempts,
+                        };
+                    }
+                    const before = postsFound;
+                    const articles = Array.from(documentRef.querySelectorAll(
+                        'main [role="article"], [role="feed"] [role="article"]'
+                    ));
+                    for (const article of articles) {
+                        if (signal?.aborted || postsFound >= boundedLimit) break;
+                        const post = parser.parsePostArticle(article);
+                        if (!post) continue;
+                        const key = parser.observationKey(post);
+                        if (observed.has(key)) continue;
+                        observed.add(key);
+                        pending.push(post);
+                        postsFound++;
+                        onProgress({ postsFound, scrollAttempts });
+                        if (pending.length >= batchSize) await flush();
+                    }
 
-                if (postsFound >= boundedLimit) break;
-                stagnantScrolls = postsFound === before ? stagnantScrolls + 1 : 0;
-                if (scrollAttempts >= maxScrollAttempts || stagnantScrolls >= maxStagnantScrolls) break;
-                windowRef.scrollBy({ top: Math.max(400, Math.floor(windowRef.innerHeight * 0.75)), behavior: 'auto' });
-                scrollAttempts++;
-                await sleep(scrollDelayMs);
+                    if (postsFound >= boundedLimit) break;
+                    stagnantScrolls = postsFound === before ? stagnantScrolls + 1 : 0;
+                    if (scrollAttempts >= maxScrollAttempts || stagnantScrolls >= maxStagnantScrolls) break;
+                    windowRef.scrollBy({ top: Math.max(400, Math.floor(windowRef.innerHeight * 0.75)), behavior: 'auto' });
+                    scrollAttempts++;
+                    await sleep(scrollDelayMs);
+                }
+            } catch (error) {
+                if (signal?.aborted) {
+                    return {
+                        success: false,
+                        aborted: true,
+                        errorCode: 'SCAN_PREEMPTED_BY_PUBLISH',
+                        postsFound,
+                        scrollAttempts,
+                    };
+                }
+                throw error;
             }
 
-            await flush();
+            let finalFlushError = null;
+            try { await flush(); } catch (error) { finalFlushError = error; }
             if (signal?.aborted) {
                 return { success: false, aborted: true, errorCode: 'SCAN_PREEMPTED_BY_PUBLISH', postsFound, scrollAttempts };
             }
+            if (finalFlushError) throw finalFlushError;
             if (postsFound === 0) {
                 return { success: false, errorCode: 'NO_POSTS_FOUND', postsFound, scrollAttempts };
             }
@@ -91,6 +131,8 @@
         DEFAULT_MAX_SCROLL_ATTEMPTS,
         DEFAULT_MAX_STAGNANT_SCROLLS,
         DEFAULT_SCROLL_DELAY_MS,
+        DEFAULT_BATCH_RETRY_ATTEMPTS,
+        DEFAULT_BATCH_RETRY_DELAY_MS,
         createReadOnlyScanner,
     });
     global.SafePostEngagementScanner = api;

@@ -161,9 +161,13 @@ async function reportScanStatus({
 
     const attempts = scan.attempt_count || 0;
     const maxAttempts = scan.max_attempts || 2;
+    const attemptNeutralPreemption = status === 'FAILED' && errorCode === 'SCAN_PREEMPTED_BY_PUBLISH';
+    const effectiveAttempts = attemptNeutralPreemption ? Math.max(0, attempts - 1) : attempts;
     const shouldRetry = status === 'FAILED'
         && classifyScanError(errorCode) === 'retryable'
-        && attempts < maxAttempts;
+        && effectiveAttempts < maxAttempts;
+
+    if (attemptNeutralPreemption) patch.attempt_count = effectiveAttempts;
 
     if (shouldRetry) {
         // Back to the pool. claimed_at is cleared so the next claim looks fresh.
@@ -355,17 +359,47 @@ async function recordDiscoveredPosts({ scanId, workspaceId, workerId, posts }) {
 // sweeper in queue.cjs is untouched and unaware of this.
 async function sweepExpiredScanLocks() {
     const now = new Date().toISOString();
-    const { data, error } = await supabase
+    const { data: expired, error } = await supabase
         .from('engagement_scan_tasks')
-        .update({ status: 'QUEUED', worker_id: null, claimed_at: null, lock_expires_at: null })
+        .select('id, workspace_id, attempt_count, max_attempts')
         .eq('status', 'RUNNING')
-        .lt('lock_expires_at', now)
-        .select('id');
+        .lt('lock_expires_at', now);
     if (error) {
         console.error('[engagement] sweep failed:', error.message);
-        return { swept: 0 };
+        return { swept: 0, requeued: 0, failed: 0 };
     }
-    return { swept: Array.isArray(data) ? data.length : 0 };
+
+    let requeued = 0;
+    let failed = 0;
+    for (const scan of expired || []) {
+        const attempts = scan.attempt_count || 0;
+        const maxAttempts = scan.max_attempts || 2;
+        const exhausted = attempts >= maxAttempts;
+        const patch = {
+            status: exhausted ? 'FAILED' : 'QUEUED',
+            worker_id: null,
+            claimed_at: null,
+            lock_expires_at: null,
+            error_code: 'WORKER_DISCONNECTED',
+            failure_reason: 'Engagement scan lease expired.',
+            ...(exhausted ? { completed_at: now } : {}),
+        };
+        const { data: updated, error: updateError } = await supabase
+            .from('engagement_scan_tasks')
+            .update(patch)
+            .eq('id', scan.id)
+            .eq('workspace_id', scan.workspace_id)
+            .eq('status', 'RUNNING')
+            .lt('lock_expires_at', now)
+            .select('id');
+        if (updateError) {
+            console.error('[engagement] sweep update failed:', updateError.message);
+            continue;
+        }
+        if (!updated?.length) continue;
+        if (exhausted) failed++; else requeued++;
+    }
+    return { swept: requeued + failed, requeued, failed };
 }
 
 module.exports = {

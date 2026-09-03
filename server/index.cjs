@@ -381,6 +381,7 @@ const {
     sweepExpiredLocks,
     sweepMissedSchedules,
 } = require('./lib/queue.cjs');
+const { sweepExpiredScanLocks } = require('./lib/engagementQueue.cjs');
 const {
     createTenantEventLog,
     selectWorkspaceEventLogs,
@@ -3013,6 +3014,7 @@ const QUEUE_SWEEP_MS = 60 * 1000;
 setInterval(() => {
     sweepExpiredLocks().catch(e => console.error('[sweep] locks:', e.message));
     sweepMissedSchedules().catch(e => console.error('[sweep] missed:', e.message));
+    sweepExpiredScanLocks().catch(e => console.error('[sweep] engagement:', e.message));
 }, QUEUE_SWEEP_MS);
 
 // Belt-and-braces alongside the uncaughtException guard above: http.Server
