@@ -31,7 +31,8 @@
     "test:observability": "node -r ./server/tests/loadTestEnv.cjs tests/phase17-observability.test.cjs",
     "test:id-validation": "node -r ./server/tests/loadTestEnv.cjs tests/phase18-id-validation.test.cjs",
     "test:engagement": "node -r ./server/tests/loadTestEnv.cjs tests/phase19-engagement.test.cjs",
-    "test:engagement-dedup": "node tests/phase19-dedup.test.cjs"
+    "test:engagement-dedup": "node tests/phase19-dedup.test.cjs",
+    "test:facebook-lock": "node tests/phase20-facebook-activity-lock.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

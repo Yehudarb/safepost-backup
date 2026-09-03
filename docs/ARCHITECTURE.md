@@ -48,6 +48,9 @@ SafePost has three runtime components plus a managed database:
 - `content.js` — injected into `facebook.com`; performs the DOM actions to post.
 - `extensionStorage.js` — `chrome.storage.local` helpers (last job id, cooldown,
   **API URL**, **worker identity**).
+- `facebookActivityLock.js` — persistent MV3 mutex shared by publishing, group
+  sync and future engagement automation. Publishing can cooperatively pre-empt
+  lower-priority work; owner and operation ID are required for release.
 - `popup.html` + `popup.js` — settings screen: API server URL, connection test,
   worker identity, extension version.
 - Ships assembled at build time: `public/manifest.json` + `public/popup.*` +

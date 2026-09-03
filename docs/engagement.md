@@ -72,6 +72,41 @@ Rules the lock must satisfy:
    its own pacing key.
 4. **One tab at a time.** No parallel group tabs, in any owner.
 
+### Phase 1B implementation
+
+The extension keeps one `facebookActivityLock` record in
+`chrome.storage.local`:
+
+```json
+{
+  "owner": "publishing | group_sync | engagement",
+  "operationId": "owner-specific stable identifier",
+  "acquiredAt": 0,
+  "heartbeatAt": 0
+}
+```
+
+Lock mutations are serialized inside the MV3 service worker and verified with a
+read-back because `chrome.storage.local` has no compare-and-set operation.
+Release and heartbeat refresh require both the owner and operation ID, so one
+workflow cannot release another workflow's lock.
+
+- Heartbeat interval: 30 seconds.
+- Stale threshold: 10 minutes, measured from `heartbeatAt`. Group sync has a
+  six-minute operational timeout, so this leaves conservative scheduling and
+  browser latency headroom without allowing an abandoned lock to persist.
+- Publishing pre-emption wait: 30 seconds. Publishing requests cooperative
+  cancellation of group sync or a future engagement worker, waits for cleanup
+  and release, and only then opens its Facebook tab.
+- Group sync acquires the same lock before opening `/groups/joins/`. Its shared
+  cleanup closes its tab, removes listeners/timers, clears local running state
+  and releases only its own lock on every terminal path.
+- Engagement Phase 1B provides the `engagement` owner and pre-emption handler
+  contract only. It does not claim scans, open tabs or parse Facebook DOM.
+
+The publish cooldown keys remain separate and unchanged. Group sync and future
+engagement operations never write `last_post_timestamp`.
+
 ---
 
 ## Feature flags

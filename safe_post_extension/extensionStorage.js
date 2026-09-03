@@ -58,7 +58,13 @@ const ExtStorage = {
      * @returns {Promise<void>}
      */
     clearAll: () => {
-        return chrome.storage.local.remove(['lastJobId', 'last_post_timestamp', 'cooldown_until']);
+        return chrome.storage.local.remove([
+            'lastJobId',
+            'last_post_timestamp',
+            'cooldown_until',
+            'facebookActivityLock',
+            'facebookActivityPreemption'
+        ]);
     },
 
     /**
@@ -90,5 +96,33 @@ const ExtStorage = {
         const id = 'worker-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
         await chrome.storage.local.set({ workerId: id });
         return id;
+    },
+
+    readFacebookActivityLock: async () => {
+        const result = await chrome.storage.local.get('facebookActivityLock');
+        return result.facebookActivityLock || null;
+    },
+
+    writeFacebookActivityLock: (lock) => {
+        return chrome.storage.local.set({ facebookActivityLock: lock });
+    },
+
+    clearFacebookActivityLock: () => {
+        return chrome.storage.local.remove('facebookActivityLock');
+    },
+
+    readFacebookActivityPreemption: async () => {
+        const result = await chrome.storage.local.get('facebookActivityPreemption');
+        return result.facebookActivityPreemption || null;
+    },
+
+    writeFacebookActivityPreemption: (request) => {
+        return chrome.storage.local.set({ facebookActivityPreemption: request });
+    },
+
+    clearFacebookActivityPreemption: () => {
+        return chrome.storage.local.remove('facebookActivityPreemption');
     }
 };
+
+globalThis.ExtStorage = ExtStorage;

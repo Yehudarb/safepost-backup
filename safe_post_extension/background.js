@@ -1,7 +1,15 @@
 console.log("[Background] Service Worker v9.1 — Multi-anchor name extraction (LOCAL DEV)");
 
-// Load extension storage and external-sender validation utilities.
-importScripts('extensionStorage.js', 'externalMessageTrust.js');
+// Load extension storage, the shared Facebook mutex and external-sender
+// validation utilities. The lock module depends on ExtStorage, so order matters.
+importScripts('extensionStorage.js', 'facebookActivityLock.js', 'externalMessageTrust.js');
+
+const FacebookActivity = globalThis.SafePostFacebookActivityLock;
+const {
+    FACEBOOK_ACTIVITY_OWNERS,
+    FACEBOOK_ACTIVITY_HEARTBEAT_MS,
+    FACEBOOK_ACTIVITY_PREEMPT_WAIT_MS,
+} = globalThis.SafePostFacebookActivityLockFactory;
 
 const API_PORT = 3001;
 // Default backend URL — production, so a fresh install works with zero setup.
@@ -182,7 +190,10 @@ async function connectSSE() {
             try {
                 const data = JSON.parse(event.data);
                 if (data.type === 'connected') { recordContact(); }
-                else if (data.type === 'job_available') { recordContact(); checkJobs(); }
+                else if (data.type === 'job_available') {
+                    recordContact();
+                    checkJobs({ preemptLowerPriority: true });
+                }
                 else if (data.type === 'sync_groups') {
                     console.log("[Background] sync_groups received via SSE — starting scan...");
                     recordContact();
@@ -206,11 +217,99 @@ connectSSE();
 
 // 3. Main Polling Logic
 let isScanning = false;
-async function checkJobs() {
+let activePublishingActivity = null;
+
+function facebookActivityOperationId(owner, id) {
+    return `${owner}:${String(id)}`;
+}
+
+function startFacebookActivityHeartbeat(owner, operationId) {
+    const timer = setInterval(() => {
+        FacebookActivity.refreshFacebookActivityLock(owner, operationId)
+            .catch(error => console.warn('[Background] Facebook activity heartbeat failed:', error?.message || error));
+    }, FACEBOOK_ACTIVITY_HEARTBEAT_MS);
+    return () => clearInterval(timer);
+}
+
+async function finishPublishingActivity(jobId, tabId = null) {
+    let operationId = null;
+    if (jobId != null && /^\d+$/.test(String(jobId))) {
+        operationId = facebookActivityOperationId(FACEBOOK_ACTIVITY_OWNERS.PUBLISHING, jobId);
+    } else if (tabId != null && activePublishingActivity?.tabId === tabId) {
+        operationId = activePublishingActivity.operationId;
+    }
+    if (!operationId) return false;
+
+    if (activePublishingActivity?.operationId === operationId) {
+        activePublishingActivity.stopHeartbeat();
+        activePublishingActivity = null;
+    }
+    return FacebookActivity.releaseFacebookActivityLock(
+        FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+        operationId
+    );
+}
+
+async function preparePublishingPoll(preemptLowerPriority) {
+    const current = await FacebookActivity.getFacebookActivityLock();
+    if (!current) return true;
+    if (FacebookActivity.isFacebookActivityLockStale(current)) {
+        await FacebookActivity.recoverStaleFacebookActivityLock();
+        return true;
+    }
+    if (current.owner === FACEBOOK_ACTIVITY_OWNERS.PUBLISHING) return false;
+    if (!preemptLowerPriority) return false;
+
+    const requestId = facebookActivityOperationId(
+        FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+        `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    );
+    await FacebookActivity.requestFacebookActivityPreemption(
+        FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+        requestId
+    );
+    return FacebookActivity.waitForFacebookActivityUnlock({
+        timeoutMs: FACEBOOK_ACTIVITY_PREEMPT_WAIT_MS,
+    });
+}
+
+async function acquirePublishingActivity(operationId) {
+    let result = await FacebookActivity.acquireFacebookActivityLock(
+        FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+        operationId
+    );
+    if (result.acquired) return true;
+    if (!result.holder || result.holder.owner === FACEBOOK_ACTIVITY_OWNERS.PUBLISHING) return false;
+
+    await FacebookActivity.requestFacebookActivityPreemption(
+        FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+        operationId
+    );
+    if (!await FacebookActivity.waitForFacebookActivityUnlock({
+        timeoutMs: FACEBOOK_ACTIVITY_PREEMPT_WAIT_MS,
+    })) return false;
+
+    result = await FacebookActivity.acquireFacebookActivityLock(
+        FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+        operationId
+    );
+    return result.acquired;
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+    if (activePublishingActivity?.tabId !== tabId) return;
+    finishPublishingActivity(null, tabId)
+        .catch(error => console.warn('[Background] Publishing tab cleanup failed:', error?.message || error));
+});
+
+async function checkJobs({ preemptLowerPriority = false } = {}) {
     if (isScanning) return;
     isScanning = true;
+    let acquiredPublishingJobId = null;
+    let publishingHandedOff = false;
     try {
         if (await checkSafetyCooldown()) return;
+        if (!await preparePublishingPoll(preemptLowerPriority)) return;
 
         // Paired workers claim ONLY their own workspace's jobs; unpaired workers
         // use the legacy global endpoint. Both return { job } (or { job: null }).
@@ -240,16 +339,39 @@ async function checkJobs() {
         }
 
         console.log("[Background] New Job:", job.id);
+        const activityOperationId = facebookActivityOperationId(
+            FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+            job.id
+        );
+        if (!await acquirePublishingActivity(activityOperationId)) {
+            // The backend lease remains the source of truth and will requeue the
+            // claim using its existing retry semantics. Do not open Facebook or
+            // mark this job as seen when exclusive ownership was not obtained.
+            console.warn('[Background] Publishing deferred: Facebook activity lock unavailable for job', job.id);
+            return;
+        }
+        acquiredPublishingJobId = job.id;
         await ExtStorage.setLastJobId(job.id);
 
         try {
             const tab = await chrome.tabs.create({ url: job.group_url, active: true });
-            
+            activePublishingActivity = {
+                operationId: activityOperationId,
+                jobId: String(job.id),
+                tabId: tab.id,
+                stopHeartbeat: startFacebookActivityHeartbeat(
+                    FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+                    activityOperationId
+                ),
+            };
+
             // Safety: If tab doesn't finish loading in 60s, cleanup
-            const loadTimeout = setTimeout(() => {
+            const loadTimeout = setTimeout(async () => {
                 chrome.tabs.onUpdated.removeListener(listener);
                 console.error("[Background] Tab load TIMEOUT for job:", job.id);
-                ExtStorage.clearLastJobId(); // Allow retry since we failed
+                await ExtStorage.clearLastJobId(); // Allow retry since we failed
+                await chrome.tabs.remove(tab.id).catch(() => {});
+                await finishPublishingActivity(job.id, tab.id);
             }, 60000);
 
             function listener(tabId, info) {
@@ -259,13 +381,17 @@ async function checkJobs() {
                     
                     setTimeout(() => {
                         try {
-                            chrome.tabs.sendMessage(tabId, { action: 'EXECUTE_POST', job: job }, (response) => {
+                            chrome.tabs.sendMessage(tabId, { action: 'EXECUTE_POST', job: job }, () => {
                                 if (chrome.runtime.lastError) {
                                     console.warn("[Background] Msg Error (Ignored):", chrome.runtime.lastError.message);
                                 }
+                                finishPublishingActivity(job.id, tabId)
+                                    .catch(error => console.warn('[Background] Publishing completion cleanup failed:', error?.message || error));
                             });
                         } catch (e) {
                             console.error("[Background] SendMessage Exception:", e);
+                            finishPublishingActivity(job.id, tabId)
+                                .catch(error => console.warn('[Background] Publishing exception cleanup failed:', error?.message || error));
                         }
 
                         const cooldownSeconds = Math.floor(Math.random() * (720 - 180 + 1)) + 180;
@@ -277,15 +403,20 @@ async function checkJobs() {
                 }
             }
             chrome.tabs.onUpdated.addListener(listener);
+            publishingHandedOff = true;
 
         } catch (tabErr) {
             console.error("[Background] Tab Creation Failed:", tabErr);
             await ExtStorage.clearLastJobId(); // Allow retry
+            await finishPublishingActivity(job.id);
         }
 
     } catch (err) {
         console.error("Poll Error:", err);
     } finally {
+        if (acquiredPublishingJobId != null && !publishingHandedOff) {
+            await finishPublishingActivity(acquiredPublishingJobId);
+        }
         isScanning = false;
     }
 }
@@ -335,6 +466,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 }
             }
 
+            await finishPublishingActivity(
+                request.action === 'JOB_COMPLETE' ? missionId : null,
+                sender.tab?.id || null
+            );
+
             sendResponse({ success: true });
         })();
         return true;
@@ -353,6 +489,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (sender.tab && sender.tab.id) {
                 setTimeout(() => chrome.tabs.remove(sender.tab.id).catch(() => {}), 2000);
             }
+            await finishPublishingActivity(missionId, sender.tab?.id || null);
             sendResponse({ success: true });
         })();
         return true;
@@ -436,6 +573,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // async IIFE for the same reason as SYNC_GROUPS above.
         (async () => {
             const payload = request.payload || {};
+            const isRealJob = payload.taskId != null && /^\d+$/.test(String(payload.taskId));
+            const isJobState = payload.status && payload.status !== 'LOG';
             let headers = { 'Content-Type': 'application/json' };
             const legacyReport = () => fetch(`${BASE_URL}/api/tasks/${payload.taskId}/status`, {
                 method: 'PATCH',
@@ -443,6 +582,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 body: JSON.stringify(payload),
             });
             try {
+                if (isRealJob && !isJobState) {
+                    await FacebookActivity.refreshFacebookActivityLock(
+                        FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+                        facebookActivityOperationId(FACEBOOK_ACTIVITY_OWNERS.PUBLISHING, payload.taskId)
+                    );
+                }
                 headers = await authedHeaders({ 'Content-Type': 'application/json' });
 
                 // A job claimed through the hardened worker queue must be COMPLETED
@@ -458,9 +603,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 // taskId 'DEBUG'; those are not job state and must stay on the legacy
                 // route, which is what records them in system_logs.
                 const pairing = await getPairing();
-                const isRealJob = payload.taskId != null && /^\d+$/.test(String(payload.taskId));
-                const isJobState = payload.status && payload.status !== 'LOG';
-
                 if (pairing && isRealJob && isJobState) {
                     const res = await fetch(
                         `${BASE_URL}/api/workers/${pairing.workerId}/jobs/${payload.taskId}/status`,
@@ -494,6 +636,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             } catch (err) {
                 console.error("Status Network Error:", err);
             } finally {
+                if (isRealJob && isJobState) {
+                    await finishPublishingActivity(payload.taskId, sender.tab?.id || null);
+                }
                 sendResponse({ ok: true });
             }
         })();
@@ -543,42 +688,109 @@ async function scanAndSyncGroups() {
         console.warn("[Background] scanAndSyncGroups skipped — a scan is already running");
         return { success: false, error: "already-running" };
     }
+    const activityOperationId = facebookActivityOperationId(
+        FACEBOOK_ACTIVITY_OWNERS.GROUP_SYNC,
+        `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    );
+    const acquired = await FacebookActivity.acquireFacebookActivityLock(
+        FACEBOOK_ACTIVITY_OWNERS.GROUP_SYNC,
+        activityOperationId
+    );
+    if (!acquired.acquired) {
+        console.warn('[Background] Group sync deferred: Facebook activity is busy with', acquired.holder?.owner || 'unknown');
+        return { success: false, error: 'facebook-activity-busy' };
+    }
+
     isGroupScanning = true;
     console.log("[Background] scanAndSyncGroups v9.1 (multi-anchor + upgrade) via www.facebook.com/groups/joins/");
+
+    let cancelActiveGroupScan = null;
+    let groupSyncPreemptRequested = false;
+    const stopHeartbeat = startFacebookActivityHeartbeat(
+        FACEBOOK_ACTIVITY_OWNERS.GROUP_SYNC,
+        activityOperationId
+    );
+    const unregisterPreemption = FacebookActivity.registerFacebookActivityPreemptionHandler(
+        FACEBOOK_ACTIVITY_OWNERS.GROUP_SYNC,
+        async (request) => {
+            if (request.targetOperationId !== activityOperationId) return false;
+            groupSyncPreemptRequested = true;
+            if (cancelActiveGroupScan) await cancelActiveGroupScan();
+            return true;
+        }
+    );
+
+    try {
 
     // Get the current user from content.js BEFORE opening the new tab
     const fbProfileFromContent = await getFacebookUserFromContent();
     console.log('[Background] FB user from content.js:', fbProfileFromContent.name || '(none)');
+    if (groupSyncPreemptRequested) {
+        return { success: false, error: 'preempted-by-publishing' };
+    }
 
     const reportFail = async (error) => fetch(`${BASE_URL}/api/groups/sync-failed`, {
         method: 'POST', headers: await authedHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ error })
     }).catch(() => {});
 
-    return new Promise((resolve) => {
+    return await new Promise((resolve) => {
         let tabId = null;
         let done = false;
-        const finish = (r) => { if (!done) { done = true; isGroupScanning = false; resolve(r); } };
+        let timeout = null;
+        let delayedStart = null;
+        let listener = null;
+        const finish = async (result) => {
+            if (done) return false;
+            done = true;
+            if (timeout) clearTimeout(timeout);
+            if (delayedStart) clearTimeout(delayedStart);
+            if (listener) chrome.tabs.onUpdated.removeListener(listener);
+            if (tabId) {
+                const closingTabId = tabId;
+                tabId = null;
+                await chrome.tabs.remove(closingTabId).catch(() => {});
+            }
+            resolve(result);
+            return true;
+        };
 
-        const timeout = setTimeout(() => {
-            if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+        cancelActiveGroupScan = () => finish({
+            success: false,
+            error: 'preempted-by-publishing',
+        });
+        if (groupSyncPreemptRequested) {
+            cancelActiveGroupScan();
+            return;
+        }
+
+        timeout = setTimeout(() => {
             reportFail("Timed out after 6 minutes");
             finish({ success: false, error: "Timed out after 6 minutes" });
         }, 360000);
 
         // active:true so the user can watch the live status panel during the scrape.
         chrome.tabs.create({ url: "https://www.facebook.com/groups/joins/?nav_source=tab", active: true }, (tab) => {
+            if (chrome.runtime.lastError || !tab?.id) {
+                finish({ success: false, error: chrome.runtime.lastError?.message || 'Could not open Facebook.' });
+                return;
+            }
+            if (done || groupSyncPreemptRequested) {
+                chrome.tabs.remove(tab.id).catch(() => {});
+                return;
+            }
             tabId = tab.id;
-            const listener = (id, info) => {
+            listener = (id, info) => {
                 if (id !== tabId || info.status !== 'complete') return;
                 chrome.tabs.onUpdated.removeListener(listener);
+                listener = null;
 
-                setTimeout(async () => {
+                delayedStart = setTimeout(async () => {
+                    delayedStart = null;
+                    if (done || groupSyncPreemptRequested) return;
                     try {
                         const tabInfo = await chrome.tabs.get(tabId);
                         if (tabInfo.url.includes('/login') || tabInfo.url.includes('/checkpoint')) {
-                            chrome.tabs.remove(tabId).catch(() => {});
-                            clearTimeout(timeout);
                             finish({ success: false, error: "Not logged in to Facebook." });
                             return;
                         }
@@ -983,7 +1195,9 @@ async function scanAndSyncGroups() {
                             })
                         });
 
-                        chrome.tabs.remove(tabId).catch(() => {});
+                        await chrome.tabs.remove(tabId).catch(() => {});
+                        tabId = null;
+                        if (done || groupSyncPreemptRequested) return;
                         const result = results?.[0]?.result || {};
                         const groups = result.groups || [];
                         const facebook_user = result.facebook_user || null;
@@ -991,7 +1205,6 @@ async function scanAndSyncGroups() {
                         console.log(`[Background] joins scan: found ${groups.length} groups (user: ${facebook_user || 'none'})`);
 
                         if (groups.length === 0) {
-                            clearTimeout(timeout);
                             reportFail("No groups found on /groups/joins/");
                             finish({ success: false, error: "No groups found." });
                             return;
@@ -1003,7 +1216,6 @@ async function scanAndSyncGroups() {
                             body: JSON.stringify({ groups, facebook_user, facebook_user_id })
                         });
                         const syncData = await syncRes.json();
-                        clearTimeout(timeout);
 
                         if (!syncRes.ok || syncData.error) {
                             reportFail(syncData.error || `Server ${syncRes.status}`);
@@ -1013,8 +1225,7 @@ async function scanAndSyncGroups() {
                         finish({ success: true, synced: groups.length, added: syncData.added || 0 });
 
                     } catch (e) {
-                        if (tabId) chrome.tabs.remove(tabId).catch(() => {});
-                        clearTimeout(timeout);
+                        if (done || groupSyncPreemptRequested) return;
                         reportFail(e.message);
                         finish({ success: false, error: e.message });
                     }
@@ -1023,6 +1234,16 @@ async function scanAndSyncGroups() {
             chrome.tabs.onUpdated.addListener(listener);
         });
     });
+    } finally {
+        cancelActiveGroupScan = null;
+        unregisterPreemption();
+        stopHeartbeat();
+        isGroupScanning = false;
+        await FacebookActivity.releaseFacebookActivityLock(
+            FACEBOOK_ACTIVITY_OWNERS.GROUP_SYNC,
+            activityOperationId
+        );
+    }
 }
 
 async function sendHeartbeat() {
