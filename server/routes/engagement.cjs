@@ -101,6 +101,11 @@ async function audit(workspaceId, event, detail = '') {
 
 const invalidId = (res) => res.status(400).json({ error: 'Invalid id' });
 
+function isMissingFacebookIdentityColumn(error) {
+    const detail = `${error?.code || ''} ${error?.message || ''}`;
+    return /facebook_user_id/i.test(detail) && /column|schema cache|PGRST/i.test(detail);
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard routes
 // ---------------------------------------------------------------------------
@@ -169,10 +174,22 @@ router.post('/scans', ...dashboardAuth, denyDemo, requireEngagementEnabled, asyn
         ? body.facebook_user.trim()
         : null;
 
-    let groupQuery = supabase.from('groups').select('id, name, url').in('id', groupIds);
+    let groupQuery = supabase.from('groups').select('id, name, url, facebook_user_id').in('id', groupIds);
     groupQuery = scopeToWorkspace(groupQuery, req);
     if (facebookUser) groupQuery = groupQuery.eq('facebook_user', facebookUser);
-    const { data: groups, error: groupError } = await groupQuery;
+    let { data: groups, error: groupError } = await groupQuery;
+
+    // Keep the API deployable before migration 0013 reaches a database. The
+    // resulting task deliberately has no stable identity and the extension's
+    // fail-closed guard will abort it before opening Facebook.
+    let identityColumnAvailable = true;
+    if (isMissingFacebookIdentityColumn(groupError)) {
+        identityColumnAvailable = false;
+        groupQuery = supabase.from('groups').select('id, name, url').in('id', groupIds);
+        groupQuery = scopeToWorkspace(groupQuery, req);
+        if (facebookUser) groupQuery = groupQuery.eq('facebook_user', facebookUser);
+        ({ data: groups, error: groupError } = await groupQuery);
+    }
 
     if (groupError) return dbFailure(res, 'resolve engagement groups', groupError);
 
@@ -187,6 +204,16 @@ router.post('/scans', ...dashboardAuth, denyDemo, requireEngagementEnabled, asyn
         });
     }
 
+    const stableIds = [...new Set(resolved
+        .map(group => typeof group.facebook_user_id === 'string' ? group.facebook_user_id.trim() : '')
+        .filter(id => /^\d{3,30}$/.test(id)))];
+    if (stableIds.length > 1) {
+        return res.status(409).json({
+            error: 'Selected groups do not share one verified Facebook account. Sync the groups again before scanning.',
+        });
+    }
+    const facebookUserId = stableIds[0] || null;
+
     const insert = {
         ...workspaceFields(req),
         name,
@@ -196,6 +223,7 @@ router.post('/scans', ...dashboardAuth, denyDemo, requireEngagementEnabled, asyn
         max_groups: maxGroups,
         max_posts_per_group: maxPosts,
         facebook_user: facebookUser,
+        ...(identityColumnAvailable ? { facebook_user_id: facebookUserId } : {}),
     };
 
     const { data: created, error: insertError } = await supabase

@@ -8,6 +8,10 @@ const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
 
 const SCAN_ID = '11111111-1111-4111-8111-111111111111';
+// Phase 1C.2 gates scanning on a stable Facebook account id. These suites cover
+// the scanner itself, so they run with a matching identity; the mismatch and
+// unverified paths are covered by phase26.
+const FB_USER_ID = '100000000000001';
 const GROUP = Object.freeze({
     id: 'group-qa-1',
     name: 'QA Group',
@@ -102,6 +106,13 @@ function createBackgroundHarness(baseActivity, options = {}) {
     const local = {
         pairedWorkerId: 'worker-phase24',
         deviceToken: 'test-device-token',
+        // The pre-tab identity guard reads the last known account from storage
+        // when no Facebook tab is open. These suites run on the matching path;
+        // phase26 drives mismatch and unverified explicitly.
+        ...(options.persistedFacebookUserId === null ? {} : {
+            safepost_currentUserId: options.persistedFacebookUserId || FB_USER_ID,
+            safepost_currentUser: 'QA Account',
+        }),
     };
     const statuses = [];
     const uploads = [];
@@ -120,6 +131,8 @@ function createBackgroundHarness(baseActivity, options = {}) {
         id: SCAN_ID,
         target_groups: [GROUP],
         max_posts_per_group: 10,
+        facebook_user_id: options.scanFacebookUserId === undefined ? FB_USER_ID : options.scanFacebookUserId,
+        facebook_user: 'QA Account',
     };
 
     const context = {
@@ -136,6 +149,10 @@ function createBackgroundHarness(baseActivity, options = {}) {
             FACEBOOK_ACTIVITY_PREEMPT_WAIT_MS: 30000,
         },
         SafePostEngagementNavigation: global.SafePostEngagementNavigation,
+        // background.js reads this at module scope. The harness stubs
+        // importScripts, so the real module has to be handed in explicitly or
+        // every scan aborts with "cannot read properties of undefined".
+        SafePostEngagementIdentity: global.SafePostEngagementIdentity,
         SafePostExternalTrust: { validateExternalSender: () => ({ ok: false }) },
         ExtStorage: {
             async getApiUrl() { return 'http://localhost:3001'; },
@@ -196,6 +213,17 @@ function createBackgroundHarness(baseActivity, options = {}) {
                 async query() { return []; },
                 sendMessage(tabId, message, callback) {
                     events.push(`message:${message.action}`);
+                    if (message.action === 'GET_FACEBOOK_USER') {
+                        // The pre-scan identity guard re-reads c_user through the
+                        // freshly loaded content script. Answering with the id the
+                        // task carries keeps these scanner suites on the matching
+                        // path; phase26 drives the mismatch and unverified cases.
+                        callback({
+                            facebook_user: options.tabFacebookUser === undefined ? 'QA Account' : options.tabFacebookUser,
+                            facebook_user_id: options.tabFacebookUserId === undefined ? FB_USER_ID : options.tabFacebookUserId,
+                        });
+                        return;
+                    }
                     if (message.action === 'START_ENGAGEMENT_SCAN') {
                         if (options.scanMode === 'hang' || options.scanMode === 'preempt') {
                             startCallback = callback;
@@ -315,6 +343,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
 (async () => {
     global.ExtStorage = memoryStorage();
     await import(`${pathToFileURL(path.join(__dirname, '../safe_post_extension/facebookActivityLock.js')).href}?phase24-lock`);
+    await import(`${pathToFileURL(path.join(__dirname, '../safe_post_extension/engagement/identity.js')).href}?phase24-identity`);
     await import(`${pathToFileURL(path.join(__dirname, '../safe_post_extension/engagement/navigation.js')).href}?phase24-nav`);
     await import(`${pathToFileURL(path.join(__dirname, '../safe_post_extension/engagement/postParser.js')).href}?phase24-parser`);
     await import(`${pathToFileURL(path.join(__dirname, '../safe_post_extension/engagement/scanner.js')).href}?phase24-scanner`);
@@ -539,6 +568,46 @@ function createBackgroundHarness(baseActivity, options = {}) {
         const held = await lock.getFacebookActivityLock();
         assert('failed owned-tab closure keeps the lock instead of allowing concurrent Facebook activity',
             held?.owner === OWNER.ENGAGEMENT && held.tabId === 91);
+    }
+    {
+        // Phase 1C.2 identity guard: a reliably different Facebook account must
+        // stop the scan before any DOM work, not merely fail it afterwards.
+        const lock = createActivity(memoryStorage());
+        const harness = createBackgroundHarness(lock, {
+            tabFacebookUserId: '100000000000999',
+            persistedFacebookUserId: '100000000000999',
+        });
+        await harness.api.ready;
+        await harness.api.checkEngagementScans();
+        assert('a mismatched Facebook account aborts the scan',
+            harness.statuses.some(item => item.error_code === 'FACEBOOK_IDENTITY_MISMATCH'),
+            JSON.stringify(harness.statuses));
+        assert('mismatch stops before the DOM scanner is ever started',
+            !harness.events.includes('message:START_ENGAGEMENT_SCAN'), JSON.stringify(harness.events));
+        assert('mismatch uploads nothing', harness.uploads.length === 0);
+        assert('mismatch is reported as ABORTED, so it does not burn retry attempts',
+            harness.statuses.every(item => item.error_code !== 'FACEBOOK_IDENTITY_MISMATCH' || item.status === 'ABORTED'),
+            JSON.stringify(harness.statuses));
+        assert('mismatch still releases the Facebook activity lock',
+            await lock.getFacebookActivityLock() === null);
+    }
+    {
+        // A legacy dataset with no stored account id cannot be verified. It must
+        // fail closed with its own code rather than being reported as a mismatch.
+        const lock = createActivity(memoryStorage());
+        const harness = createBackgroundHarness(lock, {
+            scanFacebookUserId: null,
+            persistedFacebookUserId: null,
+        });
+        await harness.api.ready;
+        await harness.api.checkEngagementScans();
+        assert('an unverifiable dataset aborts with FACEBOOK_IDENTITY_UNVERIFIED',
+            harness.statuses.some(item => item.error_code === 'FACEBOOK_IDENTITY_UNVERIFIED'),
+            JSON.stringify(harness.statuses));
+        assert('an unverifiable dataset never opens the DOM scanner',
+            !harness.events.includes('message:START_ENGAGEMENT_SCAN'));
+        assert('an unverifiable dataset releases the lock',
+            await lock.getFacebookActivityLock() === null);
     }
     {
         const lock = createActivity(memoryStorage());

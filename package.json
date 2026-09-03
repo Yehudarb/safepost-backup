@@ -37,7 +37,8 @@
     "test:facebook-lock-identity": "node tests/phase22-publishing-lock-identity.test.cjs",
     "test:engagement-parser": "node tests/phase23-engagement-post-parser.test.cjs",
     "test:engagement-scanner": "node tests/phase24-engagement-scanner.test.cjs",
-    "test:engagement-parser-correctness": "node tests/phase25-engagement-parser-correctness.test.cjs"
+    "test:engagement-parser-correctness": "node tests/phase25-engagement-parser-correctness.test.cjs",
+    "test:facebook-state-identity": "node tests/phase26-facebook-state-and-identity.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

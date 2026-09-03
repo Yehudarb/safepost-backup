@@ -7,11 +7,13 @@ importScripts(
     'facebookActivityLock.js',
     'externalMessageTrust.js',
     'engagement/navigation.js',
+    'engagement/identity.js',
     'engagement/postParser.js',
     'engagement/scanner.js'
 );
 
 const FacebookActivity = globalThis.SafePostFacebookActivityLock;
+const EngagementIdentity = globalThis.SafePostEngagementIdentity;
 const {
     FACEBOOK_ACTIVITY_OWNERS,
     FACEBOOK_ACTIVITY_HEARTBEAT_MS,
@@ -518,6 +520,61 @@ let engagementUnavailableUntil = 0;
 let activeEngagementActivity = null;
 const engagementOwnedTabClosures = new Set();
 
+function safeFacebookStateFailureReason(result) {
+    if (!result || result.ok !== false) return null;
+    const state = result.state || result.detail?.state || 'facebook_state';
+    const strategy = result.strategy || result.detail?.strategy || result.detail?.signal || 'unknown';
+    const signal = result.matchedSignal || result.detail?.matchedSignal || 'unknown';
+    return `state=${state};strategy=${strategy};signal=${signal}`;
+}
+
+async function getFacebookIdentityFromTab(tabId) {
+    if (!Number.isInteger(tabId)) return { name: null, id: null };
+    return new Promise(resolve => {
+        chrome.tabs.sendMessage(tabId, { action: 'GET_FACEBOOK_USER' }, response => {
+            if (chrome.runtime.lastError) {
+                resolve({ name: null, id: null });
+                return;
+            }
+            resolve({
+                name: response?.facebook_user || null,
+                id: response?.facebook_user_id || null,
+            });
+        });
+    });
+}
+
+async function evaluatePreScanFacebookIdentity(validated) {
+    const fromOpenTab = await getFacebookUserFromContent();
+    let current = fromOpenTab;
+    let currentStrategy = 'active_facebook_tab_c_user';
+    if (!EngagementIdentity.normalizeFacebookUserId(current?.id)) {
+        const persisted = await chrome.storage.local.get([
+            'safepost_currentUserId', 'safepost_currentUser', 'safepost_detectedFacebookUser',
+        ]);
+        current = {
+            id: persisted.safepost_currentUserId || null,
+            name: persisted.safepost_currentUser || persisted.safepost_detectedFacebookUser || null,
+        };
+        currentStrategy = 'persisted_facebook_user_id';
+    }
+    return EngagementIdentity.evaluateFacebookIdentity({
+        expectedId: validated.facebookUserId,
+        expectedName: validated.facebookUser,
+        currentId: current?.id,
+        currentName: current?.name,
+        currentStrategy,
+    });
+}
+
+function identityAbortOutcome(result) {
+    return {
+        status: 'ABORTED',
+        errorCode: result.errorCode,
+        reason: EngagementIdentity.safeIdentityFailureReason(result),
+    };
+}
+
 async function pollAvailableWork() {
     await checkJobs();
     await checkEngagementScans();
@@ -726,12 +783,30 @@ async function runEngagementScan(activity, validated) {
                 'engagement/scanner.js',
             ],
         });
+
+        // A persisted id can prove an obvious mismatch before any tab opens.
+        // Re-read c_user through the newly loaded Facebook content script before
+        // page inspection or scrolling so an account switch cannot reuse stale
+        // extension storage.
+        const liveIdentity = await getFacebookIdentityFromTab(activity.tabId);
+        const liveIdentityResult = EngagementIdentity.evaluateFacebookIdentity({
+            expectedId: validated.facebookUserId,
+            expectedName: validated.facebookUser,
+            currentId: liveIdentity.id,
+            currentName: liveIdentity.name,
+            currentStrategy: 'active_facebook_tab_c_user',
+        });
+        if (!liveIdentityResult.ok) {
+            await finishEngagementActivity(activity.operationId, identityAbortOutcome(liveIdentityResult));
+            return;
+        }
+
         const pageState = await inspectEngagementGroupPage(activity.tabId, validated.group.url);
         if (!pageState.ok) {
             await finishEngagementActivity(activity.operationId, {
                 status: 'FAILED',
                 errorCode: pageState.errorCode,
-                reason: pageState.detail?.signal || 'Facebook group page unavailable.',
+                reason: safeFacebookStateFailureReason(pageState) || 'Facebook group page unavailable.',
                 abortScanner: true,
             });
             return;
@@ -749,7 +824,7 @@ async function runEngagementScan(activity, validated) {
             await finishEngagementActivity(activity.operationId, {
                 status: 'FAILED',
                 errorCode: result?.errorCode || 'PARSER_NO_STRATEGY_MATCHED',
-                reason: result?.error || 'Engagement scanner stopped.',
+                reason: safeFacebookStateFailureReason(result) || result?.error || 'Engagement scanner stopped.',
                 groupsScanned: 0,
                 abortScanner: true,
             });
@@ -849,6 +924,12 @@ async function checkEngagementScans() {
                 errorCode: validated.errorCode,
                 reason: validated.reason,
             });
+            return;
+        }
+
+        const identity = await evaluatePreScanFacebookIdentity(validated);
+        if (!identity.ok) {
+            await finishEngagementActivity(operationId, identityAbortOutcome(identity));
             return;
         }
         activity.group = validated.group;

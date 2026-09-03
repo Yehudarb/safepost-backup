@@ -38,8 +38,17 @@ const RETRYABLE_ERRORS = new Set([
 const NEEDS_USER_ACTION_ERRORS = new Set([
     'FACEBOOK_LOGGED_OUT', 'CAPTCHA_REQUIRED', 'CHECKPOINT_REQUIRED',
     'ACCOUNT_RESTRICTED', 'GROUP_NOT_FOUND', 'NO_GROUP_ACCESS',
-    'PARSER_NO_STRATEGY_MATCHED',
+    'PARSER_NO_STRATEGY_MATCHED', 'FACEBOOK_IDENTITY_MISMATCH',
+    'FACEBOOK_IDENTITY_UNVERIFIED',
 ]);
+
+function isAttemptNeutralScanOutcome(status, errorCode) {
+    if (status === 'FAILED' && errorCode === 'SCAN_PREEMPTED_BY_PUBLISH') return true;
+    return status === 'ABORTED' && (
+        errorCode === 'FACEBOOK_IDENTITY_MISMATCH' ||
+        errorCode === 'FACEBOOK_IDENTITY_UNVERIFIED'
+    );
+}
 
 function classifyScanError(code) {
     if (NEEDS_USER_ACTION_ERRORS.has(code)) return 'needs_user_action';
@@ -161,13 +170,13 @@ async function reportScanStatus({
 
     const attempts = scan.attempt_count || 0;
     const maxAttempts = scan.max_attempts || 2;
-    const attemptNeutralPreemption = status === 'FAILED' && errorCode === 'SCAN_PREEMPTED_BY_PUBLISH';
-    const effectiveAttempts = attemptNeutralPreemption ? Math.max(0, attempts - 1) : attempts;
+    const attemptNeutralOutcome = isAttemptNeutralScanOutcome(status, errorCode);
+    const effectiveAttempts = attemptNeutralOutcome ? Math.max(0, attempts - 1) : attempts;
     const shouldRetry = status === 'FAILED'
         && classifyScanError(errorCode) === 'retryable'
         && effectiveAttempts < maxAttempts;
 
-    if (attemptNeutralPreemption) patch.attempt_count = effectiveAttempts;
+    if (attemptNeutralOutcome) patch.attempt_count = effectiveAttempts;
 
     if (shouldRetry) {
         // Back to the pool. claimed_at is cleared so the next claim looks fresh.
@@ -408,6 +417,7 @@ module.exports = {
     RETRYABLE_ERRORS,
     NEEDS_USER_ACTION_ERRORS,
     classifyScanError,
+    isAttemptNeutralScanOutcome,
     claimNextScan,
     reportScanStatus,
     cancelScan,

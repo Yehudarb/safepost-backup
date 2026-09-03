@@ -1015,7 +1015,10 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
     //   2. The account the dashboard was showing when it requested this sync.
     //   3. The last account the content script reported to /api/profile/sync.
     //   4. '' sentinel (legacy / truly unattributed).
-    const incomingId = typeof facebook_user_id === 'string' ? facebook_user_id.trim() : null;
+    const rawIncomingId = typeof facebook_user_id === 'string' ? facebook_user_id.trim() : '';
+    // content.js obtains this from Facebook's c_user cookie. Persist only that
+    // stable numeric account id; display labels are intentionally kept separate.
+    const incomingId = /^\d{3,30}$/.test(rawIncomingId) ? rawIncomingId : null;
     let fbUser = (facebook_user && facebook_user.trim()) || null;
     let attributionSource = fbUser ? 'request' : null;
 
@@ -1082,12 +1085,26 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
             url: g.url,
             workspace_id: workspaceId,
             facebook_user: fbUser,
+            ...(incomingId ? { facebook_user_id: incomingId } : {}),
         };
     });
 
-    const { error: upsertError } = await supabase
+    let { error: upsertError } = await supabase
         .from('groups')
         .upsert(toUpsert, { onConflict: 'workspace_id,facebook_user,id' });
+
+    // Safe rolling migration: an older database can continue syncing groups,
+    // but those rows remain identity-unverified and Engagement will refuse to
+    // scan them until migration 0013 is applied and a fresh sync stores the id.
+    const identityColumnMissing = upsertError &&
+        /facebook_user_id/i.test(`${upsertError.code || ''} ${upsertError.message || ''}`) &&
+        /column|schema cache|PGRST/i.test(`${upsertError.code || ''} ${upsertError.message || ''}`);
+    if (identityColumnMissing) {
+        const legacyRows = toUpsert.map(({ facebook_user_id: _ignored, ...row }) => row);
+        ({ error: upsertError } = await supabase
+            .from('groups')
+            .upsert(legacyRows, { onConflict: 'workspace_id,facebook_user,id' }));
+    }
 
     if (upsertError) {
         console.error("Sync Upsert Error:", upsertError);

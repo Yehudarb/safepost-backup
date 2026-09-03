@@ -46,6 +46,31 @@
         if (/display\s*:\s*none/i.test(style) || /visibility\s*:\s*hidden/i.test(style)) return false;
         return true;
     }
+    // State detection must ignore hidden help/accessibility/template text. Keep
+    // this separate from the historical selector helper above so publishing
+    // element selection semantics do not change in this phase.
+    function isStructurallyVisible(el) {
+        for (let current = el; current && current.nodeType === 1; current = current.parentElement) {
+            if (current.hidden) return false;
+            if (current.getAttribute && current.getAttribute('aria-hidden') === 'true') return false;
+            const style = (current.getAttribute && current.getAttribute('style')) || '';
+            if (/display\s*:\s*none/i.test(style) || /visibility\s*:\s*hidden/i.test(style)) return false;
+        }
+        return Boolean(el);
+    }
+
+    function stateDiagnostic(state, strategy, matchedSignal, extra = {}) {
+        return { state, strategy, matchedSignal, signal: strategy, ...extra };
+    }
+
+    function visibleSecuritySurfaces(root) {
+        if (!root.querySelectorAll) return [];
+        return Array.from(root.querySelectorAll([
+            '[role="dialog"]', '[role="alert"]', '[role="status"]',
+            'form[action*="captcha" i]', 'form[action*="checkpoint" i]',
+            'h1', 'h2', '[role="heading"]',
+        ].join(','))).filter(isStructurallyVisible);
+    }
     function isEnabled(el) {
         if (!el) return false;
         if (el.disabled) return false;
@@ -127,27 +152,101 @@
     // ---- state detection → maps to Phase 6 error codes ----
     function detectLoginState(root) {
         root = root || document;
-        if (root.querySelector && (root.querySelector('input[name="pass"], input[type="password"]'))) return { loggedIn: false, signal: 'password-field' };
-        const bodyText = norm(root.body && root.body.textContent);
-        if (bodyText && matchesAny(bodyText, WORDS.login) && !(root.querySelector && root.querySelector('[role="feed"], [role="main"]'))) {
-            return { loggedIn: false, signal: 'login-text' };
+        const url = (root.location && root.location.href) || '';
+        if (/facebook\.com\/(?:login|login\.php)(?:[/?#]|$)/i.test(url)) {
+            return { loggedIn: false, ...stateDiagnostic('logged_out', 'login_url', 'facebook_login_path') };
         }
-        return { loggedIn: true, signal: 'ok' };
+        if (root.querySelector) {
+            const password = Array.from(root.querySelectorAll('input[name="pass"], input[type="password"]'))
+                .find(isStructurallyVisible);
+            if (password) {
+                return { loggedIn: false, ...stateDiagnostic('logged_out', 'visible_password_input', 'facebook_password_control') };
+            }
+            const loginForm = Array.from(root.querySelectorAll('form[action*="login" i]'))
+                .find(isStructurallyVisible);
+            if (loginForm) {
+                return { loggedIn: false, ...stateDiagnostic('logged_out', 'visible_login_form', 'facebook_login_form') };
+            }
+        }
+        return { loggedIn: true, ...stateDiagnostic('authenticated', 'no_login_challenge', 'none') };
     }
     function detectCaptcha(root) {
         root = root || document;
-        if (root.querySelector && root.querySelector('iframe[src*="recaptcha"], [data-testid*="captcha"]')) return { captcha: true, signal: 'recaptcha' };
-        const t = norm(root.body && root.body.textContent);
-        if (matchesAny(t, WORDS.captcha)) return { captcha: true, signal: 'captcha-text' };
-        return { captcha: false };
+        const url = (root.location && root.location.href) || '';
+        if (/facebook\.com\/[^?#]*captcha(?:[/?#]|$)/i.test(url)) {
+            return { captcha: true, ...stateDiagnostic('captcha', 'captcha_url', 'facebook_captcha_path') };
+        }
+        if (root.querySelectorAll) {
+            const providerFrames = Array.from(root.querySelectorAll('iframe')).filter(isStructurallyVisible);
+            for (const frame of providerFrames) {
+                const src = norm(frame.getAttribute('src'));
+                if (/recaptcha|hcaptcha|arkoselabs|captcha-delivery|\/captcha(?:[/?#]|$)/i.test(src)) {
+                    return { captcha: true, ...stateDiagnostic('captcha', 'visible_challenge_iframe', 'known_captcha_provider') };
+                }
+            }
+
+            const challengeContainer = Array.from(root.querySelectorAll([
+                '[data-testid*="captcha" i]', '[data-captcha]',
+                '[id*="captcha" i]', '[class*="captcha" i]',
+            ].join(','))).find(isStructurallyVisible);
+            if (challengeContainer) {
+                return { captcha: true, ...stateDiagnostic('captcha', 'visible_challenge_container', 'captcha_container_attribute') };
+            }
+
+            const challengeControl = Array.from(root.querySelectorAll([
+                'input[name*="captcha" i]', 'input[id*="captcha" i]',
+                'input[aria-label*="captcha" i]', 'textarea[name="g-recaptcha-response"]',
+            ].join(','))).find(isStructurallyVisible);
+            if (challengeControl) {
+                return { captcha: true, ...stateDiagnostic('captcha', 'visible_challenge_control', 'captcha_input_control') };
+            }
+        }
+
+        for (const surface of visibleSecuritySurfaces(root)) {
+            const text = norm(surface.textContent || surface.getAttribute?.('aria-label'));
+            if (!text || text.length > 300) continue;
+            const strongPhrase = text.includes('i am not a robot') ||
+                text.includes('\u05d0\u05e0\u05d9 \u05dc\u05d0 \u05e8\u05d5\u05d1\u05d5\u05d8') ||
+                text.includes('\u05d4\u05e9\u05dc\u05dd \u05d0\u05ea \u05d1\u05d3\u05d9\u05e7\u05ea \u05d4\u05d0\u05d1\u05d8\u05d7\u05d4') ||
+                text === 'captcha' ||
+                (text.includes('complete') && text.includes('security check')) ||
+                (text.includes('enter') && (text.includes('characters you see') || text.includes('code shown')));
+            if (strongPhrase) {
+                return { captcha: true, ...stateDiagnostic('captcha', 'visible_challenge_text', 'high_confidence_security_phrase') };
+            }
+        }
+        return { captcha: false, ...stateDiagnostic('captcha', 'no_structural_captcha', 'none') };
     }
     function detectCheckpoint(root) {
         root = root || document;
         const url = (root.location && root.location.href) || '';
-        if (/checkpoint/i.test(url)) return { checkpoint: true, signal: 'url' };
-        const t = norm(root.body && root.body.textContent);
-        if (matchesAny(t, WORDS.checkpoint)) return { checkpoint: true, signal: 'checkpoint-text' };
-        return { checkpoint: false };
+        if (/facebook\.com\/checkpoint(?:[/?#]|$)/i.test(url)) {
+            return { checkpoint: true, ...stateDiagnostic('checkpoint', 'checkpoint_url', 'facebook_checkpoint_path') };
+        }
+        for (const surface of visibleSecuritySurfaces(root)) {
+            const text = norm(surface.textContent || surface.getAttribute?.('aria-label'));
+            if (!text || text.length > 300) continue;
+            if (text.includes('confirm your identity') || text.includes("we need to confirm it's you") ||
+                text.includes('\u05d0\u05e9\u05e8 \u05d0\u05ea \u05d6\u05d4\u05d5\u05ea\u05da') ||
+                text.includes('\u05e0\u05d3\u05e8\u05e9 \u05d0\u05d9\u05de\u05d5\u05ea')) {
+                return { checkpoint: true, ...stateDiagnostic('checkpoint', 'visible_checkpoint_text', 'identity_confirmation_phrase') };
+            }
+        }
+        return { checkpoint: false, ...stateDiagnostic('checkpoint', 'no_structural_checkpoint', 'none') };
+    }
+
+    function detectAccountRestriction(root) {
+        root = root || document;
+        for (const surface of visibleSecuritySurfaces(root)) {
+            const text = norm(surface.textContent || surface.getAttribute?.('aria-label'));
+            if (!text || text.length > 300) continue;
+            if (text.includes('your account is restricted') || text.includes('account restricted') ||
+                text.includes('your account has been suspended') ||
+                text.includes('\u05d4\u05d7\u05e9\u05d1\u05d5\u05df \u05e9\u05dc\u05da \u05de\u05d5\u05d2\u05d1\u05dc')) {
+                return { restricted: true, ...stateDiagnostic('account_restricted', 'visible_restriction_text', 'account_restriction_phrase') };
+            }
+        }
+        return { restricted: false, ...stateDiagnostic('account_restricted', 'no_structural_restriction', 'none') };
     }
     // Aggregate → a single error code when the page isn't postable.
     // This is deliberately narrower than post-submit moderation detection. A
@@ -186,12 +285,14 @@
     function detectFacebookState(root) {
         root = root || document;
         const login = detectLoginState(root);
-        if (!login.loggedIn) return { ok: false, errorCode: 'FACEBOOK_LOGGED_OUT', detail: login };
+        if (!login.loggedIn) return { ok: false, errorCode: 'FACEBOOK_LOGGED_OUT', state: login.state, strategy: login.strategy, matchedSignal: login.matchedSignal, detail: login };
         const cap = detectCaptcha(root);
-        if (cap.captcha) return { ok: false, errorCode: 'CAPTCHA_REQUIRED', detail: cap };
+        if (cap.captcha) return { ok: false, errorCode: 'CAPTCHA_REQUIRED', state: cap.state, strategy: cap.strategy, matchedSignal: cap.matchedSignal, detail: cap };
         const chk = detectCheckpoint(root);
-        if (chk.checkpoint) return { ok: false, errorCode: 'CHECKPOINT_REQUIRED', detail: chk };
-        return { ok: true };
+        if (chk.checkpoint) return { ok: false, errorCode: 'CHECKPOINT_REQUIRED', state: chk.state, strategy: chk.strategy, matchedSignal: chk.matchedSignal, detail: chk };
+        const restriction = detectAccountRestriction(root);
+        if (restriction.restricted) return { ok: false, errorCode: 'ACCOUNT_RESTRICTED', state: restriction.state, strategy: restriction.strategy, matchedSignal: restriction.matchedSignal, detail: restriction };
+        return { ok: true, state: 'authenticated', strategy: 'no_security_challenge', matchedSignal: 'none' };
     }
 
     // ---- waits (async; used in the live extension) ----
@@ -279,7 +380,8 @@
         WORDS, STAGES, DRY_RUN_BLOCKED,
         matchesAny, isVisible, isEnabled, accessibleText,
         findPostComposer, findEditableArea, findMediaButton, findFileInput, findPublishButton,
-        detectLoginState, detectCaptcha, detectCheckpoint, detectPreflightPostingBlock, detectFacebookState,
+        detectLoginState, detectCaptcha, detectCheckpoint, detectAccountRestriction,
+        detectPreflightPostingBlock, detectFacebookState,
         waitForElement, waitForEnabledElement, buildDiagnostics, resolveDryRun,
     };
 

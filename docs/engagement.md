@@ -180,6 +180,73 @@ terminally with `WORKER_DISCONNECTED`.
 The publish cooldown keys remain separate and unchanged. Group sync and future
 engagement operations never write `last_post_timestamp`.
 
+### Phase 1C.2 security-state confidence and account identity
+
+The first controlled live QA aborted with `CAPTCHA_REQUIRED` /
+`failure_reason=captcha-text` on a group that had been reachable seconds before.
+No CAPTCHA was shown.
+
+**Cause.** `detectCaptcha()` matched `document.body.textContent` against the bare
+substring `"captcha"`. `textContent` concatenates every descendant node —
+including `<script>` and `<style>` bodies and hidden elements — and the match had
+no word boundary, no visibility test and no scope. Any Facebook page whose
+bundled JavaScript mentions the word blocked the scan. This was a false positive,
+not a real challenge.
+
+**Detection now requires structural evidence.** In priority order: a Facebook
+captcha/checkpoint URL; a *visible* iframe from a known challenge provider
+(reCAPTCHA, hCaptcha, Arkose Labs, captcha-delivery); a visible container or
+input carrying a captcha attribute; and only then text — restricted to visible
+security surfaces (`role="dialog"`, `role="alert"`, `role="status"`, headings,
+captcha/checkpoint forms), capped at 300 characters, and requiring a strong
+phrase such as "i am not a robot" or "complete … security check". No decision
+anywhere in `fbUtils.js` reads bare `body.textContent` any more.
+
+A genuine challenge still stops the scan immediately, and nothing retries around
+it: `CAPTCHA_REQUIRED`, `CHECKPOINT_REQUIRED`, `ACCOUNT_RESTRICTED` and
+`FACEBOOK_LOGGED_OUT` remain terminal `needs_user_action` codes.
+
+**Diagnostics.** Every state result now carries `state`, `strategy` and
+`matchedSignal` — for example
+`{ ok: false, errorCode: 'CAPTCHA_REQUIRED', strategy: 'visible_challenge_iframe',
+matchedSignal: 'known_captcha_provider' }`. These identify *why* a page was
+classified, and are safe to log: they contain no page text, post content, URL,
+cookie or token. Engagement propagates them into scan `failure_reason` as
+`state=…;strategy=…;signal=…`.
+
+**Identity model.** SafePost's stable Facebook identity is the numeric account id
+that `content.js` reads from the `c_user` cookie. `facebook_user` is a *display
+label* only — historically `''` for unattributed groups — so it is never used to
+decide anything. Migration `0013` adds `facebook_user_id` to `groups` and
+`engagement_scan_tasks`; group sync persists it, and scan creation copies the one
+id shared by the selected groups (refusing, with 409, a selection spanning two
+verified accounts).
+
+This resolves the "Smart Choice gadgets" observation from the QA: that string is
+the `facebook_user` label attached to the synced group dataset, not an account.
+A Page label and the personal account administering it are legitimately different
+strings, so **a name difference alone is never treated as a mismatch.**
+
+**Guard.** Before opening any tab, and again after the group page loads (re-read
+through the freshly loaded content script, so a mid-session account switch cannot
+be masked by stale storage), Engagement compares the task's `facebook_user_id`
+with the current account id:
+
+- ids differ → `FACEBOOK_IDENTITY_MISMATCH`
+- either id unavailable → `FACEBOOK_IDENTITY_UNVERIFIED`
+
+Both abort with status `ABORTED` before any scrolling, parsing or upload, release
+the Facebook lock, and are terminal — a user-action state, not a retry loop, so
+they cannot repeatedly consume scan attempts.
+
+**Known limitation.** Groups synced before migration `0013` carry no
+`facebook_user_id`, so Engagement will refuse them as `FACEBOOK_IDENTITY_UNVERIFIED`
+until the workspace re-syncs its groups. This is deliberate fail-closed
+behaviour: absence of a verifiable account is not evidence that the right account
+is logged in. The API and group sync both tolerate a database without `0013`
+applied, so deploying the code before the migration is safe — those datasets are
+simply unverifiable until it lands and a fresh sync stores the id.
+
 ---
 
 ## Feature flags
@@ -430,3 +497,44 @@ from the server process's own environment.
    publishing acquire Facebook ownership.
 
 This procedure is intentionally not a high-volume or unattended scanner test.
+
+### Phase 1C.2 rerun prerequisites
+
+The first attempt aborted on a false-positive CAPTCHA before any scrolling. Before
+repeating it:
+
+**Database.** Migration `0013_engagement_facebook_identity.sql` must be applied to
+the target project. Without it every scan aborts as
+`FACEBOOK_IDENTITY_UNVERIFIED`.
+
+**Re-sync the groups.** `groups.facebook_user_id` is populated only by a sync run
+*after* `0013`. Trigger a group sync from the dashboard with the intended Facebook
+account logged in, then confirm the row is populated:
+
+```sql
+select id, name, facebook_user, facebook_user_id
+  from public.groups
+ where workspace_id = '<qa workspace>' and facebook_user_id is not null;
+```
+
+**Account.** The browser must be logged into the *same* Facebook account whose
+`c_user` id was stored by that sync. The display name may differ from the
+`facebook_user` label — only the id is compared.
+
+**Then run:** one workspace · one synced group · `max_posts_per_group = 10` ·
+manual trigger · Publishing Dry Run ON · developer watching the browser.
+
+**Watch for:**
+
+| Signal | Expected |
+|---|---|
+| `system_logs` source `engagement` | `ENGAGEMENT_SCAN_CLAIMED` then `ENGAGEMENT_SCAN_COMPLETED` |
+| scan `failure_reason` if it aborts | `state=…;strategy=…;signal=…` — read `strategy` to see exactly what was detected |
+| `engagement_discovered_posts` | rows are *posts*, not comments; `rawMetadata.articleScope = 'top-level'` |
+| Facebook tab | exactly one, closed on completion; no composer at any point |
+| A Dry Run publish triggered mid-scan | Engagement reports `SCAN_PREEMPTED_BY_PUBLISH`, publishing wins |
+
+If it aborts again on `CAPTCHA_REQUIRED`, the `strategy` field now says which
+structural signal fired — `visible_challenge_iframe`, `visible_challenge_container`,
+`visible_challenge_control`, `captcha_url` or `visible_challenge_text` — so a
+second false positive is diagnosable instead of opaque.

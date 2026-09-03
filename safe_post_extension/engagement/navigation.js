@@ -40,6 +40,9 @@
         const limit = Number.isInteger(requestedLimit) && requestedLimit > 0
             ? Math.min(requestedLimit, CONTROLLED_MAX_POSTS)
             : CONTROLLED_MAX_POSTS;
+        const facebookUserId = /^\d{3,30}$/.test(String(scan.facebook_user_id || '').trim())
+            ? String(scan.facebook_user_id).trim()
+            : null;
         return {
             ok: true,
             scanId: String(scan.id),
@@ -49,6 +52,10 @@
                 url,
             },
             limit,
+            facebookUserId,
+            facebookUser: typeof scan.facebook_user === 'string' && scan.facebook_user.trim()
+                ? scan.facebook_user.trim()
+                : null,
         };
     }
 
