@@ -18,6 +18,7 @@ const facebookActivityReady = FacebookActivity.reconcileFacebookActivityLock({
 });
 
 const API_PORT = 3001;
+const PUBLISH_CLAIM_TIMEOUT_MS = 30 * 1000;
 // Default backend URL — production, so a fresh install works with zero setup.
 // Overridden at runtime by the value saved in the extension settings popup
 // (chrome.storage.local 'apiUrl'), e.g. to http://localhost:3001 for local
@@ -237,24 +238,53 @@ function startFacebookActivityHeartbeat(owner, operationId) {
     return () => clearInterval(timer);
 }
 
-async function finishPublishingActivity(jobId, tabId = null) {
-    let operationId = null;
-    if (jobId != null && activePublishingActivity?.jobId === String(jobId)) {
-        operationId = activePublishingActivity.operationId;
-    } else if (jobId != null && /^\d+$/.test(String(jobId))) {
-        operationId = facebookActivityOperationId(FACEBOOK_ACTIVITY_OWNERS.PUBLISHING, jobId);
-    } else if (tabId != null && activePublishingActivity?.tabId === tabId) {
-        operationId = activePublishingActivity.operationId;
-    }
-    if (!operationId) return false;
+function normalizePublishingJobId(jobId) {
+    if (jobId == null) return null;
+    const value = String(jobId);
+    return /^[1-9]\d*$/.test(value) ? value : null;
+}
 
-    if (activePublishingActivity?.operationId === operationId) {
+async function resolvePublishingActivity(jobId = null, tabId = null) {
+    const normalizedJobId = normalizePublishingJobId(jobId);
+    const normalizedTabId = Number.isInteger(tabId) && tabId > 0 ? tabId : null;
+    if (normalizedJobId == null && normalizedTabId == null) return null;
+
+    const matchesMetadata = activity => Boolean(
+        activity &&
+        (normalizedJobId == null || activity.jobId === normalizedJobId) &&
+        (normalizedTabId == null || activity.tabId === normalizedTabId)
+    );
+    const activeMatch = matchesMetadata(activePublishingActivity)
+        ? activePublishingActivity
+        : null;
+    const persisted = await FacebookActivity.getFacebookActivityLock();
+    if (!persisted || persisted.owner !== FACEBOOK_ACTIVITY_OWNERS.PUBLISHING ||
+        !matchesMetadata(persisted)) return null;
+
+    if (activeMatch && activeMatch.operationId !== persisted.operationId) return null;
+    return persisted;
+}
+
+async function refreshPublishingActivity(jobId, tabId = null) {
+    const activity = await resolvePublishingActivity(jobId, tabId);
+    if (!activity) return false;
+    return FacebookActivity.refreshFacebookActivityLock(
+        FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+        activity.operationId
+    );
+}
+
+async function finishPublishingActivity(jobId, tabId = null) {
+    const activity = await resolvePublishingActivity(jobId, tabId);
+    if (!activity) return false;
+
+    if (activePublishingActivity?.operationId === activity.operationId) {
         activePublishingActivity.stopHeartbeat();
         activePublishingActivity = null;
     }
     return FacebookActivity.releaseFacebookActivityLock(
         FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
-        operationId
+        activity.operationId
     );
 }
 
@@ -283,10 +313,36 @@ async function acquirePublishingActivity(operationId, preemptLowerPriority = fal
 }
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-    if (activePublishingActivity?.tabId !== tabId) return;
     finishPublishingActivity(null, tabId)
         .catch(error => console.warn('[Background] Publishing tab cleanup failed:', error?.message || error));
 });
+
+async function claimPublishingJob(pairing) {
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+    }, PUBLISH_CLAIM_TIMEOUT_MS);
+    try {
+        return pairing
+            ? await fetch(`${BASE_URL}/api/workers/${pairing.workerId}/jobs/claim`, {
+                method: 'POST',
+                headers: workerHeaders(pairing),
+                signal: controller.signal,
+            })
+            : await fetch(`${BASE_URL}/api/jobs/next`, { signal: controller.signal });
+    } catch (error) {
+        if (timedOut) {
+            const timeoutError = new Error(`Publishing job claim timed out after ${PUBLISH_CLAIM_TIMEOUT_MS}ms.`);
+            timeoutError.code = 'PUBLISH_CLAIM_TIMEOUT';
+            throw timeoutError;
+        }
+        throw error;
+    } finally {
+        clearTimeout(timeout);
+    }
+}
 
 async function checkJobs({ preemptLowerPriority = false } = {}) {
     if (isScanning) return;
@@ -294,6 +350,7 @@ async function checkJobs({ preemptLowerPriority = false } = {}) {
     let publishingOperationId = null;
     let acquiredPublishingJobId = null;
     let publishingHandedOff = false;
+    let stopPublishingHeartbeat = null;
     try {
         await facebookActivityReady;
         if (await checkSafetyCooldown()) return;
@@ -309,13 +366,15 @@ async function checkJobs({ preemptLowerPriority = false } = {}) {
             publishingOperationId = null;
             return;
         }
+        stopPublishingHeartbeat = startFacebookActivityHeartbeat(
+            FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+            publishingOperationId
+        );
 
         // Paired workers claim ONLY their own workspace's jobs; unpaired workers
         // use the legacy global endpoint. Both return { job } (or { job: null }).
         const pairing = await getPairing();
-        const res = pairing
-            ? await fetch(`${BASE_URL}/api/workers/${pairing.workerId}/jobs/claim`, { method: 'POST', headers: workerHeaders(pairing) })
-            : await fetch(`${BASE_URL}/api/jobs/next`);
+        const res = await claimPublishingJob(pairing);
         // Any HTTP response proves the server is reachable — record contact before
         // checking res.ok. Gating this on res.ok meant a 429 (we rate-limit at
         // 500/min) or a transient 500 counted as "server dead", which drove the
@@ -327,6 +386,15 @@ async function checkJobs({ preemptLowerPriority = false } = {}) {
         if (!data || !data.job) return;
 
         const job = data.job;
+        const jobAttached = await FacebookActivity.attachFacebookActivityJob(
+            FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+            publishingOperationId,
+            job.id
+        );
+        if (!jobAttached) {
+            throw new Error('Claimed job could not be attached to its Facebook activity lock.');
+        }
+        acquiredPublishingJobId = job.id;
         const lastJobId = await ExtStorage.getLastJobId();
         if (lastJobId === job.id) {
             // If we've seen this job before but it's STILL being returned as 'SENT',
@@ -338,7 +406,6 @@ async function checkJobs({ preemptLowerPriority = false } = {}) {
         }
 
         console.log("[Background] New Job:", job.id);
-        acquiredPublishingJobId = job.id;
         await ExtStorage.setLastJobId(job.id);
 
         try {
@@ -356,10 +423,7 @@ async function checkJobs({ preemptLowerPriority = false } = {}) {
                 operationId: publishingOperationId,
                 jobId: String(job.id),
                 tabId: tab.id,
-                stopHeartbeat: startFacebookActivityHeartbeat(
-                    FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
-                    publishingOperationId
-                ),
+                stopHeartbeat: stopPublishingHeartbeat,
             };
 
             // Safety: If tab doesn't finish loading in 60s, cleanup
@@ -412,6 +476,7 @@ async function checkJobs({ preemptLowerPriority = false } = {}) {
         console.error("Poll Error:", err);
     } finally {
         if (publishingOperationId && !publishingHandedOff) {
+            if (stopPublishingHeartbeat) stopPublishingHeartbeat();
             const finished = acquiredPublishingJobId != null
                 ? await finishPublishingActivity(acquiredPublishingJobId)
                 : false;
@@ -588,10 +653,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
             try {
                 if (isRealJob && !isJobState) {
-                    await FacebookActivity.refreshFacebookActivityLock(
-                        FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
-                        facebookActivityOperationId(FACEBOOK_ACTIVITY_OWNERS.PUBLISHING, payload.taskId)
-                    );
+                    await refreshPublishingActivity(payload.taskId, sender.tab?.id || null);
                 }
                 headers = await authedHeaders({ 'Content-Type': 'application/json' });
 

@@ -81,6 +81,7 @@ The extension keeps one `facebookActivityLock` record in
 {
   "owner": "publishing | group_sync | engagement",
   "operationId": "owner-specific stable identifier",
+  "jobId": null,
   "tabId": null,
   "acquiredAt": 0,
   "heartbeatAt": 0
@@ -96,6 +97,14 @@ Release and heartbeat refresh require both the owner and operation ID, so one
 workflow cannot release another workflow's lock. A created Facebook tab is
 attached only when both values still match; late callbacks cannot attach a tab
 to a replacement operation.
+
+Publishing reserves the lock with `jobId: null`. After a backend claim, the
+numeric job ID is attached as immutable metadata to the same `operationId`
+before a tab is created. LOG heartbeats, terminal reports and `tabs.onRemoved`
+can therefore recover the persisted operation identity after an MV3 restart;
+they never reconstruct an operation ID from a job ID. The claim request has a
+30-second abort timeout, and all no-job, network-failure and timeout paths stop
+the reservation heartbeat and release the pending lock.
 
 - Heartbeat interval: 30 seconds.
 - Stale threshold: 10 minutes, measured from `heartbeatAt`. Group sync has a

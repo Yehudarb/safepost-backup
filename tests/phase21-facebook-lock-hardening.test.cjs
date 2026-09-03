@@ -176,7 +176,7 @@ function createBackgroundHarness({ acquireResult }) {
         const background = fs.readFileSync(path.join(__dirname, '../safe_post_extension/background.js'), 'utf8');
         const start = background.indexOf('async function checkJobs');
         const reserve = background.indexOf('acquirePublishingActivity(', start);
-        const claim = background.indexOf('/jobs/claim', start);
+        const claim = background.indexOf('claimPublishingJob(', start);
         assert('source order keeps reservation before claim', start >= 0 && reserve > start && reserve < claim);
     }
 

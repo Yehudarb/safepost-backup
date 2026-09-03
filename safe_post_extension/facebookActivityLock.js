@@ -53,6 +53,12 @@
             }
         }
 
+        function normalizeJobId(jobId) {
+            if (jobId == null) return null;
+            const value = String(jobId);
+            return /^[1-9]\d*$/.test(value) ? value : null;
+        }
+
         function normalizeLock(value) {
             if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
             if (!VALID_OWNERS.has(value.owner)) return null;
@@ -60,6 +66,7 @@
             return {
                 owner: value.owner,
                 operationId: value.operationId,
+                jobId: normalizeJobId(value.jobId),
                 tabId: Number.isInteger(value.tabId) && value.tabId > 0 ? value.tabId : null,
                 acquiredAt: Number(value.acquiredAt),
                 heartbeatAt: Number(value.heartbeatAt),
@@ -227,7 +234,14 @@
                 const timestamp = now();
                 const lock = current
                     ? { ...current, heartbeatAt: timestamp }
-                    : { owner, operationId, tabId: null, acquiredAt: timestamp, heartbeatAt: timestamp };
+                    : {
+                        owner,
+                        operationId,
+                        jobId: null,
+                        tabId: null,
+                        acquiredAt: timestamp,
+                        heartbeatAt: timestamp,
+                    };
                 await storage.writeFacebookActivityLock(lock);
 
                 // Mutations are serialized only within this service-worker/module
@@ -273,6 +287,23 @@
                 await storage.writeFacebookActivityLock(updated);
                 const verified = await readLock();
                 return sameIdentity(verified, owner, operationId) && verified.tabId === tabId;
+            });
+        }
+
+        async function attachFacebookActivityJob(owner, operationId, jobId) {
+            validateIdentity(owner, operationId);
+            if (owner !== FACEBOOK_ACTIVITY_OWNERS.PUBLISHING) return false;
+            const normalizedJobId = normalizeJobId(jobId);
+            if (!normalizedJobId) return false;
+            return serializeMutation(async () => {
+                const current = await readLock();
+                if (!sameIdentity(current, owner, operationId)) return false;
+                if (current.jobId != null && current.jobId !== normalizedJobId) return false;
+                const updated = { ...current, jobId: normalizedJobId, heartbeatAt: now() };
+                await storage.writeFacebookActivityLock(updated);
+                const verified = await readLock();
+                return sameIdentity(verified, owner, operationId) &&
+                    verified.jobId === normalizedJobId;
             });
         }
 
@@ -433,6 +464,7 @@
             acquireFacebookActivityLock,
             refreshFacebookActivityLock,
             attachFacebookActivityTab,
+            attachFacebookActivityJob,
             releaseFacebookActivityLock,
             isFacebookActivityBusy,
             isFacebookActivityLockStale,
