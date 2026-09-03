@@ -81,26 +81,44 @@ The extension keeps one `facebookActivityLock` record in
 {
   "owner": "publishing | group_sync | engagement",
   "operationId": "owner-specific stable identifier",
+  "tabId": null,
   "acquiredAt": 0,
   "heartbeatAt": 0
 }
 ```
 
-Lock mutations are serialized inside the MV3 service worker and verified with a
-read-back because `chrome.storage.local` has no compare-and-set operation.
+Lock mutations are serialized inside this MV3 service-worker/module instance.
+The read-back detects ownership changes but does not make acquisition globally
+atomic because `chrome.storage.local` has no transaction or compare-and-set.
+Future popup, offscreen or other extension contexts must not mutate this record
+independently without stronger cross-context coordination.
 Release and heartbeat refresh require both the owner and operation ID, so one
-workflow cannot release another workflow's lock.
+workflow cannot release another workflow's lock. A created Facebook tab is
+attached only when both values still match; late callbacks cannot attach a tab
+to a replacement operation.
 
 - Heartbeat interval: 30 seconds.
 - Stale threshold: 10 minutes, measured from `heartbeatAt`. Group sync has a
   six-minute operational timeout, so this leaves conservative scheduling and
   browser latency headroom without allowing an abandoned lock to persist.
+- Absolute lifetime: 20 minutes, measured from the immutable `acquiredAt`. This
+  is more than three times the normal group-sync timeout while preventing a hung
+  workflow from extending ownership forever with fresh heartbeats. Recovery
+  verifies and closes a known owned tab before clearing the lock; failed tab
+  reconciliation leaves the lock held rather than opening a competing tab.
+- Pre-emption handler timeout: 5 seconds. Timeout and handler exceptions return
+  `acknowledged: false`; publishing then uses the existing bounded unlock wait
+  and never force-clears another owner.
 - Publishing pre-emption wait: 30 seconds. Publishing requests cooperative
   cancellation of group sync or a future engagement worker, waits for cleanup
-  and release, and only then opens its Facebook tab.
+  and release, reserves ownership, and only then claims a backend job and opens
+  its Facebook tab. Lock contention therefore cannot consume a queue attempt.
 - Group sync acquires the same lock before opening `/groups/joins/`. Its shared
   cleanup closes its tab, removes listeners/timers, clears local running state
-  and releases only its own lock on every terminal path.
+  and releases only its own lock on every terminal path. After an MV3 restart,
+  a persisted group-sync lock is reconciled with its recorded tab: a live tab is
+  closed, a missing tab is treated as already cleaned, and only then is the lock
+  recovered.
 - Engagement Phase 1B provides the `engagement` owner and pre-emption handler
   contract only. It does not claim scans, open tabs or parse Facebook DOM.
 

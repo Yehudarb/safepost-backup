@@ -248,9 +248,9 @@ function assert(name, condition, detail = '') {
         publishStart >= 0 && publishAcquire > publishStart && publishAcquire < publishTab);
     assert('background imports the shared lock module',
         /importScripts\([^)]*facebookActivityLock\.js/.test(background));
-    const buildScript = fs.readFileSync(path.join(__dirname, '../build.sh'), 'utf8');
-    assert('extension build ships the shared lock module',
-        /cp safe_post_extension\/facebookActivityLock\.js dist\/scripts\/facebookActivityLock\.js/.test(buildScript));
+    const packageJson = fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8');
+    assert('extension build packages imported service-worker dependencies',
+        /package-extension-worker\.cjs/.test(packageJson));
 
     console.log('\n G. transition observability');
     {

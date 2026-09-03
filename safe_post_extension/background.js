@@ -10,6 +10,12 @@ const {
     FACEBOOK_ACTIVITY_HEARTBEAT_MS,
     FACEBOOK_ACTIVITY_PREEMPT_WAIT_MS,
 } = globalThis.SafePostFacebookActivityLockFactory;
+const facebookActivityReady = FacebookActivity.reconcileFacebookActivityLock({
+    recoverOrphanedGroupSync: true,
+}).catch(error => {
+    console.warn('[Background] Facebook activity startup reconciliation failed:', error?.message || error);
+    return { recovered: false, reason: 'reconciliation-error' };
+});
 
 const API_PORT = 3001;
 // Default backend URL — production, so a fresh install works with zero setup.
@@ -233,7 +239,9 @@ function startFacebookActivityHeartbeat(owner, operationId) {
 
 async function finishPublishingActivity(jobId, tabId = null) {
     let operationId = null;
-    if (jobId != null && /^\d+$/.test(String(jobId))) {
+    if (jobId != null && activePublishingActivity?.jobId === String(jobId)) {
+        operationId = activePublishingActivity.operationId;
+    } else if (jobId != null && /^\d+$/.test(String(jobId))) {
         operationId = facebookActivityOperationId(FACEBOOK_ACTIVITY_OWNERS.PUBLISHING, jobId);
     } else if (tabId != null && activePublishingActivity?.tabId === tabId) {
         operationId = activePublishingActivity.operationId;
@@ -250,36 +258,14 @@ async function finishPublishingActivity(jobId, tabId = null) {
     );
 }
 
-async function preparePublishingPoll(preemptLowerPriority) {
-    const current = await FacebookActivity.getFacebookActivityLock();
-    if (!current) return true;
-    if (FacebookActivity.isFacebookActivityLockStale(current)) {
-        await FacebookActivity.recoverStaleFacebookActivityLock();
-        return true;
-    }
-    if (current.owner === FACEBOOK_ACTIVITY_OWNERS.PUBLISHING) return false;
-    if (!preemptLowerPriority) return false;
-
-    const requestId = facebookActivityOperationId(
-        FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
-        `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    );
-    await FacebookActivity.requestFacebookActivityPreemption(
-        FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
-        requestId
-    );
-    return FacebookActivity.waitForFacebookActivityUnlock({
-        timeoutMs: FACEBOOK_ACTIVITY_PREEMPT_WAIT_MS,
-    });
-}
-
-async function acquirePublishingActivity(operationId) {
+async function acquirePublishingActivity(operationId, preemptLowerPriority = false) {
     let result = await FacebookActivity.acquireFacebookActivityLock(
         FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
         operationId
     );
     if (result.acquired) return true;
-    if (!result.holder || result.holder.owner === FACEBOOK_ACTIVITY_OWNERS.PUBLISHING) return false;
+    if (!preemptLowerPriority || !result.holder ||
+        result.holder.owner === FACEBOOK_ACTIVITY_OWNERS.PUBLISHING) return false;
 
     await FacebookActivity.requestFacebookActivityPreemption(
         FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
@@ -305,11 +291,24 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 async function checkJobs({ preemptLowerPriority = false } = {}) {
     if (isScanning) return;
     isScanning = true;
+    let publishingOperationId = null;
     let acquiredPublishingJobId = null;
     let publishingHandedOff = false;
     try {
+        await facebookActivityReady;
         if (await checkSafetyCooldown()) return;
-        if (!await preparePublishingPoll(preemptLowerPriority)) return;
+
+        // Reserve Facebook before claiming from the backend. Lock contention
+        // therefore cannot consume a queue attempt for a job that never reached
+        // Facebook.
+        publishingOperationId = facebookActivityOperationId(
+            FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+            `pending-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        );
+        if (!await acquirePublishingActivity(publishingOperationId, preemptLowerPriority)) {
+            publishingOperationId = null;
+            return;
+        }
 
         // Paired workers claim ONLY their own workspace's jobs; unpaired workers
         // use the legacy global endpoint. Both return { job } (or { job: null }).
@@ -339,29 +338,27 @@ async function checkJobs({ preemptLowerPriority = false } = {}) {
         }
 
         console.log("[Background] New Job:", job.id);
-        const activityOperationId = facebookActivityOperationId(
-            FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
-            job.id
-        );
-        if (!await acquirePublishingActivity(activityOperationId)) {
-            // The backend lease remains the source of truth and will requeue the
-            // claim using its existing retry semantics. Do not open Facebook or
-            // mark this job as seen when exclusive ownership was not obtained.
-            console.warn('[Background] Publishing deferred: Facebook activity lock unavailable for job', job.id);
-            return;
-        }
         acquiredPublishingJobId = job.id;
         await ExtStorage.setLastJobId(job.id);
 
         try {
             const tab = await chrome.tabs.create({ url: job.group_url, active: true });
+            const attached = await FacebookActivity.attachFacebookActivityTab(
+                FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+                publishingOperationId,
+                tab.id
+            );
+            if (!attached) {
+                await chrome.tabs.remove(tab.id).catch(() => {});
+                throw new Error('Publishing tab could not be attached to its Facebook activity lock.');
+            }
             activePublishingActivity = {
-                operationId: activityOperationId,
+                operationId: publishingOperationId,
                 jobId: String(job.id),
                 tabId: tab.id,
                 stopHeartbeat: startFacebookActivityHeartbeat(
                     FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
-                    activityOperationId
+                    publishingOperationId
                 ),
             };
 
@@ -414,8 +411,16 @@ async function checkJobs({ preemptLowerPriority = false } = {}) {
     } catch (err) {
         console.error("Poll Error:", err);
     } finally {
-        if (acquiredPublishingJobId != null && !publishingHandedOff) {
-            await finishPublishingActivity(acquiredPublishingJobId);
+        if (publishingOperationId && !publishingHandedOff) {
+            const finished = acquiredPublishingJobId != null
+                ? await finishPublishingActivity(acquiredPublishingJobId)
+                : false;
+            if (!finished) {
+                await FacebookActivity.releaseFacebookActivityLock(
+                    FACEBOOK_ACTIVITY_OWNERS.PUBLISHING,
+                    publishingOperationId
+                );
+            }
         }
         isScanning = false;
     }
@@ -684,6 +689,7 @@ async function getFacebookUserFromContent() {
 }
 
 async function scanAndSyncGroups() {
+    await facebookActivityReady;
     if (isGroupScanning) {
         console.warn("[Background] scanAndSyncGroups skipped — a scan is already running");
         return { success: false, error: "already-running" };
@@ -770,7 +776,7 @@ async function scanAndSyncGroups() {
         }, 360000);
 
         // active:true so the user can watch the live status panel during the scrape.
-        chrome.tabs.create({ url: "https://www.facebook.com/groups/joins/?nav_source=tab", active: true }, (tab) => {
+        chrome.tabs.create({ url: "https://www.facebook.com/groups/joins/?nav_source=tab", active: true }, async (tab) => {
             if (chrome.runtime.lastError || !tab?.id) {
                 finish({ success: false, error: chrome.runtime.lastError?.message || 'Could not open Facebook.' });
                 return;
@@ -780,6 +786,20 @@ async function scanAndSyncGroups() {
                 return;
             }
             tabId = tab.id;
+            let attached = false;
+            try {
+                attached = await FacebookActivity.attachFacebookActivityTab(
+                    FACEBOOK_ACTIVITY_OWNERS.GROUP_SYNC,
+                    activityOperationId,
+                    tabId
+                );
+            } catch (error) {
+                console.warn('[Background] Group sync tab attachment failed:', error?.message || error);
+            }
+            if (!attached) {
+                finish({ success: false, error: 'Group sync tab could not be attached to its Facebook activity lock.' });
+                return;
+            }
             listener = (id, info) => {
                 if (id !== tabId || info.status !== 'complete') return;
                 chrome.tabs.onUpdated.removeListener(listener);

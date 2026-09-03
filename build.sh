@@ -23,15 +23,14 @@ fi
 # Install dependencies
 npm install
 
-# Build frontend
+# Build frontend and package the service worker with every dependency parsed
+# from its importScripts() calls. The build fails if a dependency is missing.
 npm run build
 
-# Copy the active Chrome extension files into the build output
+# Copy non-service-worker extension files into the build output. background.js
+# and its importScripts dependencies were copied and verified by npm run build.
 echo "📋 Copying extension files..."
 cp safe_post_extension/content.js dist/scripts/content.js
-cp safe_post_extension/background.js dist/scripts/background.js
-cp safe_post_extension/extensionStorage.js dist/scripts/extensionStorage.js
-cp safe_post_extension/facebookActivityLock.js dist/scripts/facebookActivityLock.js
 cp safe_post_extension/fbUtils.js dist/scripts/fbUtils.js
 
 echo "✅ Build complete!"
