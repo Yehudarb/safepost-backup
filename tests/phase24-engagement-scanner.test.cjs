@@ -266,7 +266,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
                     // The real page inspector returns membership evidence alongside
                     // the page classification; the identity gate depends on it.
                     const membership = options.membership === undefined
-                        ? { member: true, strategy: 'joined_state_control', signal: 'joined_affordance' }
+                        ? { member: true, strategy: 'group_header_joined_control', signal: 'joined_affordance' }
                         : options.membership;
                     return [{ result: { ...(options.pageState || { ok: true }), membership } }];
                 },
@@ -628,7 +628,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
             harness.statuses.some(item => item.status === 'COMPLETED'), JSON.stringify(harness.statuses));
         assert('the bind carries the membership evidence that authorised it',
             harness.binds[0].membership_verified === true &&
-            harness.binds[0].evidence_strategy === 'joined_state_control',
+            harness.binds[0].evidence_strategy === 'group_header_joined_control',
             JSON.stringify(harness.binds));
     }
     {
@@ -640,7 +640,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
         const harness = createBackgroundHarness(lock, {
             scanFacebookUserId: null,
             persistedFacebookUserId: null,
-            membership: { member: false, strategy: 'join_call_to_action', signal: 'join_affordance' },
+            membership: { member: false, strategy: 'group_header_join_call_to_action', signal: 'join_affordance' },
         });
         await harness.api.ready;
         await harness.api.checkEngagementScans();
@@ -685,7 +685,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
         const harness = createBackgroundHarness(lock, {
             tabFacebookUserId: '100000000000999',
             persistedFacebookUserId: '100000000000999',
-            membership: { member: true, strategy: 'joined_state_control', signal: 'joined_affordance' },
+            membership: { member: true, strategy: 'group_header_joined_control', signal: 'joined_affordance' },
         });
         await harness.api.ready;
         await harness.api.checkEngagementScans();

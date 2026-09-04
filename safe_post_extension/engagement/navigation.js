@@ -103,28 +103,92 @@
         'join group',
     ];
 
+    const AFFORDANCE_SELECTOR = '[role="button"], [role="link"], button, a';
+    // Measured against the live page: the membership control's smallest ancestor
+    // that also contains the group's <h1> is 7 levels up. 12 leaves room for a
+    // layout change without letting the walk escape the header.
+    const MAX_HEADER_ANCESTORS = 12;
+
     function affordanceLabel(element) {
         const label = element?.getAttribute?.('aria-label');
         const text = label || element?.textContent || '';
         return String(text).replace(/\s+/g, ' ').trim().toLowerCase();
     }
 
-    function hasAffordance(root, labels) {
-        if (!root || typeof root.querySelectorAll !== 'function') return false;
-        const wanted = new Set(labels.map(label => label.toLowerCase()));
-        return Array.from(root.querySelectorAll('[role="button"], [role="link"], button, a'))
-            .some(element => wanted.has(affordanceLabel(element)));
+    function groupIdFromHref(href) {
+        const match = String(href || '').match(/\/groups\/([^/?#]+)/);
+        if (!match) return null;
+        let id;
+        try { id = decodeURIComponent(match[1]); } catch { id = match[1]; }
+        return ['joins', 'feed', 'discover', 'create'].includes(id.toLowerCase()) ? null : id;
+    }
+
+    // 'joined' | 'join' | null — 'joined' wins, so a header showing both cannot
+    // be read as a non-member page.
+    function membershipControlKind(region) {
+        if (!region || typeof region.querySelectorAll !== 'function') return null;
+        const joined = new Set(JOINED_LABELS.map(label => label.toLowerCase()));
+        const join = new Set(JOIN_CTA_LABELS.map(label => label.toLowerCase()));
+        let sawJoin = false;
+        for (const element of region.querySelectorAll(AFFORDANCE_SELECTOR)) {
+            const label = affordanceLabel(element);
+            if (joined.has(label)) return 'joined';
+            if (join.has(label)) sawJoin = true;
+        }
+        return sawJoin ? 'join' : null;
+    }
+
+    // The group header: the smallest ancestor of the group's own <h1> that also
+    // carries a membership control. Scoping to it — rather than to all of
+    // [role="main"] — keeps a recommendation card's "Joined" out of reach.
+    function findGroupHeaderRegion(root) {
+        if (!root || typeof root.querySelector !== 'function') return null;
+        const heading = root.querySelector('h1');
+        if (!heading) return null;
+        let node = heading;
+        for (let depth = 0; depth < MAX_HEADER_ANCESTORS && node.parentElement; depth++) {
+            node = node.parentElement;
+            // Once the candidate would swallow the feed we are looking at the
+            // page, not the header. Overshooting is not evidence.
+            if (node.querySelector('[role="feed"]')) return null;
+            if (membershipControlKind(node)) return node;
+        }
+        return null;
+    }
+
+    function foreignGroupLinkCount(region, groupId) {
+        const ids = new Set();
+        for (const anchor of region.querySelectorAll('a[href]')) {
+            const id = groupIdFromHref(anchor.getAttribute('href'));
+            if (id) ids.add(id);
+        }
+        if (groupId) return [...ids].filter(id => id !== String(groupId)).length;
+        // Without a group id to compare against, more than one distinct group in
+        // the header is itself the ambiguity we are guarding against.
+        return ids.size > 1 ? ids.size : 0;
     }
 
     // member: true  -> positive evidence this account belongs to this group
     // member: false -> positive evidence it does not
     // member: null  -> no evidence either way; the caller must NOT bind
-    function evaluateGroupMembership(root) {
-        if (hasAffordance(root, JOINED_LABELS)) {
-            return { member: true, strategy: 'joined_state_control', signal: 'joined_affordance' };
+    function evaluateGroupMembership(root, options = {}) {
+        const groupId = options.groupId == null ? null : String(options.groupId).trim();
+        const region = findGroupHeaderRegion(root);
+        if (!region) {
+            return { member: null, strategy: 'none', signal: 'no_group_header_region' };
         }
-        if (hasAffordance(root, JOIN_CTA_LABELS)) {
-            return { member: false, strategy: 'join_call_to_action', signal: 'join_affordance' };
+        // A header that also advertises other groups is not a header we can
+        // trust: a recommendation card's "Joined" would be indistinguishable
+        // from this group's own state. Block rather than guess.
+        if (foreignGroupLinkCount(region, groupId) > 0) {
+            return { member: null, strategy: 'none', signal: 'header_contains_other_groups' };
+        }
+        const kind = membershipControlKind(region);
+        if (kind === 'joined') {
+            return { member: true, strategy: 'group_header_joined_control', signal: 'joined_affordance' };
+        }
+        if (kind === 'join') {
+            return { member: false, strategy: 'group_header_join_call_to_action', signal: 'join_affordance' };
         }
         return { member: null, strategy: 'none', signal: 'no_membership_affordance' };
     }
@@ -137,6 +201,8 @@
         normalizeGroupUrl,
         validateEngagementScan,
         classifyGroupPage,
+        findGroupHeaderRegion,
+        membershipControlKind,
         evaluateGroupMembership,
     });
     global.SafePostEngagementNavigation = api;

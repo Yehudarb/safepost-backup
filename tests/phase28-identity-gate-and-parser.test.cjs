@@ -52,9 +52,35 @@ const GROUP_URL = 'https://www.facebook.com/groups/phase28-group/';
 
 // ---------------------------------------------------------------- DOM helpers
 
+const GID = 'phase28-group';
+
 const mainRegion = inner =>
     new JSDOM(`<body><div role="main">${inner}</div></body>`, { url: GROUP_URL })
         .window.document.querySelector('[role="main"]');
+
+// A group page shaped like the real one: the title and the membership controls
+// live in one header block, and the feed sits outside it.
+const header = headerInner => mainRegion(`
+    <div id="header-block">
+        <div><div><h1>Phase 28 Group</h1></div></div>
+        ${headerInner}
+    </div>
+    <div role="feed"><div role="article"><div dir="auto">a post</div></div></div>
+`);
+
+// The same page, plus a recommendations rail outside the header carrying a
+// "Joined" control that belongs to a DIFFERENT group.
+const withSuggestedRail = headerInner => mainRegion(`
+    <div id="header-block">
+        <div><div><h1>Phase 28 Group</h1></div></div>
+        ${headerInner}
+    </div>
+    <div id="suggested">
+        <a href="/groups/555444333/">Some other group</a>
+        <div role="button" aria-label="הצטרפת"></div>
+    </div>
+    <div role="feed"><div role="article"><div dir="auto">a post</div></div></div>
+`);
 
 const article = inner =>
     new JSDOM(`<main><div role="feed"><div role="article" id="a">${inner}</div></div></main>`, { url: GROUP_URL })
@@ -141,45 +167,87 @@ async function claimInto(tenant, scanId) {
 
     console.log('Phase 28 identity gate and parser correctness\n');
 
-    console.log(' A. membership evidence read off the group page');
+    console.log(' A. membership evidence, scoped to the group header');
     {
-        const member = navigation.evaluateGroupMembership(mainRegion(
-            `<div role="button" aria-label="הצטרפת"></div><div role="button" aria-label="הזמיני"></div>${COMPOSER}`
-        ));
-        assert('a "הצטרפת" state control is positive membership evidence',
-            member.member === true && member.strategy === 'joined_state_control', JSON.stringify(member));
+        const opts = { groupId: GID };
 
-        const english = navigation.evaluateGroupMembership(mainRegion('<div role="button" aria-label="Joined"></div>'));
+        const member = navigation.evaluateGroupMembership(header(
+            `<div role="button" aria-label="הצטרפת"></div><div role="button" aria-label="הזמיני"></div>`
+        ), opts);
+        assert('a "הצטרפת" control in the group header is positive membership evidence',
+            member.member === true && member.strategy === 'group_header_joined_control', JSON.stringify(member));
+
+        const english = navigation.evaluateGroupMembership(
+            header('<div role="button" aria-label="Joined"></div>'), opts);
         assert('the English "Joined" control is equally positive', english.member === true);
 
-        const nonMember = navigation.evaluateGroupMembership(mainRegion(
-            `<div role="button" aria-label="הצטרף לקבוצה"></div>${COMPOSER}`
-        ));
-        assert('a "הצטרף לקבוצה" call to action is positive NON-membership evidence',
-            nonMember.member === false && nonMember.strategy === 'join_call_to_action', JSON.stringify(nonMember));
+        const nonMember = navigation.evaluateGroupMembership(header(
+            `<div role="button" aria-label="הצטרף לקבוצה"></div>`
+        ), opts);
+        assert('a "הצטרף לקבוצה" control in the header is positive NON-membership evidence',
+            nonMember.member === false && nonMember.strategy === 'group_header_join_call_to_action',
+            JSON.stringify(nonMember));
 
-        const englishJoin = navigation.evaluateGroupMembership(mainRegion('<div role="button">Join group</div>'));
+        const englishJoin = navigation.evaluateGroupMembership(
+            header('<div role="button">Join group</div>'), opts);
         assert('the English "Join group" call to action is equally negative', englishJoin.member === false);
 
-        const composerOnly = navigation.evaluateGroupMembership(mainRegion(COMPOSER));
-        assert('a composer alone proves nothing, because non-members get one too',
-            composerOnly.member === null && composerOnly.strategy === 'none', JSON.stringify(composerOnly));
+        // THE NARROWING. A recommendations rail sits outside the header block;
+        // its "Joined" belongs to another group and must never be read as
+        // evidence for this one.
+        const suggested = navigation.evaluateGroupMembership(withSuggestedRail(''), opts);
+        assert('a "Joined" inside a suggested-group card outside the header is ignored',
+            suggested.member === null, JSON.stringify(suggested));
 
-        const empty = navigation.evaluateGroupMembership(mainRegion('<div>ordinary group content</div>'));
-        assert('no membership affordance yields no evidence rather than a guess', empty.member === null);
+        // If a foreign group is advertised INSIDE the header block, the two
+        // become indistinguishable, so the detector must block rather than guess.
+        const contaminated = navigation.evaluateGroupMembership(header(
+            `<div role="button" aria-label="הצטרפת"></div>
+             <a href="/groups/999888777/">another group</a>`
+        ), opts);
+        assert('a header advertising another group blocks instead of binding',
+            contaminated.member === null && contaminated.signal === 'header_contains_other_groups',
+            JSON.stringify(contaminated));
+
+        const ownLinkOk = navigation.evaluateGroupMembership(header(
+            `<div role="button" aria-label="הצטרפת"></div><a href="/groups/${GID}/members/">members</a>`
+        ), opts);
+        assert('a link to the group itself is not foreign and does not block',
+            ownLinkOk.member === true, JSON.stringify(ownLinkOk));
+
+        const composerOnly = navigation.evaluateGroupMembership(header(COMPOSER), opts);
+        assert('a composer alone proves nothing, because non-members get one too',
+            composerOnly.member === null, JSON.stringify(composerOnly));
+
+        const ambiguous = navigation.evaluateGroupMembership(
+            header('<div>ordinary header content</div>'), opts);
+        assert('an ambiguous header yields no evidence rather than a guess',
+            ambiguous.member === null && ambiguous.signal === 'no_group_header_region',
+            JSON.stringify(ambiguous));
+
+        const noHeading = navigation.evaluateGroupMembership(
+            mainRegion('<div role="button" aria-label="הצטרפת"></div>'), opts);
+        assert('a page with no group heading cannot produce membership evidence',
+            noHeading.member === null && noHeading.signal === 'no_group_header_region',
+            JSON.stringify(noHeading));
 
         assert('an unusable root cannot be mistaken for evidence',
-            navigation.evaluateGroupMembership(null).member === null);
+            navigation.evaluateGroupMembership(null, opts).member === null);
 
-        // "הצטרף לקבוצה" must never be read as the "הצטרפת" joined state.
-        const both = navigation.evaluateGroupMembership(mainRegion(
-            '<div role="button" aria-label="הצטרף לקבוצה"></div>'
-        ));
-        assert('the join call to action is not matched as the joined state',
-            both.member === false, JSON.stringify(both));
+        const both = navigation.evaluateGroupMembership(header(
+            '<div role="button" aria-label="הצטרפת"></div><div role="button" aria-label="הצטרף לקבוצה"></div>'
+        ), opts);
+        assert('a header showing both controls resolves to joined, never to non-member',
+            both.member === true, JSON.stringify(both));
 
-        assert('evaluateGroupMembership is exported for the page inspector',
-            typeof navigation.evaluateGroupMembership === 'function');
+        assert('the header region never extends past the feed',
+            navigation.findGroupHeaderRegion(
+                mainRegion(`<h1>${'G'}</h1><div role="feed"><div role="button" aria-label="הצטרפת"></div></div>`)
+            ) === null);
+
+        assert('evaluateGroupMembership and findGroupHeaderRegion are exported',
+            typeof navigation.evaluateGroupMembership === 'function' &&
+            typeof navigation.findGroupHeaderRegion === 'function');
     }
 
     console.log('\n B. author extraction');
@@ -343,8 +411,18 @@ async function claimInto(tenant, scanId) {
     }
 
     console.log('\n E. the backend refuses an unevidenced bind');
-    const tenantA = await makeTenant('a');
-    const tenantB = await makeTenant('b');
+    // Tenants are registered the moment they exist, so a failure part-way
+    // through creation still leaves a complete cleanup list. Every tenant here
+    // has engagement_enabled turned on; leaving one behind would leave an
+    // orphaned enabled workspace in the QA project.
+    const tenants = [];
+    const makeTrackedTenant = async label => {
+        const tenant = await makeTenant(label);
+        tenants.push(tenant);
+        return tenant;
+    };
+    const tenantA = await makeTrackedTenant('a');
+    const tenantB = await makeTrackedTenant('b');
     const boundGroup = `${tag}_bound`;
     const legacyGroup = `${tag}_legacy`;
     const otherGroup = `${tag}_other`;
@@ -372,7 +450,7 @@ async function claimInto(tenant, scanId) {
                 noFlag.status === 400, `status=${noFlag.status} ${JSON.stringify(noFlag.body)}`);
 
             const falseFlag = await work(tenantA, 'POST', `/scans/${scanId}/bind-identity`, {
-                facebook_user_id: FB_ID_A, membership_verified: false, evidence_strategy: 'joined_state_control',
+                facebook_user_id: FB_ID_A, membership_verified: false, evidence_strategy: 'group_header_joined_control',
             });
             assert('a bind asserting membership_verified=false is refused', falseFlag.status === 400);
 
@@ -392,7 +470,7 @@ async function claimInto(tenant, scanId) {
                 stillNull?.[0]?.facebook_user_id === null, JSON.stringify(stillNull));
 
             const good = await work(tenantA, 'POST', `/scans/${scanId}/bind-identity`, {
-                facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'joined_state_control',
+                facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'group_header_joined_control',
             });
             assert('an evidenced bind succeeds and binds exactly one group',
                 good.status === 200 && good.body?.bound_groups === 1,
@@ -413,7 +491,7 @@ async function claimInto(tenant, scanId) {
             const claimed = await claimInto(tenantA, scanId);
             assert('the already-bound scan can be claimed', Boolean(claimed));
             const conflict = await work(tenantA, 'POST', `/scans/${scanId}/bind-identity`, {
-                facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'joined_state_control',
+                facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'group_header_joined_control',
             });
             assert('evidence cannot rebind a group already owned by another account',
                 conflict.status === 409, `status=${conflict.status} ${JSON.stringify(conflict.body)}`);
@@ -447,19 +525,39 @@ async function claimInto(tenant, scanId) {
             // Cross-tenant: B must not be able to bind A's scan at all.
             const scanId = await mk(legacyGroup);
             const stolen = await work(tenantB, 'POST', `/scans/${scanId}/bind-identity`, {
-                facebook_user_id: FB_ID_B, membership_verified: true, evidence_strategy: 'joined_state_control',
+                facebook_user_id: FB_ID_B, membership_verified: true, evidence_strategy: 'group_header_joined_control',
             });
             assert('another tenant cannot bind identity on this scan',
                 stolen.status === 404, `status=${stolen.status}`);
             await dash(tenantA, 'POST', `/scans/${scanId}/cancel`);
         }
     } finally {
-        for (const t of [tenantA, tenantB]) {
+        // Deterministic: runs on the success and the failure path, and only ever
+        // touches workspaces this run created.
+        const owned = tenants.map(t => t.workspaceId);
+        for (const t of tenants) {
             await admin.from('engagement_discovered_posts').delete().eq('workspace_id', t.workspaceId);
             await admin.from('engagement_scan_tasks').delete().eq('workspace_id', t.workspaceId);
+            await admin.from('system_logs').delete().eq('workspace_id', t.workspaceId);
             await admin.from('groups').delete().eq('workspace_id', t.workspaceId);
+            await admin.from('browser_workers').delete().eq('workspace_id', t.workspaceId);
+            await admin.from('pairing_codes').delete().eq('workspace_id', t.workspaceId);
+            await admin.from('workspace_members').delete().eq('workspace_id', t.workspaceId);
+            await admin.from('workspaces').delete().eq('id', t.workspaceId);
             await admin.auth.admin.deleteUser(t.userId).catch(() => {});
         }
+
+        if (owned.length) {
+            const { data: survivors } = await admin.from('workspaces')
+                .select('id, engagement_enabled').in('id', owned);
+            assert('every workspace this suite created is removed',
+                Array.isArray(survivors) && survivors.length === 0,
+                JSON.stringify(survivors));
+            assert('no workspace created by this suite is left with engagement enabled',
+                !(survivors || []).some(row => row.engagement_enabled === true),
+                JSON.stringify(survivors));
+        }
+        console.log('\n  fixtures cleaned');
     }
 
     console.log(`\n${passed} passed, ${failed} failed`);

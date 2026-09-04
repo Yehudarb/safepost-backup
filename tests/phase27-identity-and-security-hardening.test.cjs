@@ -257,7 +257,7 @@ const seedGroup = (workspaceId, id, label, fbId = null) => admin.from('groups').
             });
             const scanId = created.body.scan.id;
 
-            const notRunning = await work(A, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'joined_state_control' });
+            const notRunning = await work(A, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'group_header_joined_control' });
             assert('a queued scan cannot be bound', notRunning.status === 409, `HTTP ${notRunning.status}`);
 
             // claimNextScan returns the OLDEST queued scan, so earlier sections'
@@ -269,35 +269,35 @@ const seedGroup = (workspaceId, id, label, fbId = null) => admin.from('groups').
             assert('the scan under test is the one claimed',
                 claimed.body?.scan?.id === scanId, `claimed ${claimed.body?.scan?.id}`);
             for (const bad of ['abc', '', '12', null, '1'.repeat(31), '10;drop', 1.5]) {
-                const r = await work(A, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: bad, membership_verified: true, evidence_strategy: 'joined_state_control' });
+                const r = await work(A, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: bad, membership_verified: true, evidence_strategy: 'group_header_joined_control' });
                 if (r.status !== 400) { assert(`malformed id ${JSON.stringify(bad)} refused`, false, `HTTP ${r.status}`); }
             }
             assert('every malformed facebook_user_id is refused', true);
 
-            const bad = await work(A, 'POST', '/scans/not-a-uuid/bind-identity', { facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'joined_state_control' });
+            const bad = await work(A, 'POST', '/scans/not-a-uuid/bind-identity', { facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'group_header_joined_control' });
             assert('a malformed scan id is refused', bad.status === 400 && bad.body?.error === 'Invalid id');
 
-            const cross = await work(B, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: FB_ID_B, membership_verified: true, evidence_strategy: 'joined_state_control' });
+            const cross = await work(B, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: FB_ID_B, membership_verified: true, evidence_strategy: 'group_header_joined_control' });
             assert("another workspace's worker cannot bind this scan", cross.status === 404, `HTTP ${cross.status}`);
             const { data: untouched } = await admin.from('groups')
                 .select('facebook_user_id').eq('workspace_id', A.workspaceId).eq('id', gid).single();
             assert('the cross-tenant attempt changed nothing', untouched.facebook_user_id === null);
 
-            const ok = await work(A, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'joined_state_control' });
+            const ok = await work(A, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'group_header_joined_control' });
             assert('the owning worker binds successfully',
                 ok.status === 200 && ok.body?.bound_groups === 1, JSON.stringify(ok.body));
             const { data: bound } = await admin.from('groups')
                 .select('facebook_user_id').eq('workspace_id', A.workspaceId).eq('id', gid).single();
             assert('the group now carries the verified id', bound.facebook_user_id === FB_ID_A);
 
-            const overwrite = await work(A, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: FB_ID_B, membership_verified: true, evidence_strategy: 'joined_state_control' });
+            const overwrite = await work(A, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: FB_ID_B, membership_verified: true, evidence_strategy: 'group_header_joined_control' });
             assert('a different id cannot overwrite an existing verified one',
                 overwrite.status === 409, `HTTP ${overwrite.status}`);
             const { data: still } = await admin.from('groups')
                 .select('facebook_user_id').eq('workspace_id', A.workspaceId).eq('id', gid).single();
             assert('the original verified id survives the attempt', still.facebook_user_id === FB_ID_A);
 
-            const repeat = await work(A, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'joined_state_control' });
+            const repeat = await work(A, 'POST', `/scans/${scanId}/bind-identity`, { facebook_user_id: FB_ID_A, membership_verified: true, evidence_strategy: 'group_header_joined_control' });
             assert('re-binding the same id is idempotent', repeat.status === 200, `HTTP ${repeat.status}`);
 
             const { data: logs } = await admin.from('system_logs')

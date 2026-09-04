@@ -766,10 +766,10 @@ async function finishEngagementActivity(operationId, outcome = {}) {
     return activity.finishing;
 }
 
-async function inspectEngagementGroupPage(tabId, expectedUrl) {
+async function inspectEngagementGroupPage(tabId, expectedUrl, groupId) {
     const results = await chrome.scripting.executeScript({
         target: { tabId },
-        func: expected => {
+        func: (expected, groupId) => {
             const state = globalThis.SafePostFB?.detectFacebookState(document) || {
                 ok: false,
                 errorCode: 'PARSER_NO_STRATEGY_MATCHED',
@@ -783,13 +783,15 @@ async function inspectEngagementGroupPage(tabId, expectedUrl) {
             });
             // Membership is read from the same render that produced the
             // classification, so the identity gate and the page state can never
-            // disagree about which page they looked at.
+            // disagree about which page they looked at. The group id lets the
+            // detector reject a header that also advertises other groups.
             const membership = navigation.evaluateGroupMembership(
-                document.querySelector('[role="main"]') || document.body
+                document.querySelector('[role="main"]') || document.body,
+                { groupId }
             );
             return { ...classified, membership };
         },
-        args: [expectedUrl],
+        args: [expectedUrl, groupId],
     });
     return results?.[0]?.result || { ok: false, errorCode: 'PARSER_NO_STRATEGY_MATCHED' };
 }
@@ -827,7 +829,7 @@ async function runEngagementScan(activity, validated) {
         // Page state first: it is a pure classification of what loaded, it never
         // scrolls or parses posts, and the identity gate below needs the
         // membership evidence it collects.
-        const pageState = await inspectEngagementGroupPage(activity.tabId, validated.group.url);
+        const pageState = await inspectEngagementGroupPage(activity.tabId, validated.group.url, validated.group.id);
         if (!pageState.ok) {
             await finishEngagementActivity(activity.operationId, {
                 status: 'FAILED',
