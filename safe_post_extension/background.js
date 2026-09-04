@@ -573,13 +573,21 @@ async function evaluatePreScanFacebookIdentity(validated) {
 // The extension only reports what it observed. It cannot choose which rows are
 // touched, cannot overwrite an existing verified id, and cannot reach another
 // workspace — all of that is decided server-side from the device token.
-async function bindEngagementIdentity(activity, facebookUserId) {
+async function bindEngagementIdentity(activity, facebookUserId, membership) {
     if (!activity?.scanId || !activity.pairing) return { ok: false, signal: 'no_scan_context' };
+    if (membership?.member !== true) return { ok: false, signal: 'membership_unverified' };
     try {
         const response = await engagementRequest(
             activity.pairing,
             `/scans/${activity.scanId}/bind-identity`,
-            { body: { facebook_user_id: facebookUserId }, timeoutMs: ENGAGEMENT_REQUEST_TIMEOUT_MS }
+            {
+                body: {
+                    facebook_user_id: facebookUserId,
+                    membership_verified: true,
+                    evidence_strategy: membership.strategy || 'unknown',
+                },
+                timeoutMs: ENGAGEMENT_REQUEST_TIMEOUT_MS,
+            }
         );
         if (response.ok) return { ok: true, signal: 'bound' };
         // 409 means another account already owns these groups. That is a real
@@ -766,12 +774,20 @@ async function inspectEngagementGroupPage(tabId, expectedUrl) {
                 ok: false,
                 errorCode: 'PARSER_NO_STRATEGY_MATCHED',
             };
-            return globalThis.SafePostEngagementNavigation.classifyGroupPage({
+            const navigation = globalThis.SafePostEngagementNavigation;
+            const classified = navigation.classifyGroupPage({
                 expectedUrl: expected,
                 currentUrl: location.href,
                 facebookState: state,
                 bodyText: document.body?.textContent || '',
             });
+            // Membership is read from the same render that produced the
+            // classification, so the identity gate and the page state can never
+            // disagree about which page they looked at.
+            const membership = navigation.evaluateGroupMembership(
+                document.querySelector('[role="main"]') || document.body
+            );
+            return { ...classified, membership };
         },
         args: [expectedUrl],
     });
@@ -808,6 +824,20 @@ async function runEngagementScan(activity, validated) {
             ],
         });
 
+        // Page state first: it is a pure classification of what loaded, it never
+        // scrolls or parses posts, and the identity gate below needs the
+        // membership evidence it collects.
+        const pageState = await inspectEngagementGroupPage(activity.tabId, validated.group.url);
+        if (!pageState.ok) {
+            await finishEngagementActivity(activity.operationId, {
+                status: 'FAILED',
+                errorCode: pageState.errorCode,
+                reason: safeFacebookStateFailureReason(pageState) || 'Facebook group page unavailable.',
+                abortScanner: true,
+            });
+            return;
+        }
+
         // AUTHORITATIVE identity check. Read through the content script that just
         // loaded with this page, so an account switch cannot hide behind cached
         // extension storage. Runs before any scrolling, parsing or upload.
@@ -841,13 +871,29 @@ async function runEngagementScan(activity, validated) {
                 return;
             }
         } else {
-            // Legacy dataset: synced before the account id was stored. The live
-            // session is the only evidence available and it is trustworthy — it
-            // came from the page we just opened — so bind it and continue rather
-            // than refusing every pre-0013 workspace. The BACKEND decides whether
-            // the bind is allowed; a rejection means another account already owns
-            // these groups, which is a real conflict and stops the scan.
-            const bound = await bindEngagementIdentity(activity, liveId);
+            // Legacy dataset: synced before the account id was stored.
+            //
+            // Belonging to the workspace is NOT evidence that this group belongs
+            // to the account now logged in — Live QA #2 measured 172 of 175 synced
+            // groups owned by a different identity. So the bind requires positive
+            // proof from this page that the account is a member of THIS group.
+            // Anything less (a non-member page, or a page with no membership
+            // affordance at all) blocks the scan and leaves the row untouched.
+            const membership = pageState.membership || { member: null, strategy: 'none', signal: 'membership_absent' };
+            if (membership.member !== true) {
+                await finishEngagementActivity(activity.operationId, {
+                    status: 'ABORTED',
+                    errorCode: EngagementIdentity.IDENTITY_UNVERIFIED,
+                    reason: `strategy=legacy_identity_bind;signal=${
+                        membership.member === false ? 'not_a_member' : 'membership_unverified'
+                    }`,
+                });
+                return;
+            }
+            // The BACKEND still decides whether the bind is allowed; a rejection
+            // means another account already owns these groups, which is a real
+            // conflict and stops the scan.
+            const bound = await bindEngagementIdentity(activity, liveId, membership);
             if (!bound.ok) {
                 await finishEngagementActivity(activity.operationId, {
                     status: 'ABORTED',
@@ -859,17 +905,6 @@ async function runEngagementScan(activity, validated) {
                 return;
             }
             validated.facebookUserId = liveId;
-        }
-
-        const pageState = await inspectEngagementGroupPage(activity.tabId, validated.group.url);
-        if (!pageState.ok) {
-            await finishEngagementActivity(activity.operationId, {
-                status: 'FAILED',
-                errorCode: pageState.errorCode,
-                reason: safeFacebookStateFailureReason(pageState) || 'Facebook group page unavailable.',
-                abortScanner: true,
-            });
-            return;
         }
 
         activity.scanPromise = sendEngagementTabMessage(activity.tabId, {

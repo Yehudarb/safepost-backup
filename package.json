@@ -39,7 +39,8 @@
     "test:engagement-scanner": "node tests/phase24-engagement-scanner.test.cjs",
     "test:engagement-parser-correctness": "node tests/phase25-engagement-parser-correctness.test.cjs",
     "test:facebook-state-identity": "node tests/phase26-facebook-state-and-identity.test.cjs",
-    "test:identity-hardening": "node -r ./server/tests/loadTestEnv.cjs tests/phase27-identity-and-security-hardening.test.cjs"
+    "test:identity-hardening": "node -r ./server/tests/loadTestEnv.cjs tests/phase27-identity-and-security-hardening.test.cjs",
+    "test:identity-gate": "node -r ./server/tests/loadTestEnv.cjs tests/phase28-identity-gate-and-parser.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

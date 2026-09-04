@@ -84,12 +84,60 @@
         return { ok: true };
     }
 
+    // Membership evidence.
+    //
+    // Live QA #2 established that a group's presence in a workspace says nothing
+    // about which Facebook account it belongs to: 172 of 175 synced groups were
+    // owned by a different identity than the one logged in. So a legacy group may
+    // only be bound to the current account when the page itself proves the account
+    // is a member of THAT group.
+    //
+    // The discriminator was read off real pages, not guessed. A "Joined" state
+    // control is present only for members; a "Join group" call to action is
+    // present only for non-members. The post composer is NOT a discriminator —
+    // public groups render it for non-members too.
+    const JOINED_LABELS = ['הצטרפת', 'joined'];
+    const JOIN_CTA_LABELS = [
+        'הצטרף לקבוצה',
+        'הצטרפי לקבוצה',
+        'join group',
+    ];
+
+    function affordanceLabel(element) {
+        const label = element?.getAttribute?.('aria-label');
+        const text = label || element?.textContent || '';
+        return String(text).replace(/\s+/g, ' ').trim().toLowerCase();
+    }
+
+    function hasAffordance(root, labels) {
+        if (!root || typeof root.querySelectorAll !== 'function') return false;
+        const wanted = new Set(labels.map(label => label.toLowerCase()));
+        return Array.from(root.querySelectorAll('[role="button"], [role="link"], button, a'))
+            .some(element => wanted.has(affordanceLabel(element)));
+    }
+
+    // member: true  -> positive evidence this account belongs to this group
+    // member: false -> positive evidence it does not
+    // member: null  -> no evidence either way; the caller must NOT bind
+    function evaluateGroupMembership(root) {
+        if (hasAffordance(root, JOINED_LABELS)) {
+            return { member: true, strategy: 'joined_state_control', signal: 'joined_affordance' };
+        }
+        if (hasAffordance(root, JOIN_CTA_LABELS)) {
+            return { member: false, strategy: 'join_call_to_action', signal: 'join_affordance' };
+        }
+        return { member: null, strategy: 'none', signal: 'no_membership_affordance' };
+    }
+
     const api = Object.freeze({
         CONTROLLED_MAX_GROUPS,
         CONTROLLED_MAX_POSTS,
+        JOINED_LABELS,
+        JOIN_CTA_LABELS,
         normalizeGroupUrl,
         validateEngagementScan,
         classifyGroupPage,
+        evaluateGroupMembership,
     });
     global.SafePostEngagementNavigation = api;
     try { if (typeof module !== 'undefined' && module.exports) module.exports = api; } catch {}

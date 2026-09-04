@@ -67,23 +67,120 @@
         return { id: null, url: null, strategy: 'none', anchor: null };
     }
 
+    // Facebook appends a secondary action to some avatar/author aria-labels, e.g.
+    // "<name>, הצגת סטורי". The comma-separated tail is UI, never part of a name.
+    const AUTHOR_UI_SUFFIXES = [
+        'הצגת סטורי', 'הצג סטורי', 'הצגת הסטורי',
+        'view story', 'show story',
+        'פעיל עכשיו', 'active now',
+    ];
+
+    // Labels that describe an action ABOUT a post rather than naming its author.
+    // They frequently embed the author's name, so an unguarded match would store
+    // a menu label as the author.
+    const AUTHOR_REJECT_PATTERNS = [
+        /^פעולות עבור/i,
+        /^אפשרויות נוספות/i,
+        /^actions for/i,
+        /^more options/i,
+        /^נראה על ידי/i,
+        /^seen by/i,
+        /^מעקב אחר/i,
+        /^follow\b/i,
+        /^הפרופיל של/i,
+    ];
+
+    function stripAuthorUiSuffix(name) {
+        let out = String(name || '');
+        for (const suffix of AUTHOR_UI_SUFFIXES) {
+            const escaped = suffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            out = out.replace(new RegExp(`[,\\u060C]\\s*${escaped}\\s*$`, 'i'), '');
+        }
+        return cleanText(out);
+    }
+
+    // A profile URL that identifies a person, including the group-scoped member
+    // links Facebook uses inside a group feed (/groups/<gid>/user/<uid>/). Those
+    // were previously rejected wholesale by a /groups/ guard, which is why author
+    // extraction returned null for almost every row in Live QA #2.
+    function authorProfileUrl(href) {
+        const url = normalizeFacebookUrl(href);
+        if (!url) return null;
+        const parsed = new URL(url);
+        const path = parsed.pathname;
+        if (/^\/groups\/[^/]+\/user\/\d+\/?$/i.test(path)) return url;
+        if (/^\/profile\.php$/i.test(path) && /^\d+$/.test(parsed.searchParams.get('id') || '')) return url;
+        if (/^\/(groups|posts|permalink|watch|reel|reels|photo|photos|events|media|pages|marketplace|hashtag|story\.php|stories)(\/|$)/i.test(path)) {
+            return null;
+        }
+        if (/^\/[^/]+\/?$/.test(path)) return url;
+        return null;
+    }
+
+    function authorCandidateName(anchor, preferAria) {
+        const raw = preferAria
+            ? (anchor.getAttribute?.('aria-label') || anchor.textContent || '')
+            : (anchor.textContent || anchor.getAttribute?.('aria-label') || '');
+        const name = stripAuthorUiSuffix(cleanText(raw));
+        if (!name || name.length > 80) return null;
+        if (AUTHOR_REJECT_PATTERNS.some(pattern => pattern.test(name))) return null;
+        return name;
+    }
+
     function findAuthor(root) {
-        const selectors = [
-            'h2 a[href]', 'h3 a[href]', 'strong a[href]',
-            '[role="heading"] a[href]', 'a[aria-label][href]',
+        // Header-scoped anchors first, read from their own text, because that is
+        // the post byline. The aria-label sweep is last: it is the broadest and
+        // the most likely to pick up a decorated avatar label.
+        const strategies = [
+            ['h2 a[href]', false], ['h3 a[href]', false], ['strong a[href]', false],
+            ['[role="heading"] a[href]', false],
+            ['a[href]', false],
+            ['a[aria-label][href]', true],
         ];
-        for (const selector of selectors) {
+        for (const [selector, preferAria] of strategies) {
             for (const anchor of root.querySelectorAll(selector)) {
                 if (!belongsToArticle(anchor, root)) continue;
-                const name = semanticText(anchor);
-                const url = normalizeFacebookUrl(anchor.getAttribute('href'));
-                if (!name || !url) continue;
-                const parsed = new URL(url);
-                if (/^\/(groups|posts|permalink|watch|reel|photo|events)(\/|$)/i.test(parsed.pathname)) continue;
+                const url = authorProfileUrl(anchor.getAttribute('href'));
+                if (!url) continue;
+                const name = authorCandidateName(anchor, preferAria);
+                if (!name) continue;
                 return { name, url, strategy: selector };
             }
         }
         return { name: null, url: null, strategy: 'none' };
+    }
+
+    // "See more" is an affordance, not a word. Live QA #2 stored three rows whose
+    // visible text ended in the collapsed-text control "עוד" while is_truncated
+    // was false, because the old check demanded a full label like "הצג עוד" and
+    // Facebook renders a bare "עוד" button.
+    //
+    // The discriminator is therefore the element, not the string: an exact label
+    // match on something that is actually a control (an interactive role, or an
+    // explicitly aria-labelled element). Ordinary prose containing the word "עוד"
+    // is neither, so it stays false. Nothing here clicks or mutates the DOM.
+    const SEE_MORE_LABELS = [
+        'see more', 'see more…', 'see more...', 'more',
+        'עוד', 'עוד…', 'עוד...', 'ראה עוד', 'ראי עוד', 'הצג עוד', 'הצגת עוד',
+    ];
+
+    function isInteractiveAffordance(element) {
+        if (!element) return false;
+        const role = element.getAttribute?.('role');
+        if (role === 'button' || role === 'link') return true;
+        if (typeof element.tagName === 'string' && element.tagName.toUpperCase() === 'BUTTON') return true;
+        return element.hasAttribute?.('tabindex') === true;
+    }
+
+    function hasSeeMoreAffordance(root) {
+        const wanted = new Set(SEE_MORE_LABELS.map(label => label.toLowerCase()));
+        return Array.from(root.querySelectorAll('[role="button"], [role="link"], button, [tabindex], [aria-label]'))
+            .filter(element => belongsToArticle(element, root))
+            .some(element => {
+                const labelled = element.hasAttribute?.('aria-label') === true;
+                if (!labelled && !isInteractiveAffordance(element)) return false;
+                return wanted.has(semanticText(element).toLowerCase());
+            });
     }
 
     function findPostText(root) {
@@ -137,9 +234,7 @@
         const timestamp = findTimestamp(root, permalink.anchor);
         if (!permalink.id && !text.text && !author.name && !timestamp.postedAtRaw) return null;
 
-        const isTruncated = hasExactLabel(root, [
-            'See more', '\u05e8\u05d0\u05d4 \u05e2\u05d5\u05d3', '\u05d4\u05e6\u05d2 \u05e2\u05d5\u05d3',
-        ]);
+        const isTruncated = hasSeeMoreAffordance(root);
         const pinned = hasExactLabel(root, ['Pinned post', 'Pinned', '\u05e4\u05d5\u05e1\u05d8 \u05e0\u05e2\u05d5\u05e5']);
         return {
             facebookPostId: permalink.id,
@@ -173,6 +268,9 @@
         extractPostIdentity,
         belongsToArticle,
         getArticleSkipReason,
+        stripAuthorUiSuffix,
+        authorProfileUrl,
+        hasSeeMoreAffordance,
         parsePostArticle,
         observationKey,
     });

@@ -452,6 +452,20 @@ router.post('/scans/:id/bind-identity', requireWorker, requireEngagementEnabled,
         return res.status(400).json({ error: 'Invalid facebook_user_id' });
     }
 
+    // Owning the workspace is not evidence of owning the group. The caller must
+    // assert that the Facebook page itself proved this account is a member of the
+    // targeted group, and name the strategy that proved it, so an unevidenced
+    // bind is refused here as well as in the extension.
+    if (req.body?.membership_verified !== true) {
+        return res.status(400).json({ error: 'Group membership was not verified for this account.' });
+    }
+    const evidenceStrategy = typeof req.body?.evidence_strategy === 'string'
+        ? req.body.evidence_strategy.trim().slice(0, 64)
+        : '';
+    if (!/^[a-z0-9_]{3,64}$/i.test(evidenceStrategy)) {
+        return res.status(400).json({ error: 'Invalid evidence_strategy' });
+    }
+
     const { data: scan, error: scanError } = await supabase
         .from('engagement_scan_tasks')
         .select('id, status, worker_id, facebook_user_id, target_groups')
@@ -519,9 +533,10 @@ router.post('/scans/:id/bind-identity', requireWorker, requireEngagementEnabled,
         .is('facebook_user_id', null);
     if (bindScanError) return dbFailure(res, 'bind engagement identity scan write', bindScanError);
 
-    // The account id itself is never logged — only how many rows were upgraded.
+    // The account id itself is never logged — only how many rows were upgraded
+    // and which page evidence authorised the bind.
     await audit(req.workspaceId, 'ENGAGEMENT_IDENTITY_BOUND',
-        `scan=${id} groups=${Array.isArray(boundGroups) ? boundGroups.length : 0}`);
+        `scan=${id} groups=${Array.isArray(boundGroups) ? boundGroups.length : 0} evidence=${evidenceStrategy}`);
 
     res.json({ success: true, bound_groups: Array.isArray(boundGroups) ? boundGroups.length : 0 });
 });

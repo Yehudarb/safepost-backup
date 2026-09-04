@@ -263,7 +263,12 @@ function createBackgroundHarness(baseActivity, options = {}) {
                         events.push(`inject:${details.files.join(',')}`);
                         return [];
                     }
-                    return [{ result: options.pageState || { ok: true } }];
+                    // The real page inspector returns membership evidence alongside
+                    // the page classification; the identity gate depends on it.
+                    const membership = options.membership === undefined
+                        ? { member: true, strategy: 'joined_state_control', signal: 'joined_affordance' }
+                        : options.membership;
+                    return [{ result: { ...(options.pageState || { ok: true }), membership } }];
                 },
             },
         },
@@ -600,10 +605,11 @@ function createBackgroundHarness(baseActivity, options = {}) {
             await lock.getFacebookActivityLock() === null);
     }
     {
-        // Phase 1C.3 policy: a legacy dataset with no stored account id is NOT a
-        // failure. The live session is trustworthy — it came from the page just
-        // opened — so it is bound and the scan proceeds. Refusing here would have
-        // blocked every workspace synced before migration 0013.
+        // Post-Live-QA-#2 policy: a legacy dataset with no stored account id is
+        // still not a failure, but it is no longer bound on the strength of the
+        // live session alone. The page must prove the account is a member of THIS
+        // group; here it does, so the bind proceeds. The blocked variants are
+        // covered in phase28.
         const lock = createActivity(memoryStorage());
         const harness = createBackgroundHarness(lock, {
             scanFacebookUserId: null,
@@ -620,6 +626,74 @@ function createBackgroundHarness(baseActivity, options = {}) {
             JSON.stringify(harness.events));
         assert('a legacy dataset then completes normally',
             harness.statuses.some(item => item.status === 'COMPLETED'), JSON.stringify(harness.statuses));
+        assert('the bind carries the membership evidence that authorised it',
+            harness.binds[0].membership_verified === true &&
+            harness.binds[0].evidence_strategy === 'joined_state_control',
+            JSON.stringify(harness.binds));
+    }
+    {
+        // Live QA #2 measured 172 of 175 synced groups owned by a DIFFERENT
+        // Facebook identity than the one logged in. Workspace ownership is
+        // therefore not evidence, and a page that shows a "Join group" call to
+        // action is positive evidence of the opposite.
+        const lock = createActivity(memoryStorage());
+        const harness = createBackgroundHarness(lock, {
+            scanFacebookUserId: null,
+            persistedFacebookUserId: null,
+            membership: { member: false, strategy: 'join_call_to_action', signal: 'join_affordance' },
+        });
+        await harness.api.ready;
+        await harness.api.checkEngagementScans();
+        assert('a non-member legacy group is never bound',
+            harness.binds.length === 0, JSON.stringify(harness.binds));
+        assert('a non-member legacy group aborts as FACEBOOK_IDENTITY_UNVERIFIED',
+            harness.statuses.some(item =>
+                item.status === 'ABORTED' &&
+                item.error_code === 'FACEBOOK_IDENTITY_UNVERIFIED' &&
+                /signal=not_a_member/.test(item.failure_reason || '')),
+            JSON.stringify(harness.statuses));
+        assert('a non-member legacy group never starts the DOM scanner',
+            !harness.events.includes('message:START_ENGAGEMENT_SCAN'), JSON.stringify(harness.events));
+        assert('a non-member legacy group uploads nothing', harness.uploads.length === 0);
+        assert('a non-member legacy group still releases the lock',
+            await lock.getFacebookActivityLock() === null);
+    }
+    {
+        // No membership affordance at all is absence of evidence, not evidence of
+        // membership. It must block just as firmly as an explicit non-member page.
+        const lock = createActivity(memoryStorage());
+        const harness = createBackgroundHarness(lock, {
+            scanFacebookUserId: null,
+            persistedFacebookUserId: null,
+            membership: { member: null, strategy: 'none', signal: 'no_membership_affordance' },
+        });
+        await harness.api.ready;
+        await harness.api.checkEngagementScans();
+        assert('an unverifiable legacy group is never bound', harness.binds.length === 0);
+        assert('an unverifiable legacy group aborts as FACEBOOK_IDENTITY_UNVERIFIED',
+            harness.statuses.some(item =>
+                item.status === 'ABORTED' &&
+                item.error_code === 'FACEBOOK_IDENTITY_UNVERIFIED' &&
+                /signal=membership_unverified/.test(item.failure_reason || '')),
+            JSON.stringify(harness.statuses));
+        assert('an unverifiable legacy group uploads nothing', harness.uploads.length === 0);
+    }
+    {
+        // Membership evidence must not rescue a group already bound to another
+        // account: an explicit mismatch still wins over a "Joined" page.
+        const lock = createActivity(memoryStorage());
+        const harness = createBackgroundHarness(lock, {
+            tabFacebookUserId: '100000000000999',
+            persistedFacebookUserId: '100000000000999',
+            membership: { member: true, strategy: 'joined_state_control', signal: 'joined_affordance' },
+        });
+        await harness.api.ready;
+        await harness.api.checkEngagementScans();
+        assert('a bound group with a different live account aborts even when the page says Joined',
+            harness.statuses.some(item => item.error_code === 'FACEBOOK_IDENTITY_MISMATCH'),
+            JSON.stringify(harness.statuses));
+        assert('that mismatch never rebinds the group', harness.binds.length === 0);
+        assert('that mismatch uploads nothing', harness.uploads.length === 0);
     }
     {
         // The backend refuses the bind because another account already owns these
