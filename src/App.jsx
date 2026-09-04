@@ -19,6 +19,7 @@ import SavePostTemplateModal from '@/components/modals/SavePostTemplateModal';
 import AiPostAssistantModal from '@/components/modals/AiPostAssistantModal';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import StitchAnalytics from '@/components/StitchAnalytics';
+import EngagementPanel from '@/components/engagement/EngagementPanel';
 import LiveClock from '@/components/LiveClock';
 import Footer from '@/components/Footer';
 import ConsentBanner, { hasAcceptedTos } from '@/components/ConsentBanner';
@@ -1935,6 +1936,16 @@ export default function App() {
                             />
                         ))}
                     </div>
+                </div>
+
+                {/* ENGAGEMENT (Phase 1D) — a sibling of the publishing UI, never
+                    a wrapper around it. It renders nothing at all unless the
+                    server reports the feature exists for this workspace, so with
+                    the flag off this page behaves exactly as it did before. */}
+                <div className="mt-6">
+                    <ErrorBoundary>
+                        <EngagementPanel groups={groups} />
+                    </ErrorBoundary>
                 </div>
             </main>
 

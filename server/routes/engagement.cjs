@@ -113,6 +113,67 @@ const DASHBOARD_SCAN_FIELDS = [
     'groups_scanned', 'posts_discovered', 'created_at', 'started_at', 'completed_at',
 ].join(', ');
 
+// What the user is told about a terminal scan.
+//
+// The stored failure_reason names internal strategies and signals
+// ("strategy=legacy_identity_bind;signal=not_a_member"). That is the right
+// thing to keep for debugging and the wrong thing to render, so the dashboard
+// is given this mapping instead and never the raw string.
+const SCAN_REASON_SUMMARY = {
+    FACEBOOK_IDENTITY_UNVERIFIED:
+        'Could not confirm that this Facebook account belongs to the selected group. The scan stopped before reading anything.',
+    FACEBOOK_IDENTITY_MISMATCH:
+        'The Facebook account signed in right now is not the account this group belongs to.',
+    CAPTCHA_REQUIRED:
+        'Facebook asked for a security check. Complete it in the browser, then run the scan again.',
+    CHECKPOINT_REQUIRED:
+        'Facebook needs something confirmed on the account before automation can continue.',
+    FACEBOOK_LOGGED_OUT: 'The browser is signed out of Facebook.',
+    ACCOUNT_RESTRICTED: 'Facebook has restricted this account.',
+    GROUP_NOT_FOUND: 'That group could not be opened.',
+    NO_GROUP_ACCESS: 'This account cannot view that group.',
+    PAGE_LOAD_TIMEOUT: 'The group page did not finish loading.',
+    NETWORK_TIMEOUT: 'The connection to Facebook timed out.',
+    SCAN_PREEMPTED_BY_PUBLISH:
+        'Paused so a scheduled post could publish. The scan returns to the queue on its own.',
+    PARSER_NO_STRATEGY_MATCHED:
+        'Facebook changed the page layout and the scanner could not read it.',
+    INVALID_SCAN_TASK: 'This scan request was not valid.',
+    SCAN_LOCK_EXPIRED: 'The browser extension stopped responding while the scan was running.',
+};
+
+// The five states the dashboard distinguishes.
+function scanUiState(scan) {
+    if (!scan) return 'NONE';
+    if (scan.status === 'QUEUED') return 'QUEUED';
+    if (scan.status === 'RUNNING') return 'RUNNING';
+    if (scan.status === 'COMPLETED') return 'COMPLETED';
+    if (scan.status === 'ABORTED') return 'BLOCKED';
+    return 'FAILED';
+}
+
+function scanSummary(scan) {
+    if (!scan) return null;
+    const group = Array.isArray(scan.target_groups) ? scan.target_groups[0] : null;
+    return {
+        id: scan.id,
+        name: scan.name,
+        status: scan.status,
+        ui_state: scanUiState(scan),
+        error_code: scan.error_code || null,
+        // Mapped text only. failure_reason is deliberately not forwarded.
+        reason_summary: scan.error_code
+            ? (SCAN_REASON_SUMMARY[scan.error_code] || 'The scan stopped before finishing.')
+            : null,
+        group_name: group && typeof group.name === 'string' ? group.name : null,
+        groups_scanned: scan.groups_scanned ?? 0,
+        posts_discovered: scan.posts_discovered ?? 0,
+        created_at: scan.created_at,
+        started_at: scan.started_at || null,
+        completed_at: scan.completed_at || null,
+    };
+}
+
 const invalidId = (res) => res.status(400).json({ error: 'Invalid id' });
 
 function isMissingFacebookIdentityColumn(error) {
@@ -124,7 +185,57 @@ function isMissingFacebookIdentityColumn(error) {
 // Dashboard routes
 // ---------------------------------------------------------------------------
 
-// List this workspace's scans, newest first.
+// Dashboard summary. This is the ONE engagement route that answers while the
+// workspace flag is off, because the dashboard has to be able to render
+// "Engagement is off for this workspace". The fleet kill switch still hides the
+// feature completely: with it off this 404s like everything else.
+router.get('/status', ...dashboardAuth, async (req, res) => {
+    if (!isFleetEnabled()) return res.status(404).json({ error: 'Not found' });
+    if (!req.workspaceId) return res.status(404).json({ error: 'Not found' });
+
+    const { data: workspace, error: flagError } = await supabase
+        .from('workspaces')
+        .select('engagement_enabled')
+        .eq('id', req.workspaceId)
+        .maybeSingle();
+    if (flagError) return dbFailure(res, 'engagement status flag', flagError);
+
+    const enabled = Boolean(workspace && workspace.engagement_enabled === true);
+    if (!enabled) {
+        return res.json({ enabled: false, latest_scan: null, discovered_count: 0, active_scan: false });
+    }
+
+    const { data: scans, error: scanError } = await scopeToWorkspace(
+        supabase.from('engagement_scan_tasks')
+            .select(DASHBOARD_SCAN_FIELDS)
+            .order('created_at', { ascending: false })
+            .limit(1),
+        req,
+    );
+    if (scanError) return dbFailure(res, 'engagement status scan', scanError);
+
+    const { count, error: countError } = await scopeToWorkspace(
+        supabase.from('engagement_discovered_posts').select('id', { count: 'exact', head: true }),
+        req,
+    );
+    if (countError) return dbFailure(res, 'engagement status count', countError);
+
+    const { count: activeCount, error: activeError } = await scopeToWorkspace(
+        supabase.from('engagement_scan_tasks')
+            .select('id', { count: 'exact', head: true })
+            .in('status', ['QUEUED', 'RUNNING']),
+        req,
+    );
+    if (activeError) return dbFailure(res, 'engagement status active', activeError);
+
+    res.json({
+        enabled: true,
+        latest_scan: scanSummary((scans || [])[0]),
+        discovered_count: count || 0,
+        active_scan: (activeCount || 0) > 0,
+    });
+});
+
 router.get('/scans', ...dashboardAuth, requireEngagementEnabled, async (req, res) => {
     const { data, error } = await scopeToWorkspace(
         supabase.from('engagement_scan_tasks')
@@ -134,7 +245,9 @@ router.get('/scans', ...dashboardAuth, requireEngagementEnabled, async (req, res
         req,
     );
     if (error) return dbFailure(res, 'list engagement scans', error);
-    res.json({ scans: data || [] });
+    // `summaries` is what the dashboard renders: same rows, mapped to UI states
+    // and user-facing text, with no internal reason strings.
+    res.json({ scans: data || [], summaries: (data || []).map(scanSummary) });
 });
 
 // Create a scan.
