@@ -67,6 +67,11 @@
                 : null;
         }
 
+        function normalizeClaimStartedAt(value) {
+            if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) return null;
+            return new Date(value).toISOString();
+        }
+
         function normalizeLock(value) {
             if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
             if (!VALID_OWNERS.has(value.owner)) return null;
@@ -76,6 +81,7 @@
                 operationId: value.operationId,
                 jobId: normalizeJobId(value.jobId),
                 scanId: normalizeScanId(value.scanId),
+                claimStartedAt: normalizeClaimStartedAt(value.claimStartedAt),
                 tabId: Number.isInteger(value.tabId) && value.tabId > 0 ? value.tabId : null,
                 acquiredAt: Number(value.acquiredAt),
                 heartbeatAt: Number(value.heartbeatAt),
@@ -317,20 +323,28 @@
             });
         }
 
-        async function attachFacebookActivityScan(owner, operationId, scanId) {
+        async function attachFacebookActivityScan(owner, operationId, scanId, claimStartedAt) {
             validateIdentity(owner, operationId);
             if (owner !== FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT) return false;
             const normalizedScanId = normalizeScanId(scanId);
-            if (!normalizedScanId) return false;
+            const normalizedClaimStartedAt = normalizeClaimStartedAt(claimStartedAt);
+            if (!normalizedScanId || !normalizedClaimStartedAt) return false;
             return serializeMutation(async () => {
                 const current = await readLock();
                 if (!sameIdentity(current, owner, operationId)) return false;
                 if (current.scanId != null && current.scanId !== normalizedScanId) return false;
-                const updated = { ...current, scanId: normalizedScanId, heartbeatAt: now() };
+                if (current.claimStartedAt != null && current.claimStartedAt !== normalizedClaimStartedAt) return false;
+                const updated = {
+                    ...current,
+                    scanId: normalizedScanId,
+                    claimStartedAt: normalizedClaimStartedAt,
+                    heartbeatAt: now(),
+                };
                 await storage.writeFacebookActivityLock(updated);
                 const verified = await readLock();
                 return sameIdentity(verified, owner, operationId) &&
-                    verified.scanId === normalizedScanId;
+                    verified.scanId === normalizedScanId &&
+                    verified.claimStartedAt === normalizedClaimStartedAt;
             });
         }
 

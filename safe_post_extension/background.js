@@ -698,6 +698,7 @@ async function reportEngagementStatus(activity, outcome, timeoutMs = ENGAGEMENT_
             error_code: outcome.errorCode || null,
             failure_reason: outcome.reason || null,
             groups_scanned: outcome.groupsScanned || 0,
+            claim_started_at: activity.claimStartedAt,
         },
         timeoutMs,
     });
@@ -1010,7 +1011,8 @@ async function checkEngagementScans() {
         const scanAttached = await FacebookActivity.attachFacebookActivityScan(
             FACEBOOK_ACTIVITY_OWNERS.ENGAGEMENT,
             operationId,
-            payload.scan.id
+            payload.scan.id,
+            payload.scan.claimed_at
         );
         if (!scanAttached) throw new Error('Claimed scan could not be attached to its Facebook activity lock.');
         activity.scanId = String(payload.scan.id).toLowerCase();
@@ -1118,6 +1120,7 @@ async function finishPersistedEngagementActivity(lock, reason) {
                 error_code: 'WORKER_DISCONNECTED',
                 failure_reason: reason,
                 groups_scanned: 0,
+                claim_started_at: lock.claimStartedAt,
             },
             timeoutMs: 2000,
         }).catch(() => null);

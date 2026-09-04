@@ -257,6 +257,7 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
         assert('the claim records the worker and a lease',
             claimed.body?.scan?.worker_id === A.workerId && Boolean(claimed.body?.scan?.lock_expires_at));
         assert('the claim increments attempt_count', claimed.body?.scan?.attempt_count === 1);
+        const claimedScanA = claimed.body.scan;
 
         const reclaim = await work(A, 'POST', '/scans/claim', {});
         assert('a running scan is not handed out again',
@@ -374,7 +375,9 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
 
         // ------------------------------------------------------------------
         console.log('\n J. status reporting');
-        const done = await work(A, 'POST', `/scans/${scanA.id}/status`, { status: 'COMPLETED', groups_scanned: 1 });
+        const done = await work(A, 'POST', `/scans/${scanA.id}/status`, {
+            status: 'COMPLETED', groups_scanned: 1, claim_started_at: claimedScanA.claimed_at,
+        });
         assert('a worker can complete its own scan', done.status === 200 && done.body?.status === 'COMPLETED');
         const { data: finished } = await admin.from('engagement_scan_tasks').select('*').eq('id', scanA.id).single();
         assert('completing clears the lock and the worker',
@@ -383,8 +386,10 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
         assert('groups_scanned is recorded', finished.groups_scanned === 1);
         assert('posts_discovered reflects the rows actually stored', finished.posts_discovered === 3, `${finished.posts_discovered}`);
 
-        const repeat = await work(A, 'POST', `/scans/${scanA.id}/status`, { status: 'FAILED', error_code: 'NETWORK_TIMEOUT' });
-        assert('a duplicate terminal report cannot reopen a finished scan', repeat.status === 200);
+        const repeat = await work(A, 'POST', `/scans/${scanA.id}/status`, {
+            status: 'FAILED', error_code: 'NETWORK_TIMEOUT', claim_started_at: claimedScanA.claimed_at,
+        });
+        assert('a conflicting stale terminal report cannot reopen a finished scan', repeat.status === 409);
         const { data: stillDone } = await admin.from('engagement_scan_tasks').select('status').eq('id', scanA.id).single();
         assert('the status stays COMPLETED', stillDone.status === 'COMPLETED', stillDone.status);
 
@@ -405,24 +410,27 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
             if (claim.body?.scan?.id !== scan.id) {
                 throw new Error(`claim returned ${claim.body?.scan?.id} but expected ${scan.id}`);
             }
-            return scan;
+            return claim.body.scan;
         };
 
         const retryScan = await claimFresh();
-        const retried = await work(A, 'POST', `/scans/${retryScan.id}/status`, { status: 'FAILED', error_code: 'PAGE_LOAD_TIMEOUT' });
+        const retried = await work(A, 'POST', `/scans/${retryScan.id}/status`, {
+            status: 'FAILED', error_code: 'PAGE_LOAD_TIMEOUT', claim_started_at: retryScan.claimed_at,
+        });
         assert('a retryable failure returns the scan to the queue',
             retried.body?.status === 'QUEUED' && retried.body?.retried === true, JSON.stringify(retried.body));
 
-        const neutralScan = await claimFresh();
+        let neutralScan = await claimFresh();
         for (let interruption = 1; interruption <= 3; interruption++) {
             if (interruption > 1) {
                 const reclaimed = await work(A, 'POST', '/scans/claim', {});
                 if (reclaimed.body?.scan?.id !== neutralScan.id) {
                     throw new Error(`preemption reclaim returned ${reclaimed.body?.scan?.id} but expected ${neutralScan.id}`);
                 }
+                neutralScan = reclaimed.body.scan;
             }
             const preempted = await work(A, 'POST', `/scans/${neutralScan.id}/status`, {
-                status: 'FAILED', error_code: 'SCAN_PREEMPTED_BY_PUBLISH',
+                status: 'FAILED', error_code: 'SCAN_PREEMPTED_BY_PUBLISH', claim_started_at: neutralScan.claimed_at,
             });
             const { data: afterPreempt } = await admin.from('engagement_scan_tasks')
                 .select('status, attempt_count').eq('id', neutralScan.id).single();
@@ -435,6 +443,7 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
         if (realFailureClaim1.body?.scan?.id !== neutralScan.id) throw new Error('real failure claim 1 selected another scan');
         await work(A, 'POST', `/scans/${neutralScan.id}/status`, {
             status: 'FAILED', error_code: 'NETWORK_TIMEOUT',
+            claim_started_at: realFailureClaim1.body.scan.claimed_at,
         });
         const { data: afterRealFailure1 } = await admin.from('engagement_scan_tasks')
             .select('status, attempt_count').eq('id', neutralScan.id).single();
@@ -446,6 +455,7 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
         if (realFailureClaim2.body?.scan?.id !== neutralScan.id) throw new Error('real failure claim 2 selected another scan');
         await work(A, 'POST', `/scans/${neutralScan.id}/status`, {
             status: 'FAILED', error_code: 'NETWORK_TIMEOUT',
+            claim_started_at: realFailureClaim2.body.scan.claimed_at,
         });
         const { data: afterRealFailure2 } = await admin.from('engagement_scan_tasks')
             .select('status, attempt_count').eq('id', neutralScan.id).single();
@@ -454,7 +464,9 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
             JSON.stringify(afterRealFailure2));
 
         const blockScan = await claimFresh();
-        const blocked = await work(A, 'POST', `/scans/${blockScan.id}/status`, { status: 'FAILED', error_code: 'CHECKPOINT_REQUIRED' });
+        const blocked = await work(A, 'POST', `/scans/${blockScan.id}/status`, {
+            status: 'FAILED', error_code: 'CHECKPOINT_REQUIRED', claim_started_at: blockScan.claimed_at,
+        });
         assert('a checkpoint is terminal and is never retried against Facebook',
             blocked.body?.status === 'FAILED' && blocked.body?.retried === false, JSON.stringify(blocked.body));
 
@@ -467,7 +479,8 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
         const heldScan = await claimFresh();
         const otherWorkerId = '33333333-3333-4333-8333-333333333333';
         const foreignWorkerReport = await reportScanStatus({
-            scanId: heldScan.id, workspaceId: A.workspaceId, workerId: otherWorkerId, status: 'COMPLETED',
+            scanId: heldScan.id, workspaceId: A.workspaceId, workerId: otherWorkerId,
+            claimStartedAt: heldScan.claimed_at, status: 'COMPLETED',
         });
         assert('another worker in the same workspace cannot close a held scan',
             foreignWorkerReport.ok === false && foreignWorkerReport.code === 404,
@@ -478,7 +491,9 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
             stillRunning.status === 'RUNNING', stillRunning.status);
         // Close it properly so the FAILED/COMPLETED audit assertions below are
         // not affected by a scan left mid-flight.
-        await work(A, 'POST', `/scans/${heldScan.id}/status`, { status: 'ABORTED', error_code: 'NO_POSTS_FOUND' });
+        await work(A, 'POST', `/scans/${heldScan.id}/status`, {
+            status: 'ABORTED', error_code: 'NO_POSTS_FOUND', claim_started_at: heldScan.claimed_at,
+        });
 
         const expiredAt = new Date(Date.now() - 60_000).toISOString();
         const { data: expiredRows, error: expiredInsertError } = await admin.from('engagement_scan_tasks').insert([

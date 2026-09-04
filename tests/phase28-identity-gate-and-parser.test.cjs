@@ -152,7 +152,9 @@ async function claimInto(tenant, scanId) {
         const got = claimed.body?.scan;
         if (!got) return null;
         if (got.id === scanId) return got;
-        await work(tenant, 'POST', `/scans/${got.id}/status`, { status: 'ABORTED', error_code: 'TEST_DRAIN' });
+        await work(tenant, 'POST', `/scans/${got.id}/status`, {
+            status: 'ABORTED', error_code: 'TEST_DRAIN', claim_started_at: got.claimed_at,
+        });
     }
     return null;
 }
@@ -483,7 +485,9 @@ async function claimInto(tenant, scanId) {
             assert('the bind never spreads across the workspace', byId[otherGroup] === null,
                 JSON.stringify(byId));
 
-            await work(tenantA, 'POST', `/scans/${scanId}/status`, { status: 'COMPLETED', groups_scanned: 1 });
+            await work(tenantA, 'POST', `/scans/${scanId}/status`, {
+                status: 'COMPLETED', groups_scanned: 1, claim_started_at: claimed.claimed_at,
+            });
         }
 
         {
@@ -512,6 +516,7 @@ async function claimInto(tenant, scanId) {
             // scan is aborted and the row count is what is asserted.
             await work(tenantA, 'POST', `/scans/${scanId}/status`, {
                 status: 'ABORTED', error_code: 'FACEBOOK_IDENTITY_MISMATCH',
+                claim_started_at: claimed.claimed_at,
             });
             const { count } = await admin.from('engagement_discovered_posts')
                 .select('id', { count: 'exact', head: true })

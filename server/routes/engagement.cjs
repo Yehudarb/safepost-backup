@@ -524,6 +524,9 @@ router.post('/scans/:id/status', requireWorker, requireEngagementEnabled, async 
         scanId: id,
         workspaceId: req.workspaceId,
         workerId: req.worker.id,
+        claimStartedAt: typeof req.body?.claim_started_at === 'string'
+            ? req.body.claim_started_at
+            : null,
         status,
         errorCode: typeof error_code === 'string' ? error_code : null,
         failureReason: typeof failure_reason === 'string' ? failure_reason.slice(0, 500) : null,
@@ -532,6 +535,11 @@ router.post('/scans/:id/status', requireWorker, requireEngagementEnabled, async 
 
     if (!result.ok) {
         if (result.code === 404) return res.status(404).json({ error: 'Scan not found.' });
+        if (result.reason === 'STALE_SCAN_CLAIM') {
+            await audit(req.workspaceId, 'STALE_SCAN_CLAIM',
+                `scan=${id} worker=${req.worker.id} status=${status || 'unknown'}`);
+            return res.status(409).json({ error: 'Stale scan claim.', code: 'STALE_SCAN_CLAIM' });
+        }
         return res.status(result.code || 400).json({ error: 'Status update rejected.' });
     }
 

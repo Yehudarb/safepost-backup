@@ -65,6 +65,9 @@ function classifyScanError(code) {
 // (the route) rather than being duplicated and drifting.
 async function claimNextScan({ workspaceId, workerId }) {
     if (!workspaceId) return null;
+    // claimed_at is the claim generation used by worker callbacks. Keep every
+    // writer at JS ISO millisecond precision; changing this to SQL now() or a
+    // higher-precision source requires updating generation equality semantics.
     const now = new Date().toISOString();
     const leaseUntil = new Date(Date.now() + SCAN_LOCK_LEASE_MS).toISOString();
 
@@ -111,12 +114,13 @@ async function claimNextScan({ workspaceId, workerId }) {
     return locked[0];
 }
 
-// Ownership check for a worker acting on a scan.
+// Ownership check for a worker ingesting discovered posts.
 //
 // Tenant isolation comes from workspace_id, which the caller took from a
 // VERIFIED device token — that alone stops another tenant touching this row.
 // The worker check is a narrower rule on top: while a scan is RUNNING, only the
-// worker holding the lease may act on it.
+// worker holding the lease may ingest. Lifecycle status uses a stricter exact
+// claim-generation check in reportScanStatus().
 //
 // It deliberately does NOT filter on worker_id in the query. A finished scan has
 // its worker_id cleared, so filtering would make every post-completion lookup
@@ -128,9 +132,26 @@ function workerMayAct(scan, workerId) {
     return scan.worker_id === workerId;
 }
 
+function normalizeClaimGeneration(value) {
+    if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) return null;
+    return new Date(value).toISOString();
+}
+
+function sameClaimGeneration(scan, claimStartedAt) {
+    const requested = normalizeClaimGeneration(claimStartedAt);
+    const current = normalizeClaimGeneration(scan?.claimed_at);
+    return Boolean(requested && current && requested === current);
+}
+
+function isDuplicateStatusOutcome(scan, status, errorCode) {
+    if (TERMINAL_STATUSES.has(scan.status)) return scan.status === status;
+    return scan.status === 'QUEUED' && status === 'FAILED' &&
+        scan.error_code === errorCode && classifyScanError(errorCode) === 'retryable';
+}
+
 // Record a terminal (or retry) outcome for a scan.
 async function reportScanStatus({
-    scanId, workspaceId, workerId,
+    scanId, workspaceId, workerId, claimStartedAt = null,
     status, errorCode = null, failureReason = null,
     groupsScanned = null, postsDiscovered = null,
 }) {
@@ -149,13 +170,25 @@ async function reportScanStatus({
         return { ok: false, code: 500 };
     }
     if (!scan) return { ok: false, code: 404 };
-    // 404 rather than 403: another worker's scan should look absent, not forbidden.
-    if (!workerMayAct(scan, workerId)) return { ok: false, code: 404 };
 
-    // Idempotent: a duplicate terminal report (a retried HTTP call, say) must not
-    // reopen or re-close a finished scan.
-    if (TERMINAL_STATUSES.has(scan.status)) {
-        return { ok: true, duplicate: true, status: scan.status };
+    const normalizedClaimStartedAt = normalizeClaimGeneration(claimStartedAt);
+    const generationMatches = sameClaimGeneration(scan, claimStartedAt);
+
+    // Released rows have no active worker ownership. An exact replay of the
+    // transition already applied is an idempotent success; every other status
+    // request is stale and must not mutate lifecycle state.
+    if (scan.status !== 'RUNNING') {
+        if (generationMatches && isDuplicateStatusOutcome(scan, status, errorCode)) {
+            return { ok: true, duplicate: true, status: scan.status };
+        }
+        return { ok: false, code: 409, reason: 'STALE_SCAN_CLAIM' };
+    }
+
+    // 404 rather than 403: another worker's active scan should look absent, not
+    // forbidden. worker_id=null never authorizes a lifecycle mutation here.
+    if (!workerId || scan.worker_id !== workerId) return { ok: false, code: 404 };
+    if (!normalizedClaimStartedAt || !generationMatches) {
+        return { ok: false, code: 409, reason: 'STALE_SCAN_CLAIM' };
     }
 
     const now = new Date().toISOString();
@@ -188,15 +221,22 @@ async function reportScanStatus({
         patch.completed_at = now;
     }
 
-    const { error: writeError } = await supabase
+    const { data: updated, error: writeError } = await supabase
         .from('engagement_scan_tasks')
         .update(patch)
         .eq('id', scanId)
-        .eq('workspace_id', workspaceId);
+        .eq('workspace_id', workspaceId)
+        .eq('status', 'RUNNING')
+        .eq('worker_id', workerId)
+        .eq('claimed_at', normalizedClaimStartedAt)
+        .select('id');
 
     if (writeError) {
         console.error('[engagement] status write failed:', writeError.message);
         return { ok: false, code: 500 };
+    }
+    if (!updated?.length) {
+        return { ok: false, code: 409, reason: 'STALE_SCAN_CLAIM' };
     }
     return { ok: true, status: patch.status, retried: Boolean(shouldRetry) };
 }
@@ -271,15 +311,8 @@ async function recordDiscoveredPosts({
     if (!scan) return { ok: false, code: 404 };
     if (!workerMayAct(scan, workerId)) return { ok: false, code: 404 };
 
-    const normalizedClaimStartedAt = typeof claimStartedAt === 'string' &&
-        !Number.isNaN(Date.parse(claimStartedAt))
-        ? new Date(claimStartedAt).toISOString()
-        : null;
-    const scanClaimedAt = scan.claimed_at && !Number.isNaN(Date.parse(scan.claimed_at))
-        ? new Date(scan.claimed_at).toISOString()
-        : null;
-    const sameClaim = Boolean(normalizedClaimStartedAt && scanClaimedAt &&
-        normalizedClaimStartedAt === scanClaimedAt);
+    const normalizedClaimStartedAt = normalizeClaimGeneration(claimStartedAt);
+    const sameClaim = sameClaimGeneration(scan, claimStartedAt);
 
     // Once ownership is released, only the generation that actually held the
     // scan may contribute a late batch. Older clients omit the generation, so

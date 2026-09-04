@@ -86,9 +86,9 @@ function instrumentActivity(base, events) {
             events.push(`acquire:${owner}`);
             return base.acquireFacebookActivityLock(owner, operationId);
         },
-        async attachFacebookActivityScan(owner, operationId, scanId) {
+        async attachFacebookActivityScan(owner, operationId, scanId, claimStartedAt) {
             events.push(`attach-scan:${scanId}`);
-            return base.attachFacebookActivityScan(owner, operationId, scanId);
+            return base.attachFacebookActivityScan(owner, operationId, scanId, claimStartedAt);
         },
         async attachFacebookActivityTab(owner, operationId, tabId) {
             events.push(`attach-tab:${tabId}`);
@@ -515,9 +515,9 @@ function createBackgroundHarness(baseActivity, options = {}) {
         const denied = await lock.acquireFacebookActivityLock(OWNER.ENGAGEMENT, 'engagement:two');
         assert('only one engagement activity can own Facebook', !denied.acquired);
         assert('scan identity attaches immutably to its engagement lock',
-            await lock.attachFacebookActivityScan(OWNER.ENGAGEMENT, 'engagement:one', SCAN_ID) &&
+            await lock.attachFacebookActivityScan(OWNER.ENGAGEMENT, 'engagement:one', SCAN_ID, CLAIMED_AT) &&
             !await lock.attachFacebookActivityScan(
-                OWNER.ENGAGEMENT, 'engagement:one', '22222222-2222-4222-8222-222222222222'));
+                OWNER.ENGAGEMENT, 'engagement:one', '22222222-2222-4222-8222-222222222222', CLAIMED_AT));
     }
 
     console.log('\n C. background orchestration and cleanup');
@@ -784,6 +784,8 @@ function createBackgroundHarness(baseActivity, options = {}) {
         assert('preemption reports retryable semantics and closes the engagement tab',
             harness.statuses.some(item => item.error_code === 'SCAN_PREEMPTED_BY_PUBLISH') &&
             harness.closedTabs.includes(91));
+        assert('preemption status carries the backend claim generation',
+            harness.statuses.some(item => item.claim_started_at === CLAIMED_AT));
         assert('preemption releases the engagement lock and heartbeat',
             await lock.getFacebookActivityLock() === null && harness.activeIntervals() === 0 &&
             engagementLock.scanId === SCAN_ID);
@@ -792,7 +794,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
         const storage = memoryStorage();
         const lock = createActivity(storage);
         await lock.acquireFacebookActivityLock(OWNER.ENGAGEMENT, 'engagement:orphan');
-        await lock.attachFacebookActivityScan(OWNER.ENGAGEMENT, 'engagement:orphan', SCAN_ID);
+        await lock.attachFacebookActivityScan(OWNER.ENGAGEMENT, 'engagement:orphan', SCAN_ID, CLAIMED_AT);
         await lock.attachFacebookActivityTab(OWNER.ENGAGEMENT, 'engagement:orphan', 91);
         const harness = createBackgroundHarness(lock);
         await harness.api.ready;
@@ -801,6 +803,8 @@ function createBackgroundHarness(baseActivity, options = {}) {
         assert('MV3 startup requeues the orphan instead of resuming scroll state',
             harness.statuses.some(item => item.error_code === 'WORKER_DISCONNECTED') &&
             await lock.getFacebookActivityLock() === null);
+        assert('MV3 orphan status uses the persisted claim generation',
+            harness.statuses.some(item => item.claim_started_at === CLAIMED_AT));
     }
     {
         const lock = createActivity(memoryStorage());

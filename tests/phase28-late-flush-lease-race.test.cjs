@@ -163,6 +163,7 @@ async function upload(owner, scan, claimStartedAt, suffix, workspaceId = owner.w
             scanId: preempted.id,
             workspaceId: A.workspaceId,
             workerId: A.workerId,
+            claimStartedAt: preempted.claimed_at,
             status: 'FAILED',
             errorCode: 'SCAN_PREEMPTED_BY_PUBLISH',
             failureReason: 'Phase 28 deterministic preemption',
