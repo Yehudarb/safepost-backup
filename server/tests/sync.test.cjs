@@ -55,21 +55,21 @@ async function testGroupSync() {
         if (synced.length !== 2) throw new Error(`Expected 2 groups, got ${synced.length}`);
         console.log(`✅ Verified ${synced.length} groups in DB`);
 
-        // 4. Composite key: the SAME group id must coexist per facebook_user.
-        // This is what `onConflict: 'workspace_id,facebook_user,id'` guarantees —
-        // dropping it collapses every account onto one row and silently destroys
-        // multi-account support.
+        // 4. A Facebook group is one logical row per workspace. Display labels
+        // may change between syncs and must update that row, not duplicate it.
         const { error: otherUserErr } = await supabase.from('groups').upsert([{
             id: 'test-group-1', name: 'Test Group 1', url: 'https://fb.com/groups/test1/',
             workspace_id: workspaceId, facebook_user: 'test-user-2'
-        }], { onConflict: 'workspace_id,facebook_user,id' });
-        if (otherUserErr) throw new Error(`Composite-key upsert failed: ${otherUserErr.message}`);
+        }], { onConflict: 'workspace_id,id' });
+        if (otherUserErr) throw new Error(`Workspace-group upsert failed: ${otherUserErr.message}`);
 
         const { data: bothUsers } = await supabase
             .from('groups').select('facebook_user')
             .eq('id', 'test-group-1').eq('workspace_id', workspaceId);
-        if (bothUsers.length !== 2) throw new Error(`Composite key broken: expected 2 rows for the same group id, got ${bothUsers.length}`);
-        console.log(`✅ Composite key holds ${bothUsers.length} rows for the same group id`);
+        if (bothUsers.length !== 1 || bothUsers[0].facebook_user !== 'test-user-2') {
+            throw new Error(`Workspace-group key broken: expected one updated row, got ${bothUsers.length}`);
+        }
+        console.log('✅ Workspace-group key keeps one updated row per group id');
 
         // 5. Clean up
         await supabase

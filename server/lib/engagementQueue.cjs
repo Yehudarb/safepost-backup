@@ -179,9 +179,10 @@ async function reportScanStatus({
     if (attemptNeutralOutcome) patch.attempt_count = effectiveAttempts;
 
     if (shouldRetry) {
-        // Back to the pool. claimed_at is cleared so the next claim looks fresh.
+        // Keep claimed_at as the generation of the released claim. A late batch
+        // can then prove it came from that claim without recreating its lease.
+        // claimNextScan() overwrites claimed_at atomically for the next claim.
         patch.status = 'QUEUED';
-        patch.claimed_at = null;
     } else {
         patch.status = status;
         patch.completed_at = now;
@@ -247,19 +248,18 @@ async function cancelScan({ scanId, workspaceId }) {
 // truncation and the is_truncated flag. Nothing the extension sends is trusted
 // for those — a client that computed its own key could collide with an existing
 // row or evade the unique index entirely.
-async function recordDiscoveredPosts({ scanId, workspaceId, workerId, posts }) {
+async function recordDiscoveredPosts({
+    scanId, workspaceId, workerId, claimStartedAt = null, posts,
+}) {
     if (!workspaceId) return { ok: false, code: 400 };
     if (!Array.isArray(posts) || posts.length === 0) return { ok: false, code: 400 };
 
-    // The scan must exist, belong to this workspace, be held by this worker and
-    // still be running. A cancelled or completed scan must not keep ingesting.
-    //
-    // Read scoped by workspace only, then check ownership and status separately,
-    // so a late batch against a finished scan gets an accurate 409 instead of a
-    // 404 that would send the worker looking for a scan that plainly exists.
+    // Read by workspace first. A request that started while the claim was active
+    // may arrive after preemption, so status is not by itself a reason to discard
+    // useful, deduplicated rows. Lease ownership is checked atomically below.
     const { data: scan, error: readError } = await supabase
         .from('engagement_scan_tasks')
-        .select('id, status, worker_id, posts_discovered, groups_scanned')
+        .select('id, status, worker_id, claimed_at, posts_discovered, groups_scanned')
         .eq('id', scanId)
         .eq('workspace_id', workspaceId)
         .maybeSingle();
@@ -270,7 +270,23 @@ async function recordDiscoveredPosts({ scanId, workspaceId, workerId, posts }) {
     }
     if (!scan) return { ok: false, code: 404 };
     if (!workerMayAct(scan, workerId)) return { ok: false, code: 404 };
-    if (scan.status !== 'RUNNING') return { ok: false, code: 409, reason: 'scan_not_running' };
+
+    const normalizedClaimStartedAt = typeof claimStartedAt === 'string' &&
+        !Number.isNaN(Date.parse(claimStartedAt))
+        ? new Date(claimStartedAt).toISOString()
+        : null;
+    const scanClaimedAt = scan.claimed_at && !Number.isNaN(Date.parse(scan.claimed_at))
+        ? new Date(scan.claimed_at).toISOString()
+        : null;
+    const sameClaim = Boolean(normalizedClaimStartedAt && scanClaimedAt &&
+        normalizedClaimStartedAt === scanClaimedAt);
+
+    // Once ownership is released, only the generation that actually held the
+    // scan may contribute a late batch. Older clients omit the generation, so
+    // they retain normal RUNNING ingestion but fail closed for late ingestion.
+    if (scan.status !== 'RUNNING' && !sameClaim) {
+        return { ok: false, code: 409, reason: 'scan_not_running' };
+    }
 
     const rows = [];
     const seen = new Set();
@@ -339,27 +355,65 @@ async function recordDiscoveredPosts({ scanId, workspaceId, workerId, posts }) {
 
     // Counter is recomputed from the table rather than incremented, so a retried
     // batch cannot inflate it.
-    const { count } = await supabase
+    const { count, error: countError } = await supabase
         .from('engagement_discovered_posts')
         .select('id', { count: 'exact', head: true })
         .eq('workspace_id', workspaceId)
         .eq('scan_task_id', scanId);
 
-    await supabase.from('engagement_scan_tasks')
-        .update({
-            posts_discovered: count || 0,
-            // Extend the lease: the worker is demonstrably alive and working.
-            lock_expires_at: new Date(Date.now() + SCAN_LOCK_LEASE_MS).toISOString(),
-        })
+    if (countError) {
+        console.error('[engagement] ingest count failed:', countError.message);
+        return { ok: false, code: 500 };
+    }
+
+    const totalForScan = count || 0;
+
+    // The authoritative count may be updated after a claim ends, but only
+    // monotonically. It cannot reset a newer claim's counter or touch any
+    // status, ownership, attempt or timestamp field.
+    const { error: counterError } = await supabase
+        .from('engagement_scan_tasks')
+        .update({ posts_discovered: totalForScan })
         .eq('id', scanId)
-        .eq('workspace_id', workspaceId);
+        .eq('workspace_id', workspaceId)
+        .lte('posts_discovered', totalForScan);
+
+    if (counterError) {
+        console.error('[engagement] ingest counter update failed:', counterError.message);
+        return { ok: false, code: 500 };
+    }
+
+    // Refresh only the exact active claim that sent this batch. This conditional
+    // UPDATE closes the read/status race: if /status requeues the scan, or a new
+    // claim replaces it, zero rows match and no blocking lease is recreated.
+    let leaseRefreshed = false;
+    if (sameClaim && workerId) {
+        const { data: refreshed, error: leaseError } = await supabase
+            .from('engagement_scan_tasks')
+            .update({
+                lock_expires_at: new Date(Date.now() + SCAN_LOCK_LEASE_MS).toISOString(),
+            })
+            .eq('id', scanId)
+            .eq('workspace_id', workspaceId)
+            .eq('status', 'RUNNING')
+            .eq('worker_id', workerId)
+            .eq('claimed_at', normalizedClaimStartedAt)
+            .select('id');
+
+        if (leaseError) {
+            console.error('[engagement] ingest lease refresh failed:', leaseError.message);
+            return { ok: false, code: 500 };
+        }
+        leaseRefreshed = Boolean(refreshed?.length);
+    }
 
     return {
         ok: true,
         received: posts.length,
         stored,
         duplicates: rows.length - stored,
-        total_for_scan: count || 0,
+        total_for_scan: totalForScan,
+        lease_refreshed: leaseRefreshed,
     };
 }
 

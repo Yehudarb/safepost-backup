@@ -489,6 +489,9 @@ router.post('/scans/:id/posts', requireWorker, requireEngagementEnabled, async (
         scanId: id,
         workspaceId: req.workspaceId,
         workerId: req.worker.id,
+        claimStartedAt: typeof req.body?.claim_started_at === 'string'
+            ? req.body.claim_started_at
+            : null,
         posts,
     });
 

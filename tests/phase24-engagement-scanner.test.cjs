@@ -8,6 +8,7 @@ const { pathToFileURL } = require('url');
 const { JSDOM } = require('jsdom');
 
 const SCAN_ID = '11111111-1111-4111-8111-111111111111';
+const CLAIMED_AT = '2026-09-04T10:00:00.000Z';
 // Phase 1C.2 gates scanning on a stable Facebook account id. These suites cover
 // the scanner itself, so they run with a matching identity; the mismatch and
 // unverified paths are covered by phase26.
@@ -130,6 +131,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
 
     const scan = {
         id: SCAN_ID,
+        claimed_at: CLAIMED_AT,
         target_groups: [GROUP],
         max_posts_per_group: 10,
         facebook_user_id: options.scanFacebookUserId === undefined ? FB_USER_ID : options.scanFacebookUserId,
@@ -775,6 +777,8 @@ function createBackgroundHarness(baseActivity, options = {}) {
         assert('publishing preemption is cooperatively acknowledged', preemption.acknowledged === true);
         assert('preemption accepts a bounded final batch before cleanup',
             harness.uploads.length === 1 && harness.uploads[0].posts.length === 1);
+        assert('the final batch carries the backend claim generation',
+            harness.uploads[0].claim_started_at === CLAIMED_AT);
         assert('batch group identity comes from the validated server task, not the content message',
             harness.uploads[0]?.posts[0]?.facebook_group_id === GROUP.id);
         assert('preemption reports retryable semantics and closes the engagement tab',

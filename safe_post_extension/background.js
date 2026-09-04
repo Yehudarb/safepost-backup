@@ -973,6 +973,7 @@ async function checkEngagementScans() {
             finishing: null,
             acceptingFinalBatch: false,
             group: null,
+            claimStartedAt: null,
         };
         activeEngagementActivity = activity;
         activity.unregisterPreemption = FacebookActivity.registerFacebookActivityPreemptionHandler(
@@ -1013,6 +1014,7 @@ async function checkEngagementScans() {
         );
         if (!scanAttached) throw new Error('Claimed scan could not be attached to its Facebook activity lock.');
         activity.scanId = String(payload.scan.id).toLowerCase();
+        activity.claimStartedAt = payload.scan.claimed_at || null;
 
         const validated = globalThis.SafePostEngagementNavigation.validateEngagementScan(payload.scan);
         if (!validated.ok) {
@@ -1076,7 +1078,7 @@ async function uploadEngagementBatch(request, sender) {
         raw_metadata: post.rawMetadata || {},
     }));
     const response = await engagementRequest(activity.pairing, `/scans/${activity.scanId}/posts`, {
-        body: { posts },
+        body: { posts, claim_started_at: activity.claimStartedAt },
         signal: activity.controller.signal,
     });
     if (!response.ok) return { ok: false, error: `Engagement ingest HTTP ${response.status}` };

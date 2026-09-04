@@ -41,6 +41,7 @@
     "test:facebook-state-identity": "node tests/phase26-facebook-state-and-identity.test.cjs",
     "test:identity-hardening": "node -r ./server/tests/loadTestEnv.cjs tests/phase27-identity-and-security-hardening.test.cjs",
     "test:identity-gate": "node -r ./server/tests/loadTestEnv.cjs tests/phase28-identity-gate-and-parser.test.cjs",
+    "test:late-flush-race": "node -r ./server/tests/loadTestEnv.cjs tests/phase28-late-flush-lease-race.test.cjs",
     "test:engagement-dashboard": "node -r ./server/tests/loadTestEnv.cjs tests/phase29-engagement-dashboard.test.cjs"
   },
   "dependencies": {
