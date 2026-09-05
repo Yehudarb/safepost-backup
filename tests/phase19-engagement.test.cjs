@@ -190,7 +190,7 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
         const caps = await Promise.all([
             newScan(A, { max_groups: 6 }),
             newScan(A, { max_groups: 0 }),
-            newScan(A, { max_posts_per_group: 26 }),
+            newScan(A, { max_posts_per_group: 11 }),
             newScan(A, { max_posts_per_group: 0 }),
             newScan(A, { max_groups: 1.5 }),
             newScan(A, { name: '' }),
@@ -345,7 +345,8 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
         assert("B's dashboard cannot cancel A's scan", bCancelA.status === 404, `HTTP ${bCancelA.status}`);
         const bList = await dash(B, 'GET', '/scans');
         assert("B's list contains none of A's scans",
-            (bList.body?.scans || []).every(s => s.workspace_id === B.workspaceId));
+            (bList.body?.scans || []).every(s => s.id !== scanA.id) &&
+            !JSON.stringify(bList.body).includes(A.groupId));
 
         // A header claiming another workspace must not override the verified token.
         const spoofed = await fetch(`${API_URL}/api/engagement/scans`, {
@@ -356,12 +357,12 @@ const newScan = (t, overrides = {}) => dash(t, 'POST', '/scans', {
         });
         const spoofBody = await spoofed.json().catch(() => null);
         assert('a spoofed x-workspace-id header cannot reach another tenant',
-            spoofed.status === 403 || (spoofBody?.scans || []).every(s => s.workspace_id !== A.workspaceId),
+            spoofed.status === 403 || (spoofBody?.scans || []).every(s => s.id !== scanA.id),
             `HTTP ${spoofed.status}`);
 
         const bDiscovered = await dash(B, 'GET', '/discovered');
         assert("B sees none of A's discovered posts",
-            (bDiscovered.body?.posts || []).every(p => p.workspace_id === B.workspaceId));
+            (bDiscovered.body?.posts || []).length === 0);
         assert("A's post text never appears in B's response",
             !JSON.stringify(bDiscovered.body).includes('Looking for a plumber'));
 

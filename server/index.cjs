@@ -824,7 +824,7 @@ app.post('/api/profile/sync', optionalWorker, (req, res) => {
 app.get('/api/groups', ...dashboardAuth, async (req, res) => {
     const { data, error } = await scopeToWorkspace(supabase
         .from('groups')
-        .select('*'), req)
+        .select('id, name, url, workspace_id, facebook_user, timezone'), req)
         .order('name', { ascending: true });
 
     if (error) return res.status(500).json({ error: error.message });

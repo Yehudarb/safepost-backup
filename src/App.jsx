@@ -27,6 +27,7 @@ import Legal from '@/pages/Legal';
 import AccessibilityWidget from '@/components/AccessibilityWidget/vee/AccessibilityWidget';
 import { API_BASE, BACKEND_URL } from '@/lib/apiConfig';
 import { useLanguage } from '@/lib/i18n';
+import { useAuth } from '@/context/AuthContext';
 
 // Socket connection: in dev use localhost:3001, in prod use the backend URL
 const SOCKET_URL = BACKEND_URL || 'http://localhost:3001';
@@ -676,6 +677,7 @@ function FacebookAccountPill({ accountName, accountStatus, onAccountChange }) {
 // ---------------------------------------------------------------------------
 export default function App() {
     const { lang, t, toggleLang } = useLanguage();
+    const { activeWorkspace } = useAuth();
 
     // Core state
     const [groups, setGroups]           = useState([]);
@@ -1944,7 +1946,11 @@ export default function App() {
                     the flag off this page behaves exactly as it did before. */}
                 <div className="mt-6">
                     <ErrorBoundary>
-                        <EngagementPanel groups={groups} />
+                        <EngagementPanel
+                            key={activeWorkspace || 'no-workspace'}
+                            groups={groups}
+                            workspaceId={activeWorkspace}
+                        />
                     </ErrorBoundary>
                 </div>
             </main>

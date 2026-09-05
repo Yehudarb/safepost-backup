@@ -41,10 +41,10 @@ const dashboardAuth = [requireAuth, requireWorkspaceAccess];
 // if a future scan config allows more posts, a single HTTP body stays bounded.
 const MAX_POSTS_PER_BATCH = 50;
 
-// Phase 1 product/safety caps. Mirrored by CHECK constraints in migration 0012,
-// so a direct database write cannot exceed them either.
+// Phase 1 product/safety caps. The database retains a broader legacy ceiling,
+// while this controlled API matches the scanner and dashboard limit.
 const MAX_GROUPS_LIMIT = 5;
-const MAX_POSTS_PER_GROUP_LIMIT = 25;
+const MAX_POSTS_PER_GROUP_LIMIT = 10;
 
 const MAX_NAME_LENGTH = 120;
 const MAX_INSTRUCTIONS_LENGTH = 1000;
@@ -113,6 +113,12 @@ const DASHBOARD_SCAN_FIELDS = [
     'groups_scanned', 'posts_discovered', 'created_at', 'started_at', 'completed_at',
 ].join(', ');
 
+const DASHBOARD_DISCOVERED_FIELDS = [
+    'id', 'scan_task_id', 'facebook_group_id', 'facebook_group_name',
+    'facebook_post_id', 'facebook_post_url', 'author_name', 'author_profile_url',
+    'post_text', 'is_truncated', 'posted_at', 'posted_at_raw', 'discovered_at',
+].join(', ');
+
 // What the user is told about a terminal scan.
 //
 // The stored failure_reason names internal strategies and signals
@@ -134,6 +140,9 @@ const SCAN_REASON_SUMMARY = {
     NO_GROUP_ACCESS: 'This account cannot view that group.',
     PAGE_LOAD_TIMEOUT: 'The group page did not finish loading.',
     NETWORK_TIMEOUT: 'The connection to Facebook timed out.',
+    TEMPORARY_SERVER_ERROR: 'A temporary server error interrupted the scan. Try again later.',
+    WORKER_DISCONNECTED: 'The paired browser extension went offline before the scan finished.',
+    NO_POSTS_FOUND: 'The scan completed, but no top-level posts were found.',
     SCAN_PREEMPTED_BY_PUBLISH:
         'Paused so a scheduled post could publish. The scan returns to the queue on its own.',
     PARSER_NO_STRATEGY_MATCHED:
@@ -147,8 +156,15 @@ function scanUiState(scan) {
     if (!scan) return 'NONE';
     if (scan.status === 'QUEUED') return 'QUEUED';
     if (scan.status === 'RUNNING') return 'RUNNING';
-    if (scan.status === 'COMPLETED') return 'COMPLETED';
-    if (scan.status === 'ABORTED') return 'BLOCKED';
+    if (scan.status === 'COMPLETED' ||
+        (scan.status === 'FAILED' && scan.error_code === 'NO_POSTS_FOUND')) return 'COMPLETED';
+    if (scan.status === 'ABORTED') {
+        return scan.error_code === 'FACEBOOK_IDENTITY_UNVERIFIED' ||
+            scan.error_code === 'FACEBOOK_IDENTITY_MISMATCH'
+            ? 'BLOCKED'
+            : 'ABORTED';
+    }
+    if (scan.status === 'CANCELLED') return 'CANCELLED';
     return 'FAILED';
 }
 
@@ -165,7 +181,17 @@ function scanSummary(scan) {
         reason_summary: scan.error_code
             ? (SCAN_REASON_SUMMARY[scan.error_code] || 'The scan stopped before finishing.')
             : null,
+        target_groups: Array.isArray(scan.target_groups)
+            ? scan.target_groups.map(item => ({
+                id: item?.id ?? null,
+                name: typeof item?.name === 'string' ? item.name : null,
+                url: typeof item?.url === 'string' ? item.url : null,
+            }))
+            : [],
         group_name: group && typeof group.name === 'string' ? group.name : null,
+        search_instructions: typeof scan.search_instructions === 'string' ? scan.search_instructions : null,
+        max_groups: scan.max_groups,
+        max_posts_per_group: scan.max_posts_per_group,
         groups_scanned: scan.groups_scanned ?? 0,
         posts_discovered: scan.posts_discovered ?? 0,
         created_at: scan.created_at,
@@ -247,7 +273,8 @@ router.get('/scans', ...dashboardAuth, requireEngagementEnabled, async (req, res
     if (error) return dbFailure(res, 'list engagement scans', error);
     // `summaries` is what the dashboard renders: same rows, mapped to UI states
     // and user-facing text, with no internal reason strings.
-    res.json({ scans: data || [], summaries: (data || []).map(scanSummary) });
+    const summaries = (data || []).map(scanSummary);
+    res.json({ scans: summaries, summaries });
 });
 
 // Create a scan.
@@ -384,7 +411,7 @@ router.post('/scans', ...dashboardAuth, denyDemo, requireEngagementEnabled, asyn
     await audit(req.workspaceId, 'ENGAGEMENT_SCAN_CREATED',
         `scan=${created.id} groups=${resolved.length} max_posts=${maxPosts}`);
 
-    res.status(201).json({ scan: created });
+    res.status(201).json({ scan: scanSummary(created) });
 });
 
 // Fetch one scan.
@@ -398,7 +425,7 @@ router.get('/scans/:id', ...dashboardAuth, requireEngagementEnabled, async (req,
 
     if (error) return dbFailure(res, 'fetch engagement scan', error);
     if (!data) return res.status(404).json({ error: 'Scan not found.' });
-    res.json({ scan: data });
+    res.json({ scan: scanSummary(data) });
 });
 
 // Cancel a scan that has not finished.
@@ -428,7 +455,7 @@ router.get('/discovered', ...dashboardAuth, requireEngagementEnabled, async (req
     const offset = Number.isInteger(rawOffset) && rawOffset > 0 ? rawOffset : 0;
 
     let query = supabase.from('engagement_discovered_posts')
-        .select('*')
+        .select(DASHBOARD_DISCOVERED_FIELDS)
         .order('discovered_at', { ascending: false })
         .range(offset, offset + limit - 1);
 
