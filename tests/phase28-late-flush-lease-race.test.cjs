@@ -57,7 +57,7 @@ async function makeWorkspace(label) {
         workspace_id: workspace.id,
         worker_name: `${tag} ${label} worker`,
         device_token_hash: crypto.createHash('sha256').update(`${tag}-${label}`).digest('hex'),
-        extension_version: '9.1',
+        extension_version: '9.2',
     }, 'id');
     return { workspaceId: workspace.id, workerId: worker.id };
 }
@@ -67,7 +67,7 @@ async function makeWorker(workspaceId, label) {
         workspace_id: workspaceId,
         worker_name: `${tag} ${label}`,
         device_token_hash: crypto.createHash('sha256').update(`${tag}-${label}`).digest('hex'),
-        extension_version: '9.1',
+        extension_version: '9.2',
     }, 'id');
 }
 

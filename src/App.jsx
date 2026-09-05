@@ -714,9 +714,6 @@ export default function App() {
         || localStorage.getItem('safepost_detectedFacebookUser')
         || ''
     );
-    const [currentUserId, setCurrentUserId]   = useState(
-        localStorage.getItem('safepost_currentUserId') || ''
-    );
     const [uniqueUsers, setUniqueUsers]       = useState([]);
     // Set when the operator edits the account field by hand, so the poll below
     // stops overwriting their choice. Released as soon as the server reports a
@@ -779,24 +776,17 @@ export default function App() {
     }, [currentUser]);
 
     useEffect(() => {
-        if (currentUserId) {
-            localStorage.setItem('safepost_currentUserId', currentUserId);
-        } else {
-            localStorage.removeItem('safepost_currentUserId');
-        }
-    }, [currentUserId]);
+        // Phase 1E privacy cleanup for dashboards that stored this legacy value.
+        localStorage.removeItem('safepost_currentUserId');
+    }, []);
 
     useEffect(() => {
         const handleBridgeResponse = (event) => {
             const detail = event?.detail || {};
             if (detail.action !== 'CHECK_CACHE') return;
             const bridgeUser = detail.response?.user || null;
-            const bridgeUserId = detail.response?.userId || null;
             if (bridgeUser) {
                 setCurrentUser(prev => prev === bridgeUser ? prev : bridgeUser);
-            }
-            if (bridgeUserId) {
-                setCurrentUserId(prev => prev === bridgeUserId ? prev : bridgeUserId);
             }
         };
 
@@ -823,7 +813,6 @@ export default function App() {
                 const response = await ApiService.getCurrentProfile();
                 if (!active) return;
                 const serverUser = response.current_user;
-                const serverUserId = response.current_user_id || '';
                 console.log('[App] Server returned current_user:', serverUser);
                 if (serverUser) {
                     setCurrentUser(prev => {
@@ -834,21 +823,14 @@ export default function App() {
                         return prev;
                     });
                 }
-                if (serverUserId) {
-                    setCurrentUserId(prev => prev === serverUserId ? prev : serverUserId);
-                }
             } catch (err) {
                 if (!active) return;
                 const stored = localStorage.getItem('safepost_currentUser') || localStorage.getItem('safepost_detectedFacebookUser');
-                const storedId = localStorage.getItem('safepost_currentUserId') || '';
                 if (stored) {
                     setCurrentUser(prev => {
                         if (prev !== stored) return stored;
                         return prev;
                     });
-                }
-                if (storedId) {
-                    setCurrentUserId(prev => prev === storedId ? prev : storedId);
                 }
             }
         };
@@ -1637,7 +1619,7 @@ export default function App() {
 
                     <FacebookAccountPill
                         accountName={currentUser || t('notConnectedLabel')}
-                        accountStatus={currentUser ? (currentUserId ? `${t('connectedLabel')} • ID ${currentUserId}` : t('connectedLabel')) : t('notConnectedLabel')}
+                        accountStatus={currentUser ? t('connectedLabel') : t('notConnectedLabel')}
                     />
 
                     <div className="w-px h-6 bg-gray-200 dark:bg-[#30363d] mx-0.5" />

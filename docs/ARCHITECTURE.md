@@ -53,8 +53,9 @@ SafePost has three runtime components plus a managed database:
   lower-priority work; owner and operation ID are required for release.
 - `popup.html` + `popup.js` — settings screen: API server URL, connection test,
   worker identity, extension version.
-- Ships assembled at build time: `public/manifest.json` + `public/popup.*` +
-  `safe_post_extension/*.js` (copied into `dist/scripts/` by `build.sh`).
+- `safe_post_extension/` is the sole extension source. `npm run build:extension`
+  validates and copies it to `dist/extension/`, then creates a versioned ZIP and
+  SHA-256. Vite's `public/` directory contains web assets only.
 
 ### Database — Supabase (Postgres)
 - Stores jobs/tasks, groups, logs, reporting data.
@@ -76,6 +77,7 @@ SafePost has three runtime components plus a managed database:
 |---------|-------|-------|
 | `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` | backend env / `.env` | required; never hardcoded |
 | `NODE_ENV`, `PORT` | backend env | runtime |
+| `ENGAGEMENT_ENABLED` | backend env | fleet kill switch; production default is `false` |
 | `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` | backend env | optional AI features |
 | `VITE_API_URL` | frontend build env | backend base URL |
 | Extension API URL | extension popup → `chrome.storage.local` | falls back to default |
@@ -83,10 +85,6 @@ SafePost has three runtime components plus a managed database:
 
 ## Known structural debt (tracked for later phases)
 
-- The extension is assembled from two source locations (`public/` for the
-  manifest/popup, `safe_post_extension/` for the worker JS). A future
-  normalization should consolidate these into a single `extension/` source, but
-  it changes the shipped artifact and must be tested in Chrome before deploy.
 - `server/index.cjs` (~1.7k lines) and `src/App.jsx` (~1.7k lines) are oversized
   and are refactor targets (Phase 8).
 - Hardcoded Supabase key remains in **git history** (removed from working tree in

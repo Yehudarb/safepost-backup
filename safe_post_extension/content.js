@@ -1689,7 +1689,7 @@ window.hud = {
             <div id="hud-status">מוכן לעבודה</div>
             <div id="hud-meta">ממתין להתחלת משימה</div>
             <div id="hud-progress"><span></span></div>
-            <div id="hud-version">v9.1</div>
+            <div id="hud-version">v${chrome.runtime.getManifest().version}</div>
         `;
         document.body.appendChild(div);
         window.hud.refreshMeta();

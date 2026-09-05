@@ -6,7 +6,8 @@
     "start": "NODE_ENV=production node server/index.cjs",
     "start-all": "concurrently \"cross-env NODE_ENV=development node server/index.cjs\" \"npm run dev\"",
     "dev": "cross-env NODE_ENV=development vite",
-    "build": "vite build && node scripts/package-extension-worker.cjs safe_post_extension/background.js dist/scripts",
+    "build": "vite build && npm run build:extension",
+    "build:extension": "node scripts/build-extension.cjs",
     "preview": "vite preview",
     "test": "npm run test:validation && npm run test:sync && npm run test:performance",
     "test:phase3": "node -r ./server/tests/loadTestEnv.cjs tests/phase3-isolation.test.cjs",
@@ -43,7 +44,8 @@
     "test:identity-gate": "node -r ./server/tests/loadTestEnv.cjs tests/phase28-identity-gate-and-parser.test.cjs",
     "test:late-flush-race": "node -r ./server/tests/loadTestEnv.cjs tests/phase28-late-flush-lease-race.test.cjs",
     "test:engagement-dashboard": "node -r ./server/tests/loadTestEnv.cjs tests/phase29-engagement-dashboard.test.cjs",
-    "test:status-generation": "node -r ./server/tests/loadTestEnv.cjs tests/phase30-status-generation-race.test.cjs"
+    "test:status-generation": "node -r ./server/tests/loadTestEnv.cjs tests/phase30-status-generation-race.test.cjs",
+    "test:phase32": "node -r ./server/tests/loadTestEnv.cjs tests/phase32-deployment-hardening.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

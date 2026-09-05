@@ -250,7 +250,7 @@ function assert(name, condition, detail = '') {
         /importScripts\([^)]*facebookActivityLock\.js/.test(background));
     const packageJson = fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8');
     assert('extension build packages imported service-worker dependencies',
-        /package-extension-worker\.cjs/.test(packageJson));
+        /build:extension/.test(packageJson) && /build-extension\.cjs/.test(packageJson));
 
     console.log('\n G. transition observability');
     {

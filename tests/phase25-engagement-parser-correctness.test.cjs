@@ -238,7 +238,8 @@ function comment({ id = '777777', author = 'Comment Author', text = 'Comment tex
         const serverSource = fs.readFileSync(path.join(__dirname, '../server/index.cjs'), 'utf8');
         const maintenance = serverSource.slice(serverSource.indexOf('const QUEUE_SWEEP_MS'));
         assert('expired Engagement locks use the existing queue maintenance timer',
-            maintenance.includes("sweepExpiredScanLocks().catch") &&
+            maintenance.includes('sweepExpiredScanLocks()') &&
+            maintenance.includes('logEngagementSweepResult(result)') &&
             (serverSource.match(/const QUEUE_SWEEP_MS/g) || []).length === 1);
     }
 

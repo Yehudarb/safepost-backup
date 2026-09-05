@@ -5,7 +5,6 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const vm = require('vm');
-const { spawnSync } = require('child_process');
 const { pathToFileURL } = require('url');
 
 const extensionStorageState = {};
@@ -97,7 +96,7 @@ function createBackgroundHarness({ acquireResult }) {
             runtime: {
                 id: 'phase21-extension',
                 lastError: null,
-                getManifest: () => ({ version: '9.1' }),
+                getManifest: () => ({ version: '9.2' }),
                 onInstalled: noOpEvent,
                 onStartup: noOpEvent,
                 onMessage: noOpEvent,
@@ -332,24 +331,15 @@ function createBackgroundHarness({ acquireResult }) {
     {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'safepost-phase21-'));
         const sourceDirectory = path.join(root, 'source');
-        const destination = path.join(root, 'dist');
         fs.mkdirSync(sourceDirectory, { recursive: true });
-        fs.mkdirSync(destination, { recursive: true });
         fs.writeFileSync(path.join(sourceDirectory, 'background.js'),
             "importScripts('present.js', 'missing.js');\n");
         fs.writeFileSync(path.join(sourceDirectory, 'present.js'), '// present\n');
-        fs.writeFileSync(path.join(sourceDirectory, 'missing.js'), '// source exists\n');
-        fs.writeFileSync(path.join(destination, 'background.js'), '// built\n');
-        fs.writeFileSync(path.join(destination, 'present.js'), '// built\n');
-        const verifier = path.join(__dirname, '../scripts/package-extension-worker.cjs');
-        const result = spawnSync(process.execPath, [
-            verifier,
-            path.join(sourceDirectory, 'background.js'),
-            destination,
-            '--verify-only',
-        ], { encoding: 'utf8' });
+        const { missingWorkerDependencies } = require('../scripts/build-extension.cjs');
+        const source = fs.readFileSync(path.join(sourceDirectory, 'background.js'), 'utf8');
+        const result = missingWorkerDependencies(sourceDirectory, source);
         assert('build verification fails when importScripts dependency is missing',
-            result.status !== 0 && /missing\.js/.test(result.stderr));
+            result.length === 1 && result[0] === 'missing.js');
         fs.rmSync(root, { recursive: true, force: true });
     }
 

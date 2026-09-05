@@ -68,7 +68,7 @@ async function makeTenant(label) {
     const { code } = await codeRes.json();
     const pairRes = await fetch(`${API_URL}/api/workers/pair`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Connection: 'close' },
-        body: JSON.stringify({ code, worker_name: `${label} worker`, extension_version: '9.1' }),
+        body: JSON.stringify({ code, worker_name: `${label} worker`, extension_version: '9.2' }),
     });
     const pair = await pairRes.json();
     await admin.from('workspaces').update({ engagement_enabled: true }).eq('id', workspaceId);

@@ -382,6 +382,7 @@ const {
     sweepMissedSchedules,
 } = require('./lib/queue.cjs');
 const { sweepExpiredScanLocks } = require('./lib/engagementQueue.cjs');
+const { logEngagementSweepResult } = require('./lib/engagementObservability.cjs');
 const {
     createTenantEventLog,
     selectWorkspaceEventLogs,
@@ -787,7 +788,6 @@ app.get('/api/profile/current', ...dashboardAuth, (req, res) => {
     console.log(`📋 [PROFILE] GET /api/profile/current → returning: "${state.lastFacebookUser || '(none)'}"`);
     res.json({
         current_user: state.lastFacebookProfile?.facebook_user || null,
-        current_user_id: state.lastFacebookProfile?.facebook_user_id || null,
         source: state.lastFacebookProfile?.source || null,
         detected_at: state.lastFacebookProfile?.detected_at || null
     });
@@ -3040,7 +3040,9 @@ const QUEUE_SWEEP_MS = 60 * 1000;
 setInterval(() => {
     sweepExpiredLocks().catch(e => console.error('[sweep] locks:', e.message));
     sweepMissedSchedules().catch(e => console.error('[sweep] missed:', e.message));
-    sweepExpiredScanLocks().catch(e => console.error('[sweep] engagement:', e.message));
+    sweepExpiredScanLocks()
+        .then(result => logEngagementSweepResult(result))
+        .catch(e => console.error('[sweep] engagement:', e.message));
 }, QUEUE_SWEEP_MS);
 
 // Belt-and-braces alongside the uncaughtException guard above: http.Server

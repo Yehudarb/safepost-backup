@@ -6,3 +6,6 @@ services:
     buildCommand: node build.js
     startCommand: node server/index.cjs
     healthCheckPath: /api/health
+    envVars:
+      - key: ENGAGEMENT_ENABLED
+        value: "false"

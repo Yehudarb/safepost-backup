@@ -111,7 +111,7 @@ function createBackgroundHarness(activity, { claimMode = 'no-job' } = {}) {
             runtime: {
                 id: 'phase22-extension',
                 lastError: null,
-                getManifest: () => ({ version: '9.1' }),
+                getManifest: () => ({ version: '9.2' }),
                 onInstalled: noOpEvent,
                 onStartup: noOpEvent,
                 onMessage: { addListener(listener) { onMessage = listener; } },

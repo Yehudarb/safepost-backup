@@ -175,7 +175,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
             runtime: {
                 id: 'phase24-extension',
                 lastError: null,
-                getManifest: () => ({ version: '9.1' }),
+                getManifest: () => ({ version: '9.2' }),
                 onInstalled: noOpEvent,
                 onStartup: noOpEvent,
                 onMessage: { addListener(listener) { onMessage = listener; } },

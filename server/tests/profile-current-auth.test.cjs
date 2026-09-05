@@ -73,6 +73,8 @@ async function makeUser(tag) {
 
     const ownProfile = await api('/profile/current', { token: A.token, workspaceId: A.workspaceId });
     assert('authenticated dashboard user can access /profile/current', ownProfile.status === 200 && ownProfile.json && 'current_user' in ownProfile.json);
+    assert('dashboard profile response excludes the stable Facebook account id',
+        !Object.prototype.hasOwnProperty.call(ownProfile.json || {}, 'current_user_id'));
 
     const anonProfile = await api('/profile/current');
     assert('unauthenticated /profile/current is rejected', anonProfile.status === 401);

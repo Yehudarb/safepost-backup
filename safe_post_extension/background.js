@@ -1,4 +1,4 @@
-console.log("[Background] Service Worker v9.1 — Multi-anchor name extraction (LOCAL DEV)");
+console.log(`[Background] Service Worker v${chrome.runtime.getManifest().version} — Multi-anchor name extraction (LOCAL DEV)`);
 
 // Load extension storage, the shared Facebook mutex and external-sender
 // validation utilities. The lock module depends on ExtStorage, so order matters.
@@ -1452,7 +1452,7 @@ async function scanAndSyncGroups() {
     }
 
     isGroupScanning = true;
-    console.log("[Background] scanAndSyncGroups v9.1 (multi-anchor + upgrade) via www.facebook.com/groups/joins/");
+    console.log(`[Background] scanAndSyncGroups v${chrome.runtime.getManifest().version} (multi-anchor + upgrade) via www.facebook.com/groups/joins/`);
 
     let cancelActiveGroupScan = null;
     let groupSyncPreemptRequested = false;

@@ -46,6 +46,8 @@ The active extension source is **`safe_post_extension/`** (Manifest V3).
 - Open the extension popup to configure the **API Server URL**, run a
   **connection test**, and view the **worker identity** and **version**.
 - If no API URL is set, the extension falls back to the built-in production URL.
+- Engagement claims require extension `9.2` or newer. The backend rejects an
+  older or unidentified worker before it can acquire a scan lease.
 
 > Only one extension implementation is active. The former `extension/` directory
 > (v7.0) was removed in Phase 2; it remains recoverable in the pre-refactor
@@ -54,10 +56,14 @@ The active extension source is **`safe_post_extension/`** (Manifest V3).
 ## Build
 
 ```bash
-./build.sh          # installs, builds frontend, copies extension files to dist/
+npm run build              # frontend plus verified extension artifact
+npm run build:extension    # extension only
 ```
 
-`dist/` is build output and is **not** committed (regenerated on each build).
+`safe_post_extension/manifest.json` is the authoritative extension release
+version. `npm run build:extension` copies only that source tree into
+`dist/extension/` and emits `dist/safepost-extension-<version>.zip` plus its
+SHA-256. `dist/` is generated output and is not committed.
 
 ## Deployment
 
@@ -67,6 +73,9 @@ The active extension source is **`safe_post_extension/`** (Manifest V3).
 
 Production URL: https://safepost-backup.vercel.app/
 
+Engagement must initially deploy with `ENGAGEMENT_ENABLED=false`. See
+`docs/DEPLOYMENT.md` before applying migrations or enabling a workspace.
+
 ## Configuration & secrets
 
 - All secrets live in `.env` (git-ignored). `.env.example` documents the keys.
@@ -74,6 +83,8 @@ Production URL: https://safepost-backup.vercel.app/
   session tokens.
 
 ## Documentation
+
+- `docs/DEPLOYMENT.md` - Phase 1 deployment and rollback runbook
 
 - `docs/ARCHITECTURE.md` — system architecture and data flow
 - `CHANGELOG.md` — notable changes

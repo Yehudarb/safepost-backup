@@ -27,6 +27,7 @@ const { requireWorker } = require('../middleware/worker.cjs');
 const { normalizeUuid } = require('../lib/ids.cjs');
 const { dbFailure } = require('../lib/httpErrors.cjs');
 const { persistTenantSystemLog } = require('../lib/logIsolation.cjs');
+const { requireEngagementExtensionVersion } = require('../lib/extensionVersion.cjs');
 const {
     claimNextScan,
     reportScanStatus,
@@ -483,7 +484,7 @@ router.get('/discovered', ...dashboardAuth, requireEngagementEnabled, async (req
 // ---------------------------------------------------------------------------
 
 // Claim the next queued scan in this worker's own workspace.
-router.post('/scans/claim', requireWorker, requireEngagementEnabled, async (req, res) => {
+router.post('/scans/claim', requireWorker, requireEngagementEnabled, requireEngagementExtensionVersion, async (req, res) => {
     const scan = await claimNextScan({ workspaceId: req.workspaceId, workerId: req.worker.id });
     if (!scan) return res.json({ scan: null });
 
