@@ -158,6 +158,33 @@ function runExtensionBuild() {
         assert('malformed version is rejected', !isVersionAtLeast('9.2-beta', '9.2'));
         assert('comparison is not lexicographic', compareNumericVersions('10.0', '9.2') > 0);
 
+        // Chrome accepts one to four dot-separated integers, so a future
+        // single-component manifest such as "10" is valid and must not lock the
+        // fleet out of Engagement.
+        assert('single-component "10" is accepted', isVersionAtLeast('10', '9.2'));
+        assert('"10" and "10.0" compare equal', compareNumericVersions('10', '10.0') === 0);
+        assert('single-component "9" is still below the floor', !isVersionAtLeast('9', '9.2'));
+        assert('four components are accepted', isVersionAtLeast('9.2.0.1', '9.2'));
+        assert('five components are rejected', !isVersionAtLeast('9.2.3.4.5', '9.2'));
+        assert('a bare separator is rejected', !isVersionAtLeast('9.', '9.2'));
+        assert('a leading separator is rejected', !isVersionAtLeast('.2', '9.2'));
+        assert('a v-prefix is rejected', !isVersionAtLeast('v9.2', '9.2'));
+        assert('an out-of-range component is rejected', !isVersionAtLeast('9999999999', '9.2'));
+
+        // The server rejects an old build with 426; the extension must treat that
+        // as a standing condition rather than polling every minute in silence.
+        const backgroundSource = fs.readFileSync(
+            path.join(__dirname, '../safe_post_extension/background.js'), 'utf8');
+        assert('the extension backs off on 426 exactly as it does on 404',
+            /response\.status === 426/.test(backgroundSource) &&
+            /if \(response\.status === 426\)[\s\S]{0,400}engagementUnavailableUntil = Date\.now\(\) \+ ENGAGEMENT_UNAVAILABLE_BACKOFF_MS/
+                .test(backgroundSource));
+        assert('the 426 warning is emitted once, not once per poll',
+            /engagementUpgradeWarned/.test(backgroundSource) &&
+            /if \(!engagementUpgradeWarned\)/.test(backgroundSource));
+        assert('the 426 warning states publishing is unaffected',
+            /Publishing is unaffected/.test(backgroundSource));
+
         console.log('\n B. authenticated claim gate and tenant isolation');
         const A = await makeTenant('a', '9.1');
         const B = await makeTenant('b', '10.0');

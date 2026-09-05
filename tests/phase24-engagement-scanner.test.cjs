@@ -103,6 +103,7 @@ function instrumentActivity(base, events) {
 
 function createBackgroundHarness(baseActivity, options = {}) {
     const events = [];
+    const warnings = [];
     const activity = instrumentActivity(baseActivity, events);
     const local = {
         pairedWorkerId: 'worker-phase24',
@@ -139,7 +140,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
     };
 
     const context = {
-        console: { log() {}, warn() {}, error() {} },
+        console: { log() {}, warn: (...args) => warnings.push(args.join(' ')), error() {} },
         importScripts() {},
         SafePostFacebookActivityLock: activity,
         SafePostFacebookActivityLockFactory: {
@@ -293,7 +294,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
             if (target.endsWith('/api/engagement/scans/claim')) {
                 events.push('claim');
                 claimCalls++;
-                if (options.claimStatus === 404) return response(404, { error: 'Not found' });
+                if (options.claimStatus) return response(options.claimStatus, { error: 'Rejected' });
                 if (options.claimError) throw new Error('expected claim failure');
                 if (options.noScan) return response(200, { scan: null });
                 return response(200, { scan });
@@ -324,6 +325,8 @@ function createBackgroundHarness(baseActivity, options = {}) {
     vm.runInNewContext(`${source}\nglobalThis.__phase24 = {
         ready: facebookActivityReady,
         checkEngagementScans,
+        checkJobs,
+        pollAvailableWork,
         active: () => activeEngagementActivity,
         unavailableUntil: () => engagementUnavailableUntil
     };`, context);
@@ -336,6 +339,7 @@ function createBackgroundHarness(baseActivity, options = {}) {
     return {
         api: context.__phase24,
         events,
+        warnings,
         binds,
         statuses,
         uploads,
@@ -815,6 +819,83 @@ function createBackgroundHarness(baseActivity, options = {}) {
         await harness.api.checkEngagementScans();
         assert('disabled Engagement endpoint enters backoff instead of a claim loop',
             firstClaims === 1 && harness.claimCalls() === 1 && harness.api.unavailableUntil() > Date.now());
+    }
+    {
+        // Phase 1E: the server rejects extensions below the minimum Engagement
+        // version with 426. That is a standing condition, so it must behave like
+        // 404 — back off and say so once — instead of polling every minute in
+        // silence for as long as the build stays installed.
+        const lock = createActivity(memoryStorage());
+        const harness = createBackgroundHarness(lock, { claimStatus: 426 });
+        await harness.api.ready;
+        await harness.api.checkEngagementScans();
+        const afterFirst = harness.claimCalls();
+        const backoffUntil = harness.api.unavailableUntil();
+
+        await harness.api.checkEngagementScans();
+        await harness.api.checkEngagementScans();
+
+        assert('426 enters the same backoff as an unavailable endpoint',
+            afterFirst === 1 && backoffUntil > Date.now(), `claims=${afterFirst}`);
+        assert('repeated polling during backoff never reaches the endpoint again',
+            harness.claimCalls() === 1, `claims=${harness.claimCalls()}`);
+        assert('the backoff window is not extended by suppressed polls',
+            harness.api.unavailableUntil() === backoffUntil);
+
+        const upgradeWarnings = harness.warnings.filter(line => /below the minimum version/.test(line));
+        assert('the operator is told exactly once why Engagement is off',
+            upgradeWarnings.length === 1, JSON.stringify(harness.warnings));
+        assert('the warning names the installed version and clears publishing',
+            /v9\.2/.test(upgradeWarnings[0]) && /Publishing is unaffected/.test(upgradeWarnings[0]),
+            upgradeWarnings[0]);
+
+        assert('a rejected claim starts no scan and uploads nothing',
+            !harness.events.includes('message:START_ENGAGEMENT_SCAN') && harness.uploads.length === 0);
+        assert('a rejected claim reports no status, so no attempt can be consumed',
+            harness.statuses.length === 0, JSON.stringify(harness.statuses));
+        assert('a rejected claim leaves the Facebook activity lock free',
+            await lock.getFacebookActivityLock() === null);
+    }
+    {
+        // Publishing must stay completely unaffected by the Engagement version
+        // floor: it is polled first and never consults the Engagement backoff.
+        const lock = createActivity(memoryStorage());
+        const harness = createBackgroundHarness(lock, { claimStatus: 426 });
+        await harness.api.ready;
+        let pollError = null;
+        try {
+            await harness.api.pollAvailableWork();
+            await harness.api.pollAvailableWork();
+        } catch (error) {
+            pollError = error;
+        }
+        assert('the shared work poll survives a version-blocked Engagement claim',
+            pollError === null, String(pollError));
+        assert('Engagement stayed backed off across both polls', harness.claimCalls() === 1);
+
+        // The harness has no publishing fixture, so the guarantee that publishing
+        // is unaffected is asserted structurally rather than pretended to be
+        // exercised: publishing is polled first, and it never reads the
+        // Engagement backoff.
+        const source = fs.readFileSync(path.join(__dirname, '../safe_post_extension/background.js'), 'utf8');
+        const poll = source.slice(source.indexOf('async function pollAvailableWork()'));
+        assert('publishing is polled before Engagement',
+            poll.indexOf('checkJobs()') < poll.indexOf('checkEngagementScans()'));
+        // Bound the slice to checkJobs itself — its closing brace at column 0 —
+        // rather than to the next engagement function, which would sweep in
+        // hundreds of unrelated lines including the module-scope declarations.
+        // Normalise line endings first: the working tree is CRLF, so a '\n}\n'
+        // probe silently matches nothing and the slice swallows the whole file.
+        const unixSource = source.replace(/\r\n/g, '\n');
+        const jobsStart = unixSource.indexOf('async function checkJobs(');
+        const jobsEnd = unixSource.indexOf('\n}\n', jobsStart);
+        const checkJobsBody = unixSource.slice(jobsStart, jobsEnd);
+        assert('the checkJobs slice is bounded to one function',
+            jobsEnd > jobsStart && checkJobsBody.split('\n').length < 250,
+            `${checkJobsBody.split('\n').length} lines`);
+        assert('the publishing path never consults the Engagement backoff',
+            !checkJobsBody.includes('engagementUnavailableUntil') &&
+            !checkJobsBody.includes('engagementUpgradeWarned'));
     }
 
     console.log('\n D. source and packaging guardrails');

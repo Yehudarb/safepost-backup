@@ -5,7 +5,11 @@ const MINIMUM_ENGAGEMENT_EXTENSION_VERSION = '9.2';
 function parseNumericVersion(value) {
     if (typeof value !== 'string') return null;
     const normalized = value.trim();
-    if (!/^\d+(?:\.\d+){1,3}$/.test(normalized)) return null;
+    // Chrome accepts one to four dot-separated integers, so "10" is a valid
+    // manifest version. Requiring two components would have locked the whole
+    // fleet out of Engagement the day the version became a single number.
+    // Missing components compare as 0 below, so "10" and "10.0" are equal.
+    if (!/^\d+(?:\.\d+){0,3}$/.test(normalized)) return null;
 
     const parts = normalized.split('.').map(Number);
     if (parts.some(part => !Number.isSafeInteger(part) || part < 0 || part > 65535)) {

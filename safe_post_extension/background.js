@@ -517,6 +517,9 @@ async function checkJobs({ preemptLowerPriority = false } = {}) {
 // backend claim, so activity contention cannot consume a scan attempt.
 let isEngagementPolling = false;
 let engagementUnavailableUntil = 0;
+// Warn once per service-worker lifetime, not once per poll: the version floor is
+// a standing condition and repeating it every minute buries everything else.
+let engagementUpgradeWarned = false;
 let activeEngagementActivity = null;
 const engagementOwnedTabClosures = new Set();
 
@@ -994,6 +997,24 @@ async function checkEngagementScans() {
         recordContact();
         if (response.status === 404) {
             engagementUnavailableUntil = Date.now() + ENGAGEMENT_UNAVAILABLE_BACKOFF_MS;
+            await finishEngagementActivity(operationId);
+            return;
+        }
+        // 426: this build is below the minimum Engagement extension version. That
+        // is a standing condition, not a transient one, so it gets the same
+        // backoff as "feature unavailable" and exactly one warning per backoff
+        // window. Without this an old build polls every minute forever and says
+        // nothing, which is indistinguishable from Engagement simply being idle.
+        if (response.status === 426) {
+            engagementUnavailableUntil = Date.now() + ENGAGEMENT_UNAVAILABLE_BACKOFF_MS;
+            if (!engagementUpgradeWarned) {
+                engagementUpgradeWarned = true;
+                console.warn(
+                    `[Background] Engagement disabled: this extension (v${chrome.runtime.getManifest().version}) ` +
+                    'is below the minimum version the server requires. Publishing is unaffected. ' +
+                    'Install the current extension build to re-enable Engagement.'
+                );
+            }
             await finishEngagementActivity(operationId);
             return;
         }
