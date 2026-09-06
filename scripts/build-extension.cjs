@@ -10,8 +10,12 @@ const {
 
 const root = path.resolve(__dirname, '..');
 const sourceDirectory = path.join(root, 'safe_post_extension');
-const distDirectory = path.join(root, 'dist');
-const outputDirectory = path.join(distDirectory, 'extension');
+// Deliberately NOT dist/. Vite publishes dist/, and Vercel serves whatever is in
+// it, so building the extension there would put the ZIP and every unpacked
+// extension file — the Facebook automation internals — on the public production
+// frontend domain. The release directory is a local build output only.
+const releaseDirectory = path.join(root, 'release');
+const outputDirectory = path.join(releaseDirectory, 'extension');
 const manifestPath = path.join(sourceDirectory, 'manifest.json');
 const stalePublicArtifacts = [
     'public/manifest.json',
@@ -198,7 +202,7 @@ function main() {
     }
     for (const required of requiredFiles) ensureFile(required);
 
-    fs.mkdirSync(distDirectory, { recursive: true });
+    fs.mkdirSync(releaseDirectory, { recursive: true });
     fs.rmSync(outputDirectory, { recursive: true, force: true });
     fs.mkdirSync(outputDirectory, { recursive: true });
 
@@ -214,10 +218,10 @@ function main() {
     }
 
     const artifactName = `safepost-extension-${manifest.version}.zip`;
-    const artifactPath = path.join(distDirectory, artifactName);
-    for (const name of fs.readdirSync(distDirectory)) {
+    const artifactPath = path.join(releaseDirectory, artifactName);
+    for (const name of fs.readdirSync(releaseDirectory)) {
         if (/^safepost-extension-.*\.(zip|sha256)$/.test(name)) {
-            fs.rmSync(path.join(distDirectory, name), { force: true });
+            fs.rmSync(path.join(releaseDirectory, name), { force: true });
         }
     }
     createDeterministicZip(outputDirectory, artifactPath);

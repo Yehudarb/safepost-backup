@@ -62,8 +62,12 @@ npm run build:extension    # extension only
 
 `safe_post_extension/manifest.json` is the authoritative extension release
 version. `npm run build:extension` copies only that source tree into
-`dist/extension/` and emits `dist/safepost-extension-<version>.zip` plus its
-SHA-256. `dist/` is generated output and is not committed.
+`release/extension/` and emits `release/safepost-extension-<version>.zip` plus
+its SHA-256. `dist/` and `release/` are generated output and are not committed.
+
+The extension is built into `release/`, never `dist/`. Vite publishes `dist/`
+and the host serves it, so building the extension there would put the ZIP and
+every unpacked extension file on the public frontend domain.
 
 ## Deployment
 

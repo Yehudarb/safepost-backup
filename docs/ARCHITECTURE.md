@@ -54,8 +54,10 @@ SafePost has three runtime components plus a managed database:
 - `popup.html` + `popup.js` — settings screen: API server URL, connection test,
   worker identity, extension version.
 - `safe_post_extension/` is the sole extension source. `npm run build:extension`
-  validates and copies it to `dist/extension/`, then creates a versioned ZIP and
-  SHA-256. Vite's `public/` directory contains web assets only.
+  validates and copies it to `release/extension/`, then creates a versioned ZIP
+  and SHA-256. Vite's `public/` directory contains web assets only, and the
+  release output stays outside `dist/` so the published frontend never serves
+  the extension artifact.
 
 ### Database — Supabase (Postgres)
 - Stores jobs/tasks, groups, logs, reporting data.

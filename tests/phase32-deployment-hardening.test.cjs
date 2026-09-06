@@ -263,7 +263,7 @@ function runExtensionBuild() {
         const secondBuild = runExtensionBuild();
         assert('extension archive hash is byte-for-byte deterministic',
             firstBuild.hash && firstBuild.hash === secondBuild.hash, `${firstBuild.hash} / ${secondBuild.hash}`);
-        const artifact = path.join(root, `dist/safepost-extension-${manifest.version}.zip`);
+        const artifact = path.join(root, `release/safepost-extension-${manifest.version}.zip`);
         assert('versioned extension archive exists', fs.existsSync(artifact));
         assert('reported SHA-256 matches the archive',
             crypto.createHash('sha256').update(fs.readFileSync(artifact)).digest('hex') === secondBuild.hash);
@@ -273,9 +273,9 @@ function runExtensionBuild() {
             'engagement/postParser.js', 'engagement/scanner.js',
         ];
         assert('artifact staging contains every required runtime file',
-            required.every(file => fs.existsSync(path.join(root, 'dist/extension', ...file.split('/')))));
+            required.every(file => fs.existsSync(path.join(root, 'release/extension', ...file.split('/')))));
         assert('artifact content script is the reviewed source',
-            fs.readFileSync(path.join(root, 'dist/extension/content.js')).equals(
+            fs.readFileSync(path.join(root, 'release/extension/content.js')).equals(
                 fs.readFileSync(path.join(root, 'safe_post_extension/content.js'))));
         assert('no stale public manifest or content script remains',
             !fs.existsSync(path.join(root, 'public/manifest.json')) &&
