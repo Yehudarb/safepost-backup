@@ -1047,7 +1047,11 @@ app.post('/api/groups/sync', optionalWorker, async (req, res) => {
     }
     fbUser = fbUser || '';
     syncState.pendingSyncFacebookUser = null; // consume the hint so it never leaks into a later sync
-    console.log(`[GROUPS] Effective facebook_user for this sync: "${fbUser || '(unattributed)'}" (source: ${attributionSource || 'none'})`);
+    // Log whether the identity binding arrived, never the id itself — a Facebook
+    // account id does not belong in server logs. Without this line an unbound sync
+    // is silent: the name is logged, looks healthy, and the missing column is only
+    // discovered later by querying the table.
+    console.log(`[GROUPS] Effective facebook_user for this sync: "${fbUser || '(unattributed)'}" (source: ${attributionSource || 'none'}, account id: ${incomingId ? 'bound' : 'MISSING — groups will not be Engagement-eligible'})`);
 
     // This sync path (the dashboard-triggered scan) doesn't call /api/profile/sync
     // separately, so record a fresh, request-attributed detection here too — otherwise

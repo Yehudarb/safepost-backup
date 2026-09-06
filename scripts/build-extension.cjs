@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const {
     MINIMUM_ENGAGEMENT_EXTENSION_VERSION,
+    isVersionAtLeast,
 } = require('../server/lib/extensionVersion.cjs');
 
 const root = path.resolve(__dirname, '..');
@@ -169,8 +170,14 @@ function main() {
     } catch (error) {
         fail(`Cannot read the authoritative manifest: ${error.message}`);
     }
-    if (manifest.version !== MINIMUM_ENGAGEMENT_EXTENSION_VERSION) {
-        fail(`Manifest version ${manifest.version || '(missing)'} does not match the reviewed release ${MINIMUM_ENGAGEMENT_EXTENSION_VERSION}.`);
+    // The artifact must be at or above the Engagement floor, not exactly equal to
+    // it. Requiring equality welded the two together: every extension patch would
+    // have had to raise the server's minimum version, and raising the minimum
+    // answers every already-installed worker in the fleet with 426 until each one
+    // updates. A build is allowed to move ahead of the floor; the floor moves only
+    // when an older build genuinely must be refused.
+    if (!isVersionAtLeast(manifest.version, MINIMUM_ENGAGEMENT_EXTENSION_VERSION)) {
+        fail(`Manifest version ${manifest.version || '(missing)'} is below the minimum Engagement release ${MINIMUM_ENGAGEMENT_EXTENSION_VERSION}.`);
     }
     if (manifest.background?.service_worker !== 'background.js') {
         fail('Manifest must select safe_post_extension/background.js.');

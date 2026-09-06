@@ -1432,6 +1432,34 @@ let isGroupScanning = false;
 // Ask content.js (which runs on facebook.com) to tell us the current user.
 // This is more reliable than detecting in a newly-opened tab, since content.js
 // has already seen the page and can access stored data.
+// Read the numeric account id straight from the browser's cookie store.
+//
+// Every other identity path in this extension bottoms out on
+// `document.cookie.match(/c_user=(\d+)/)` executed inside the page. That read
+// returns null whenever Facebook serves c_user as HttpOnly — page JavaScript
+// cannot see an HttpOnly cookie by definition — which is why group sync could
+// store a display name while facebook_user_id stayed null for every row.
+//
+// chrome.cookies runs in the service worker with the extension's own host
+// permission and does read HttpOnly cookies, so this is the only source here
+// that does not depend on what the page chooses to expose. It is a read of the
+// user's own browser state for their own account: no Facebook restriction is
+// being circumvented, and nothing is sent anywhere the display name did not
+// already go.
+async function readFacebookUserIdFromCookieStore() {
+    try {
+        if (!chrome.cookies?.get) return null;
+        for (const url of ['https://www.facebook.com/', 'https://facebook.com/']) {
+            const cookie = await chrome.cookies.get({ url, name: 'c_user' }).catch(() => null);
+            const value = typeof cookie?.value === 'string' ? cookie.value.trim() : '';
+            if (/^\d{3,30}$/.test(value)) return value;
+        }
+    } catch (error) {
+        console.warn('[Background] Cookie-store identity read failed:', error?.message || error);
+    }
+    return null;
+}
+
 async function getFacebookUserFromContent() {
     try {
         const tabs = await chrome.tabs.query({ url: 'https://www.facebook.com/*' });
@@ -1495,7 +1523,14 @@ async function scanAndSyncGroups() {
 
     // Get the current user from content.js BEFORE opening the new tab
     const fbProfileFromContent = await getFacebookUserFromContent();
-    console.log('[Background] FB user from content.js:', fbProfileFromContent.name || '(none)');
+    // The cookie store is authoritative for the id and outranks anything the page
+    // reported: content.js can only offer an id when c_user happens to be visible
+    // to page script, and it returns the *name* from sources that need no id at
+    // all — which is exactly how a sync ends up named but unbound.
+    const cookieUserId = await readFacebookUserIdFromCookieStore();
+    if (cookieUserId) fbProfileFromContent.id = cookieUserId;
+    console.log('[Background] FB user from content.js:', fbProfileFromContent.name || '(none)',
+        '| account id:', fbProfileFromContent.id ? `resolved (${cookieUserId ? 'cookie store' : 'page'})` : 'UNRESOLVED');
     if (groupSyncPreemptRequested) {
         return { success: false, error: 'preempted-by-publishing' };
     }
@@ -1965,7 +2000,10 @@ async function scanAndSyncGroups() {
                                         const nameMatch = slice.match(/"NAME"\s*:\s*"([^"]+)"/);
                                         if (nameMatch && nameMatch[1]) return { name: nameMatch[1], id: userId };
                                     }
-                                    return null;
+                                    // The name scrape failing does not invalidate the id we already
+                                    // read. Returning null here threw away a good account id and was
+                                    // the second reason a sync could arrive with no identity binding.
+                                    return userId ? { name: null, id: userId } : null;
                                 };
                                 // Use the user from content.js if available (passed via window.__fbUserFromContent);
                                 // otherwise detect it fresh in this tab.
@@ -1986,7 +2024,11 @@ async function scanAndSyncGroups() {
                         const result = results?.[0]?.result || {};
                         const groups = result.groups || [];
                         const facebook_user = result.facebook_user || null;
-                        const facebook_user_id = result.facebook_user_id || null;
+                        // The cookie-store id wins outright. Everything the injected
+                        // script can offer had to survive a round trip through page
+                        // context to get here; this value did not, so it stays correct
+                        // even when the in-page detection returns nothing at all.
+                        const facebook_user_id = cookieUserId || result.facebook_user_id || null;
                         console.log(`[Background] joins scan: found ${groups.length} groups (user: ${facebook_user || 'none'})`);
 
                         if (groups.length === 0) {

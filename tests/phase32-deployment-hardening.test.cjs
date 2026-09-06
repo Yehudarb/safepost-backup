@@ -258,7 +258,12 @@ function runExtensionBuild() {
 
         console.log('\n D. deterministic extension artifact');
         const manifest = JSON.parse(fs.readFileSync(path.join(root, 'safe_post_extension/manifest.json'), 'utf8'));
-        assert('authoritative manifest is 9.2', manifest.version === '9.2');
+        // Pinning this to one literal version meant the Engagement floor had to be
+        // raised for every extension patch, and raising the floor answers every
+        // already-installed worker with 426. The artifact only has to satisfy the
+        // floor; phase33 asserts which release is actually shipped.
+        assert('authoritative manifest is at or above the Engagement floor',
+            isVersionAtLeast(manifest.version, MINIMUM_ENGAGEMENT_EXTENSION_VERSION), manifest.version);
         const firstBuild = runExtensionBuild();
         const secondBuild = runExtensionBuild();
         assert('extension archive hash is byte-for-byte deterministic',

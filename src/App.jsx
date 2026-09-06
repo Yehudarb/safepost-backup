@@ -20,6 +20,7 @@ import AiPostAssistantModal from '@/components/modals/AiPostAssistantModal';
 import ErrorBoundary from '@/components/ErrorBoundary';
 import StitchAnalytics from '@/components/StitchAnalytics';
 import EngagementPanel from '@/components/engagement/EngagementPanel';
+import WorkersPanel from '@/components/panels/WorkersPanel';
 import LiveClock from '@/components/LiveClock';
 import Footer from '@/components/Footer';
 import ConsentBanner, { hasAcceptedTos } from '@/components/ConsentBanner';
@@ -901,6 +902,12 @@ export default function App() {
     // Analytics
     const [showStitchAnalytics, setShowStitchAnalytics] = useState(false);
 
+    // Paired devices (browser workers). The command palette has always offered a
+    // "Connected devices" action, but this state and the panel it opens were never
+    // declared — selecting it threw a ReferenceError, so pairing a new extension
+    // had no reachable entry point in the UI at all.
+    const [showWorkers, setShowWorkers] = useState(false);
+
     // Content editing toolbar
     const [contentEditLoading, setContentEditLoading] = useState(null);
 
@@ -1705,6 +1712,14 @@ export default function App() {
                             <LiveClock />
                             <button
                                 type="button"
+                                onClick={() => setShowWorkers(true)}
+                                aria-haspopup="dialog"
+                                className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border text-[11px] font-semibold transition bg-white dark:bg-transparent text-gray-600 dark:text-gray-400 border-gray-200 dark:border-[#30363d] hover:border-indigo-400 hover:text-indigo-600">
+                                <MonitorSmartphone size={14} />
+                                {t('connectedDevicesLabel')}
+                            </button>
+                            <button
+                                type="button"
                                 onClick={() => setShowStitchAnalytics(p => !p)}
                                 aria-expanded={showStitchAnalytics}
                                 className={`inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border text-[11px] font-semibold transition ${
@@ -2459,6 +2474,10 @@ export default function App() {
 
             <CommandPalette open={showPalette} onClose={() => setShowPalette(false)} items={paletteItems} />
             <Ticker events={recentEvents} />
+
+            {showWorkers && (
+                <WorkersPanel api={ApiService} onClose={() => setShowWorkers(false)} />
+            )}
 
             {/* ── EDIT MODAL ── */}
             {editingTask && (
