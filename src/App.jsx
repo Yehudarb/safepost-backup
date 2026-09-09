@@ -1042,7 +1042,7 @@ export default function App() {
                 });
                 return updated;
             });
-            if (healthRes.status === 'fulfilled' && healthRes.value?.status === 'ok') {
+            if (healthRes.status === 'fulfilled' && ['ok', 'healthy'].includes(healthRes.value?.status)) {
                 consecutiveFailures.current = 0;
                 setServerStatus(true);
             } else {
