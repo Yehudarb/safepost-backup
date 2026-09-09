@@ -402,6 +402,7 @@ const { normalizeDbId, normalizeDbIdList, isValidUuid, normalizeDbIdOrUuid } = r
 // two copies of error shaping is how a leak gets fixed in one and left in the
 // other. The full reasoning lives in that file.
 const { dbFailure } = require('./lib/httpErrors.cjs');
+const { redactUrl, redactValue, redactJson, redactText } = require('./lib/logRedaction.cjs');
 // Convenience: dashboard routes require auth + a resolved workspace.
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
 assertSecureRuntimeConfig();
@@ -522,7 +523,11 @@ const processingStartTimestamps = new Map();
 app.use((req, res, next) => {
     const start = Date.now();
     const id = Math.random().toString(36).substring(7);
-    console.log(`[${id}] 📡 ${req.method} ${req.url} (Content-Type: ${req.headers['content-type'] || 'none'})`);
+    // req.url carries the query string, and the SSE stream authenticates by
+    // query parameter because EventSource cannot send headers. Logging it raw
+    // wrote live device tokens into the platform log stream. Path, method,
+    // status and timing are all preserved; only credential values are replaced.
+    console.log(`[${id}] 📡 ${req.method} ${redactUrl(req.url)} (Content-Type: ${req.headers['content-type'] || 'none'})`);
     res.on('finish', () => {
         const duration = Date.now() - start;
         console.log(`[${id}] 🏁 ${res.statusCode} (${duration}ms)`);
@@ -794,7 +799,10 @@ app.get('/api/profile/current', ...dashboardAuth, (req, res) => {
 });
 
 app.post('/api/profile/sync', optionalWorker, (req, res) => {
-    console.log('🧭 [PROFILE] POST /api/profile/sync received:', JSON.stringify(req.body));
+    // The body carries facebook_user_id — a real person's Facebook account
+    // identifier. It is not a credential, but it does not belong in a log line,
+    // and /api/groups/sync already logs presence rather than the value.
+    console.log('🧭 [PROFILE] POST /api/profile/sync received:', redactJson(req.body));
     const facebook_user = typeof req.body?.facebook_user === 'string' ? req.body.facebook_user.trim() : '';
     if (!facebook_user) {
         console.log('⚠️ [PROFILE] facebook_user is empty or missing');
@@ -1544,7 +1552,7 @@ app.post('/api/upload', strictLimiter, ...dashboardAuth, denyDemo, async (req, r
 app.post('/api/upload/presigned', strictLimiter, ...dashboardAuth, denyDemo, async (req, res) => {
     try {
         console.log('🔗 [PRESIGNED] Request received');
-        console.log('   Payload:', JSON.stringify(req.body, null, 2));
+        console.log('   Payload:', JSON.stringify(redactValue(req.body), null, 2));
 
         const { fileName, fileSize, mimeType } = req.body;
 
@@ -3029,7 +3037,10 @@ app.post('/api/tasks/reset-stuck', ...dashboardAuth, async (req, res) => {
 
 // --- GLOBAL ERROR HANDLER ---
 app.use((err, req, res, next) => {
-    console.error("🚨 GLOBAL ERROR:", err.message, "Code:", err.code);
+    // An error thrown mid-request often quotes the URL that caused it, so the
+    // message is scrubbed too — otherwise the redaction above is undone by the
+    // first failure on an authenticated stream.
+    console.error("🚨 GLOBAL ERROR:", redactText(err.message), "Code:", err.code);
     if (err instanceof multer.MulterError) {
         console.error("📦 Multer Error - Code:", err.code, "Field:", err.field);
         return res.status(400).json({ error: `Multer: ${err.message}` });

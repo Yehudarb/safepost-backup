@@ -83,34 +83,103 @@ function TermsContent() {
 function PrivacyContent() {
     return (
         <>
-            <Section title="Data We Collect">
+            <Section title="What We Do Not Collect">
                 <p>
-                    We collect Facebook account tokens, session data, posting logs, group IDs, and
-                    user preferences necessary to operate the service.
+                    SafePost does <strong>not</strong> collect or store your Facebook password,
+                    login cookies, or Facebook access tokens. Posting happens through the
+                    SafePost browser extension, using the Facebook session already open in your
+                    own browser. Your Facebook credentials never reach our servers.
+                </p>
+            </Section>
+            <Section title="Data We Collect">
+                <p>To operate the service we store:</p>
+                <ul className="list-disc pr-5 space-y-1">
+                    <li>Your account email and the workspace you belong to.</li>
+                    <li>
+                        Posts you create or schedule, including their text, any media you upload,
+                        and their delivery status.
+                    </li>
+                    <li>
+                        The Facebook groups you sync — group name, ID and URL — and the Facebook
+                        display name of the account that synced them.
+                    </li>
+                    <li>
+                        Your numeric Facebook account identifier, read by the extension from the
+                        <code> c_user</code> cookie in your browser. It is used to confirm that
+                        synced groups belong to the Facebook account currently signed in, so posts
+                        are never sent from the wrong account. It is not used to contact you and is
+                        not shared.
+                    </li>
+                    <li>
+                        Identifiers for each browser you pair with SafePost, along with a hashed
+                        device token. The token itself is shown to you once at pairing and is
+                        stored only as a hash.
+                    </li>
+                    <li>Activity and error logs describing what the service did and when.</li>
+                </ul>
+            </Section>
+            <Section title="Discovered Posts From Facebook Groups">
+                <p>
+                    SafePost includes an optional feature that reads existing posts in groups you
+                    select and saves them for you to review. When it is enabled, we store the post
+                    text, the author&apos;s display name, their profile link, and the post link.
+                    This is content written by other people in those groups.
+                </p>
+                <p>
+                    This feature is currently disabled for all accounts. We do not yet operate an
+                    automatic deletion schedule for this content, and we are addressing that before
+                    the feature is made generally available.
                 </p>
             </Section>
             <Section title="How Data Is Stored">
-                <p>Data is encrypted at rest and stored on secure servers.</p>
+                <p>
+                    Data is held in a managed PostgreSQL database (Supabase) with application
+                    hosting on Render and Vercel. We rely on those providers&apos; encryption of
+                    data at rest and in transit.
+                </p>
             </Section>
-            <Section title="No Selling or Sharing">
-                <p>We do not sell your data or share it with third parties.</p>
+            <Section title="Who Else Processes Your Data">
+                <p>
+                    We do not sell your data and we do not share it for advertising. We do use
+                    service providers to run SafePost, and your data passes through them:
+                </p>
+                <ul className="list-disc pr-5 space-y-1">
+                    <li>Supabase — database and authentication.</li>
+                    <li>Render — backend hosting.</li>
+                    <li>Vercel — dashboard hosting.</li>
+                    <li>
+                        Anthropic and Google — only when you use the AI writing assistant. The post
+                        text you are drafting is sent to the model that generates the suggestion.
+                        Nothing is sent to these providers unless you use that feature.
+                    </li>
+                </ul>
             </Section>
             <Section title="Retention">
                 <p>
-                    Posting logs are retained for a limited period for debugging purposes, after
-                    which they are deleted.
+                    Posts, groups and logs are kept for as long as your account exists. We do not
+                    currently run automatic deletion after a fixed period. If you want data removed
+                    sooner, contact us and we will delete it.
                 </p>
             </Section>
-            <Section title="Facebook Tokens">
-                <p>Facebook tokens are stored encrypted and are used only to post on your behalf.</p>
-            </Section>
-            <Section title="Data Deletion">
-                <p>You may request deletion of your data at any time.</p>
+            <Section title="Data Deletion and Access">
+                <p>
+                    There is no self-service delete or export button in the dashboard yet. To
+                    request a copy of your data, or its deletion, contact us through your account
+                    dashboard and we will action it manually. Deleting your account removes your
+                    workspace and the posts, groups, templates and logs belonging to it.
+                </p>
             </Section>
             <Section title="Cookies & Local Storage">
                 <p>
                     SafePost uses local storage in your browser to remember preferences such as
-                    theme and session state. No third-party tracking cookies are used.
+                    theme, language and which workspace you last opened, and to record that you
+                    accepted these terms. No third-party tracking or advertising cookies are used.
+                </p>
+                <p>
+                    The SafePost browser extension requests permission to read cookies for
+                    facebook.com. It uses this for one purpose only: reading the
+                    <code> c_user</code> value that identifies which Facebook account is signed in.
+                    It does not read, store or transmit any other cookie.
                 </p>
             </Section>
             <Section title="Contact">

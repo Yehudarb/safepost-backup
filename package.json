@@ -46,7 +46,8 @@
     "test:engagement-dashboard": "node -r ./server/tests/loadTestEnv.cjs tests/phase29-engagement-dashboard.test.cjs",
     "test:status-generation": "node -r ./server/tests/loadTestEnv.cjs tests/phase30-status-generation-race.test.cjs",
     "test:phase32": "node -r ./server/tests/loadTestEnv.cjs tests/phase32-deployment-hardening.test.cjs",
-    "test:identity-binding": "node -r ./server/tests/loadTestEnv.cjs tests/phase33-identity-binding.test.cjs"
+    "test:identity-binding": "node -r ./server/tests/loadTestEnv.cjs tests/phase33-identity-binding.test.cjs",
+    "test:log-redaction": "node tests/phase35-log-redaction.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

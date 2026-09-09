@@ -1,16 +1,14 @@
 {
     "manifest_version": 3,
     "name": "SafePost Automation",
-    "version": "9.3",
+    "version": "9.4",
     "description": "Automated Facebook Group Posting (Supabase Storage Sync). Configurable API server via popup settings.",
     "permissions": [
     "cookies",
         "activeTab",
         "scripting",
         "storage",
-        "alarms",
-        "clipboardRead",
-        "clipboardWrite"
+        "alarms"
     ],
     "host_permissions": [
         "https://www.facebook.com/*",

@@ -104,7 +104,7 @@ function loadBackground(options = {}) {
             runtime: {
                 id: 'phase33',
                 lastError: null,
-                getManifest: () => ({ version: '9.3' }),
+                getManifest: () => ({ version: '9.4' }),
                 onInstalled: noOpEvent,
                 onStartup: noOpEvent,
                 onMessage: noOpEvent,
@@ -304,9 +304,15 @@ async function run() {
         const manifest = JSON.parse(readSource('safe_post_extension/manifest.json'));
         assert('the Engagement floor is unchanged at 9.2',
             MINIMUM_ENGAGEMENT_EXTENSION_VERSION === '9.2', MINIMUM_ENGAGEMENT_EXTENSION_VERSION);
-        assert('the shipped manifest is 9.3', manifest.version === '9.3', manifest.version);
+        assert('the shipped manifest is 9.4', manifest.version === '9.4', manifest.version);
         assert('the shipped build satisfies the floor',
             isVersionAtLeast(manifest.version, MINIMUM_ENGAGEMENT_EXTENSION_VERSION));
+        // Audit SP-C1/SP-H4: clipboardRead could read whatever the user copied in a
+        // browser that is also logged into Facebook, and nothing in the extension
+        // ever used it. Removed in 9.4; asserted so it cannot drift back.
+        assert('no clipboard permission is requested',
+            !(manifest.permissions || []).some(p => /clipboard/i.test(p)),
+            (manifest.permissions || []).join(', '));
         assert('the manifest declares the cookies permission',
             Array.isArray(manifest.permissions) && manifest.permissions.includes('cookies'));
         assert('facebook.com host permission is present',
