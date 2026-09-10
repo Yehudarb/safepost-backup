@@ -455,9 +455,19 @@ async function setControl(ctx, selector, value) {
             .map(el => `${el.getAttribute('aria-label') || ''} ${el.textContent || ''}`)
             .join(' | ')
             .toLowerCase();
-        assert('the panel offers exactly one action, and it is the scan',
-            ctx.container.querySelectorAll('button').length === 1 &&
+        // Phase 2A added local controls — save a search, filter results, delete.
+        // A raw button count was only ever a proxy for the property that matters,
+        // which is that exactly ONE control reaches Facebook. Asserting the count
+        // now would fail on controls that never leave the backend, and dropping
+        // the assertion would lose the guarantee, so it is stated directly.
+        assert('exactly one control contacts Facebook, and it is the scan',
+            ctx.container.querySelectorAll('[data-testid="engagement-scan-now"]').length === 1 &&
             /scan now/i.test(controlText), controlText);
+        assert('the preview action states it makes no Facebook request',
+            !/preview/i.test(controlText) || /no facebook request/i.test(
+                (ctx.container.textContent || '').toLowerCase()) ||
+            !ctx.container.querySelector('[data-testid="preview-result"]'),
+            'preview must never imply it reached Facebook');
         assert('no publishing control is introduced',
             !/publish|compose|post now|send/.test(controlText), controlText);
         assert('no scheduling control is introduced',

@@ -4,6 +4,9 @@
 // but it has no path that writes to Facebook.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EngagementAPI, EngagementUnavailableError } from '@/lib/engagementApi';
+import WatchList from '@/components/engagement/WatchList';
+import WatchForm from '@/components/engagement/WatchForm';
+import OpportunityList from '@/components/engagement/OpportunityList';
 
 const STATE_STYLE = {
     COMPLETED: 'rounded-full bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-400 font-bold',
@@ -13,7 +16,10 @@ const STATE_STYLE = {
     ABORTED: 'rounded-full bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/30 text-orange-700 dark:text-orange-400 font-bold',
     CANCELLED: 'rounded-full bg-gray-100 dark:bg-gray-500/10 border-gray-200 dark:border-gray-500/30 text-gray-600 dark:text-gray-400 font-bold',
     FAILED: 'rounded-full bg-rose-50 dark:bg-rose-500/10 border-rose-200 dark:border-rose-500/30 text-rose-700 dark:text-rose-400 font-bold',
-    NONE: 'rounded-full bg-gray-100 dark:bg-gray-500/10 border-gray-200 dark:border-gray-500/30 text-gray-500 dark:text-gray-400 font-bold',
+    // text-gray-600 on the light side: gray-500 over bg-gray-100 measured 4.39:1,
+    // just under the 4.5:1 AA floor for this 12px badge. The dark side already
+    // passes and is unchanged.
+    NONE: 'rounded-full bg-gray-100 dark:bg-gray-500/10 border-gray-200 dark:border-gray-500/30 text-gray-600 dark:text-gray-400 font-bold',
 };
 
 const STATE_LABEL = {
@@ -86,6 +92,25 @@ export default function EngagementPanel({ groups = [], workspaceId = null }) {
     const [cancelingScanId, setCancelingScanId] = useState(null);
     const [error, setError] = useState(null);
     const [notice, setNotice] = useState(null);
+
+    // Phase 2A: watches, preview and opportunities. Kept in this panel so the
+    // existing workspace-reset effect below clears them with everything else -
+    // stale results from a previous tenant must never survive a switch.
+    const [watches, setWatches] = useState([]);
+    const [editingWatch, setEditingWatch] = useState(null);
+    const [watchBusyId, setWatchBusyId] = useState(null);
+    const [savingWatch, setSavingWatch] = useState(false);
+    // Identity of the blank "New search" form. WatchForm re-seeds its draft when
+    // watch?.id changes, and for a new search that id is undefined before AND
+    // after saving — so without this the just-saved values stay in the form and
+    // the next click creates a duplicate search. Bumping it after a successful
+    // save hands back a genuinely empty form.
+    const [newFormGeneration, setNewFormGeneration] = useState(0);
+    const [previewing, setPreviewing] = useState(false);
+    const [previewResult, setPreviewResult] = useState(null);
+    const [opportunities, setOpportunities] = useState([]);
+    const [opportunityFilters, setOpportunityFilters] = useState({ watchId: null, relevance: null });
+    const [loadingOpportunities, setLoadingOpportunities] = useState(false);
     const refreshVersion = useRef(0);
     const busyRef = useRef(false);
     const cancelingScanRef = useRef(null);
@@ -150,6 +175,11 @@ export default function EngagementPanel({ groups = [], workspaceId = null }) {
         setScans([]);
         setPosts([]);
         setGroupId('');
+        setWatches([]);
+        setEditingWatch(null);
+        setPreviewResult(null);
+        setOpportunities([]);
+        setOpportunityFilters({ watchId: null, relevance: null });
         setInstructions('');
         busyRef.current = false;
         cancelingScanRef.current = null;
@@ -179,10 +209,107 @@ export default function EngagementPanel({ groups = [], workspaceId = null }) {
         return () => clearInterval(timer);
     }, [enabled, currentStatus?.active_scan, pollRefresh]);
 
+    // Phase 2A data follows the same enabled/workspace gate as everything else,
+    // so a disabled workspace never fetches and a switch refetches from scratch.
+    useEffect(() => {
+        if (!enabled) return;
+        loadWatches();
+        loadOpportunities(opportunityFilters);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [enabled, workspaceId]);
+
     const sortedGroups = useMemo(
         () => dedupeGroups(groups, workspaceId),
         [groups, workspaceId],
     );
+
+    // ---- Phase 2A: watches, preview, opportunities ----
+    //
+    // Every call goes through EngagementAPI, which attaches the session and the
+    // active workspace header. No workspace id is ever read from a form field.
+
+    const loadWatches = useCallback(async () => {
+        try {
+            const data = await EngagementAPI.listWatches();
+            setWatches(data.watches || []);
+        } catch (err) {
+            if (!(err instanceof EngagementUnavailableError)) setError(err.message || "Could not load searches.");
+        }
+    }, []);
+
+    const loadOpportunities = useCallback(async (filters) => {
+        setLoadingOpportunities(true);
+        try {
+            const data = await EngagementAPI.listOpportunities(filters || {});
+            setOpportunities(data.opportunities || []);
+        } catch (err) {
+            if (!(err instanceof EngagementUnavailableError)) setError(err.message || "Could not load results.");
+        } finally {
+            setLoadingOpportunities(false);
+        }
+    }, []);
+
+    const runPreview = useCallback(async (watchId) => {
+        setPreviewing(true);
+        setError(null);
+        try {
+            setPreviewResult(await EngagementAPI.previewWatch(watchId));
+        } catch (err) {
+            setError(err.message || "Preview failed.");
+        } finally {
+            setPreviewing(false);
+        }
+    }, []);
+
+    const saveWatch = useCallback(async (payload, { thenPreview = false } = {}) => {
+        setSavingWatch(true);
+        setError(null);
+        try {
+            const saved = editingWatch?.id
+                ? await EngagementAPI.updateWatch(editingWatch.id, payload)
+                : await EngagementAPI.createWatch(payload);
+            const watch = saved.watch;
+            setEditingWatch(null);
+            setNewFormGeneration(n => n + 1);
+            setNotice(editingWatch?.id ? "Search updated." : "Search created.");
+            await loadWatches();
+            if (thenPreview && watch?.id) await runPreview(watch.id);
+            return watch;
+        } catch (err) {
+            setError(err.message || "Could not save this search.");
+            return null;
+        } finally {
+            setSavingWatch(false);
+        }
+    }, [editingWatch, loadWatches, runPreview]);
+
+    const toggleWatch = useCallback(async (watch) => {
+        setWatchBusyId(watch.id);
+        try {
+            await EngagementAPI.updateWatch(watch.id, { enabled: !watch.enabled });
+            await loadWatches();
+        } catch (err) {
+            setError(err.message || "Could not change this search.");
+        } finally {
+            setWatchBusyId(null);
+        }
+    }, [loadWatches]);
+
+    const deleteWatch = useCallback(async (watch) => {
+        setWatchBusyId(watch.id);
+        try {
+            await EngagementAPI.deleteWatch(watch.id);
+            if (editingWatch?.id === watch.id) setEditingWatch(null);
+            setPreviewResult(null);
+            setNotice("Search deleted.");
+            await loadWatches();
+            await loadOpportunities(opportunityFilters);
+        } catch (err) {
+            setError(err.message || "Could not delete this search.");
+        } finally {
+            setWatchBusyId(null);
+        }
+    }, [editingWatch, loadWatches, loadOpportunities, opportunityFilters]);
 
     const startScan = async () => {
         if (!enabled || !groupId || busyRef.current || currentStatus?.active_scan) return;
@@ -339,6 +466,86 @@ export default function EngagementPanel({ groups = [], workspaceId = null }) {
                         </p>
                     )}
 
+                    {/* ---- Phase 2A: saved searches ---- */}
+                    <div aria-labelledby="engagement-watches-heading" className="space-y-3">
+                        <h3 id="engagement-watches-heading" className="text-sm font-bold text-gray-900 dark:text-white">
+                            Saved searches
+                        </h3>
+                        <WatchList
+                            watches={watches}
+                            selectedId={editingWatch?.id || null}
+                            busyId={watchBusyId}
+                            onSelect={watch => setEditingWatch(watch)}
+                            onEdit={watch => setEditingWatch(watch)}
+                            onToggle={toggleWatch}
+                            onDelete={deleteWatch}
+                        />
+                    </div>
+
+                    <div className="rounded-xl border border-gray-200 dark:border-white/10 p-3">
+                        <WatchForm
+                            key={editingWatch?.id || `new-${newFormGeneration}`}
+                            watch={editingWatch}
+                            groups={sortedGroups}
+                            saving={savingWatch}
+                            previewing={previewing}
+                            onSave={payload => saveWatch(payload)}
+                            onSaveAndPreview={payload => saveWatch(payload, { thenPreview: true })}
+                            onPreview={(watch, payload) => saveWatch(payload, { thenPreview: true })}
+                            onCancel={() => { setEditingWatch(null); setPreviewResult(null); }}
+                        />
+                    </div>
+
+                    {previewResult && (
+                        <div data-testid="preview-result" aria-labelledby="engagement-preview-heading" className="space-y-2">
+                            <h3 id="engagement-preview-heading" className="text-sm font-bold text-gray-900 dark:text-white">
+                                Preview
+                            </h3>
+                            <p className="text-xs text-gray-600 dark:text-gray-300">
+                                Checked {previewResult.examined} recently scanned post{previewResult.examined === 1 ? '' : 's'} SafePost
+                                already holds — {previewResult.matched} match{previewResult.matched === 1 ? '' : 'es'}. No Facebook
+                                request was made.
+                            </p>
+                            {previewResult.matched === 0 ? (
+                                <p data-testid="preview-empty" className="text-sm text-gray-600 dark:text-gray-300">
+                                    Nothing matched. Try adding keywords, or run a scan so there is newer data to check against.
+                                </p>
+                            ) : (
+                                <ul data-testid="preview-list" className="space-y-2">
+                                    {previewResult.matches.map((match, index) => (
+                                        <li
+                                            key={`${match.source_url || match.excerpt}-${index}`}
+                                            data-testid="preview-row"
+                                            className="rounded-xl border border-gray-200 dark:border-white/10 bg-white dark:bg-[#161b22] p-3"
+                                        >
+                                            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                                                <span className="font-bold uppercase tracking-wide text-gray-600 dark:text-gray-300">
+                                                    {match.relevance}
+                                                </span>
+                                                <span className="min-w-0 truncate">{match.facebook_group_id}</span>
+                                            </div>
+                                            <p dir="auto" className="mt-1.5 text-sm text-gray-900 dark:text-white">{match.excerpt}</p>
+                                            <p data-testid="preview-reason" className="mt-1 text-xs text-gray-600 dark:text-gray-300">
+                                                <span className="font-semibold">Why: </span>
+                                                <span dir="auto">{match.match_reason}</span>
+                                            </p>
+                                            {match.source_url && (
+                                                <a
+                                                    href={match.source_url}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="mt-1.5 inline-block text-xs font-semibold text-blue-700 dark:text-blue-300 underline underline-offset-2"
+                                                >
+                                                    Open on Facebook
+                                                </a>
+                                            )}
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    )}
+
                     <div aria-labelledby="engagement-new-scan-heading" className="space-y-3">
                         <h3 id="engagement-new-scan-heading" className="text-sm font-bold text-gray-900 dark:text-white">New scan</h3>
                         <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(9rem,1fr)_auto] md:items-end">
@@ -401,6 +608,20 @@ export default function EngagementPanel({ groups = [], workspaceId = null }) {
                             A scan is queued or running. Keep the paired browser extension online; only one scan runs at a time.
                         </p>
                     )}
+
+                    {/* ---- Phase 2A: matched results ---- */}
+                    <div aria-labelledby="engagement-opportunities-heading" className="space-y-2">
+                        <h3 id="engagement-opportunities-heading" className="text-sm font-bold text-gray-900 dark:text-white">
+                            Opportunities
+                        </h3>
+                        <OpportunityList
+                            opportunities={opportunities}
+                            watches={watches}
+                            filters={opportunityFilters}
+                            loading={loadingOpportunities}
+                            onFilterChange={next => { setOpportunityFilters(next); loadOpportunities(next); }}
+                        />
+                    </div>
 
                     <div aria-labelledby="engagement-history-heading" className="space-y-2">
                         <h3 id="engagement-history-heading" className="text-sm font-bold text-gray-900 dark:text-white">Scan history</h3>
