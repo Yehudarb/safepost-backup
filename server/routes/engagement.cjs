@@ -34,6 +34,10 @@ const {
     cancelScan,
     recordDiscoveredPosts,
 } = require('../lib/engagementQueue.cjs');
+const watchService = require('../services/engagementWatch.service.cjs');
+const { matchText } = require('../lib/engagementMatcher.cjs');
+const { bufferedCandidateCount } = require('../services/engagementRetention.service.cjs');
+const { ingestCandidates, updateScanCoverage } = require('../services/engagementIngest.service.cjs');
 
 const router = express.Router();
 const dashboardAuth = [requireAuth, requireWorkspaceAccess];
@@ -529,12 +533,48 @@ router.post('/scans/:id/posts', requireWorker, requireEngagementEnabled, async (
         return res.status(result.code || 400).json({ error: 'Ingest rejected.' });
     }
 
+    // ---- Phase 2A pipeline, deliberately after Phase 1 has already succeeded.
+    //
+    // Buffer the batch, match it against this workspace's enabled watches, and
+    // promote only the matches. Wrapped so that a Phase 2A fault degrades to
+    // "no opportunities produced" and can never turn a successful Phase 1 ingest
+    // into an error the worker would see as a failed upload.
+    let discovery = null;
+    try {
+        const ingest = await ingestCandidates({
+            scanId: id,
+            workspaceId: req.workspaceId,
+            posts,
+        });
+        if (ingest.counters) {
+            await updateScanCoverage({
+                scanId: id,
+                workspaceId: req.workspaceId,
+                counters: ingest.counters,
+            });
+        }
+        if (ingest.error) {
+            // Counts and a message only; no post or comment text is ever logged.
+            console.warn('[engagement] candidate pipeline degraded:', ingest.error);
+        }
+        discovery = {
+            candidates: ingest.candidates,
+            opportunities: ingest.opportunities,
+            partial_comment_coverage: true,
+        };
+    } catch (error) {
+        console.warn('[engagement] candidate pipeline failed:', error?.message || 'unknown');
+    }
+
+    // Phase 1's four fields are unchanged in name, type and meaning. `discovery`
+    // is additive, so an older worker that ignores it behaves exactly as before.
     res.json({
         success: true,
         received: result.received,
         stored: result.stored,
         duplicates: result.duplicates,
         total_for_scan: result.total_for_scan,
+        ...(discovery ? { discovery } : {}),
     });
 });
 
@@ -691,6 +731,213 @@ router.post('/scans/:id/bind-identity', requireWorker, requireEngagementEnabled,
         `scan=${id} groups=${Array.isArray(boundGroups) ? boundGroups.length : 0} evidence=${evidenceStrategy}`);
 
     res.json({ success: true, bound_groups: Array.isArray(boundGroups) ? boundGroups.length : 0 });
+});
+
+
+// ---------------------------------------------------------------------------
+// Phase 2A — Watches, Preview and Opportunities.
+//
+// Additive: every Phase 1 route above keeps its path, method and response
+// shape. These sit behind the same two feature flags and the same dashboard
+// auth stack, so nothing here can be reached with either gate off.
+// ---------------------------------------------------------------------------
+
+const OPPORTUNITY_FIELDS = [
+    'id', 'workspace_id', 'watch_id', 'scan_task_id', 'source_type',
+    'facebook_group_id', 'source_id', 'parent_source_id', 'parent_dedup_key', 'source_url',
+    'excerpt', 'parent_excerpt', 'author_name',
+    'matched_terms', 'matched_phrase', 'match_mode', 'match_reason',
+    'relevance', 'review_state', 'dedup_key', 'discovered_at',
+].join(', ');
+
+// A watch id that does not resolve inside this workspace answers 404, never 403.
+// A 403 would confirm the id exists somewhere, which is a cross-tenant hint.
+function watchNotFound(res) {
+    return res.status(404).json({ error: 'Not found' });
+}
+
+function validationFailed(res, error) {
+    if (error && error.name === 'ValidationError') {
+        return res.status(400).json({ error: error.message });
+    }
+    return null;
+}
+
+router.get('/watches', ...dashboardAuth, requireEngagementEnabled, async (req, res) => {
+    const { data, error } = await watchService.listWatches(req.workspaceId);
+    if (error) return dbFailure(res, 'list engagement watches', error);
+    res.json({ watches: data || [] });
+});
+
+router.post('/watches', ...dashboardAuth, denyDemo, requireEngagementEnabled, async (req, res) => {
+    let result;
+    try {
+        result = await watchService.createWatch(req.workspaceId, req.user?.id, req.body || {});
+    } catch (error) {
+        const handled = validationFailed(res, error);
+        if (handled) return handled;
+        throw error;
+    }
+    if (result.error) return dbFailure(res, 'create engagement watch', result.error);
+    // Counts only. The query text is a workspace's commercial intent and never
+    // reaches a log line.
+    await audit(req.workspaceId, 'ENGAGEMENT_WATCH_CREATED',
+        `watch=${result.data.id} mode=${result.data.match_mode} groups=${(result.data.selected_group_ids || []).length}`);
+    res.status(201).json({ watch: result.data });
+});
+
+router.patch('/watches/:id', ...dashboardAuth, denyDemo, requireEngagementEnabled, async (req, res) => {
+    const id = normalizeUuid(req.params.id);
+    if (!id) return invalidId(res);
+    let result;
+    try {
+        result = await watchService.updateWatch(req.workspaceId, id, req.body || {});
+    } catch (error) {
+        const handled = validationFailed(res, error);
+        if (handled) return handled;
+        throw error;
+    }
+    if (result.error) return dbFailure(res, 'update engagement watch', result.error);
+    if (!result.data) return watchNotFound(res);
+    res.json({ watch: result.data });
+});
+
+router.delete('/watches/:id', ...dashboardAuth, denyDemo, requireEngagementEnabled, async (req, res) => {
+    const id = normalizeUuid(req.params.id);
+    if (!id) return invalidId(res);
+    const { data, error } = await watchService.deleteWatch(req.workspaceId, id);
+    if (error) return dbFailure(res, 'delete engagement watch', error);
+    if (!data) return watchNotFound(res);
+    res.json({ success: true });
+});
+
+// Preview: run the matcher over what this workspace already has buffered.
+//
+// This route performs NO Facebook contact of any kind. It exists so a user can
+// tune a query against real scanned data with instant feedback and without
+// asking the extension to visit a group again. It persists nothing.
+router.post('/watches/:id/preview', ...dashboardAuth, requireEngagementEnabled, async (req, res) => {
+    const id = normalizeUuid(req.params.id);
+    if (!id) return invalidId(res);
+
+    const { data: watch, error: watchError } = await watchService.getWatch(req.workspaceId, id);
+    if (watchError) return dbFailure(res, 'load engagement watch', watchError);
+    if (!watch) return watchNotFound(res);
+
+    const rawLimit = Number(req.query.limit);
+    const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
+
+    let query = supabase.from('engagement_scan_candidates')
+        .select('id, source_type, dedup_key, parent_dedup_key, facebook_group_id, source_id, source_url, author_name, content, discovered_at')
+        .order('discovered_at', { ascending: false })
+        .limit(limit);
+    if (!watch.include_posts) query = query.neq('source_type', 'post');
+    if (!watch.include_comments) query = query.neq('source_type', 'comment');
+
+    const { data: candidates, error } = await scopeToWorkspace(query, req);
+    if (error) return dbFailure(res, 'preview engagement watch', error);
+
+    const matcherWatch = watchService.toMatcherWatch(watch);
+    const matches = [];
+    for (const candidate of candidates || []) {
+        const verdict = matchText(candidate.content, matcherWatch, { sourceType: candidate.source_type });
+        if (!verdict.matched) continue;
+        matches.push({
+            source_type: candidate.source_type,
+            facebook_group_id: candidate.facebook_group_id,
+            source_url: candidate.source_url,
+            author_name: candidate.author_name,
+            excerpt: verdict.excerpt,
+            matched_terms: verdict.matchedTerms,
+            matched_phrase: verdict.matchedPhrase,
+            match_reason: verdict.matchReason,
+            relevance: verdict.relevance,
+        });
+    }
+
+    const { count: buffered } = await bufferedCandidateCount(req.workspaceId);
+    res.json({
+        examined: (candidates || []).length,
+        matched: matches.length,
+        buffered_total: buffered,
+        // Comment coverage is always partial: SafePost reads only what Facebook
+        // had already rendered and never expands a thread.
+        partial_comment_coverage: true,
+        matches,
+    });
+});
+
+router.get('/opportunities', ...dashboardAuth, requireEngagementEnabled, async (req, res) => {
+    const rawLimit = Number(req.query.limit);
+    const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
+    const rawOffset = Number(req.query.offset);
+    const offset = Number.isInteger(rawOffset) && rawOffset > 0 ? rawOffset : 0;
+
+    let query = supabase.from('engagement_opportunities')
+        .select(OPPORTUNITY_FIELDS)
+        .order('discovered_at', { ascending: false })
+        .range(offset, offset + limit - 1);
+
+    if (req.query.watch_id !== undefined) {
+        const watchId = normalizeUuid(req.query.watch_id);
+        if (!watchId) return invalidId(res);
+        query = query.eq('watch_id', watchId);
+    }
+    if (req.query.source_type === 'post' || req.query.source_type === 'comment') {
+        query = query.eq('source_type', req.query.source_type);
+    }
+    if (['exact', 'strong', 'possible'].includes(req.query.relevance)) {
+        query = query.eq('relevance', req.query.relevance);
+    }
+    if (['new', 'saved', 'dismissed'].includes(req.query.review_state)) {
+        query = query.eq('review_state', req.query.review_state);
+    }
+    if (typeof req.query.group_id === 'string' && req.query.group_id.trim()) {
+        query = query.eq('facebook_group_id', req.query.group_id.trim());
+    }
+
+    const { data, error } = await scopeToWorkspace(query, req);
+    if (error) return dbFailure(res, 'list engagement opportunities', error);
+    res.json({ opportunities: data || [], limit, offset, partial_comment_coverage: true });
+});
+
+router.get('/opportunities/:id', ...dashboardAuth, requireEngagementEnabled, async (req, res) => {
+    const id = normalizeUuid(req.params.id);
+    if (!id) return invalidId(res);
+    const { data, error } = await scopeToWorkspace(
+        supabase.from('engagement_opportunities').select(OPPORTUNITY_FIELDS).eq('id', id).maybeSingle(), req);
+    if (error) return dbFailure(res, 'load engagement opportunity', error);
+    if (!data) return watchNotFound(res);
+    res.json({ opportunity: data });
+});
+
+router.patch('/opportunities/:id', ...dashboardAuth, denyDemo, requireEngagementEnabled, async (req, res) => {
+    const id = normalizeUuid(req.params.id);
+    if (!id) return invalidId(res);
+    const state = req.body?.review_state;
+    if (!['new', 'saved', 'dismissed'].includes(state)) {
+        return res.status(400).json({ error: 'review_state must be new, saved or dismissed.' });
+    }
+    const { data, error } = await supabase.from('engagement_opportunities')
+        .update({ review_state: state })
+        .eq('workspace_id', req.workspaceId).eq('id', id)
+        .select(OPPORTUNITY_FIELDS).maybeSingle();
+    if (error) return dbFailure(res, 'update engagement opportunity', error);
+    if (!data) return watchNotFound(res);
+    res.json({ opportunity: data });
+});
+
+// Deleting an opportunity removes the stored third-party excerpt as well as the
+// match — it is the manual erasure path, not an archive flag.
+router.delete('/opportunities/:id', ...dashboardAuth, denyDemo, requireEngagementEnabled, async (req, res) => {
+    const id = normalizeUuid(req.params.id);
+    if (!id) return invalidId(res);
+    const { data, error } = await supabase.from('engagement_opportunities')
+        .delete().eq('workspace_id', req.workspaceId).eq('id', id)
+        .select('id').maybeSingle();
+    if (error) return dbFailure(res, 'delete engagement opportunity', error);
+    if (!data) return watchNotFound(res);
+    res.json({ success: true });
 });
 
 module.exports = router;

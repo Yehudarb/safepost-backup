@@ -383,6 +383,7 @@ const {
 } = require('./lib/queue.cjs');
 const { sweepExpiredScanLocks } = require('./lib/engagementQueue.cjs');
 const { logEngagementSweepResult } = require('./lib/engagementObservability.cjs');
+const { sweepExpiredCandidates } = require('./services/engagementRetention.service.cjs');
 const {
     createTenantEventLog,
     selectWorkspaceEventLogs,
@@ -3058,6 +3059,17 @@ setInterval(() => {
     sweepExpiredScanLocks()
         .then(result => logEngagementSweepResult(result))
         .catch(e => console.error('[sweep] engagement:', e.message));
+    // Phase 2A retention. The candidate buffer is the only place unmatched
+    // third-party content lives, so a 48-hour TTL that nothing enforces would be
+    // a comment rather than a control. Deletions are counted, never described:
+    // no group, author or content ever reaches this log line. Opportunities are
+    // untouched — a promoted match has its own lifecycle.
+    sweepExpiredCandidates()
+        .then(({ deleted, error }) => {
+            if (error) return console.error('[sweep] candidates:', error.message);
+            if (deleted > 0) console.log(`[sweep] engagement candidates expired: ${deleted}`);
+        })
+        .catch(e => console.error('[sweep] candidates:', e.message));
 }, QUEUE_SWEEP_MS);
 
 // Belt-and-braces alongside the uncaughtException guard above: http.Server
