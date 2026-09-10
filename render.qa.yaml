@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: safepost-qa
+    runtime: node
+    branch: qa/engagement-phase2a
+    buildCommand: npm ci
+    startCommand: node server/index.cjs
+    healthCheckPath: /api/health
+    autoDeployTrigger: 'off'
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SAFEPOST_ENV
+        value: qa
+      - key: SAFEPOST_EXPECTED_SUPABASE_REF
+        value: tesagheacuzkhecaihte
+      - key: SUPABASE_URL
+        value: https://tesagheacuzkhecaihte.supabase.co
+      - key: AUTH_ENFORCED
+        value: 'true'
+      - key: WORKER_AUTH_ENFORCED
+        value: 'true'
+      - key: ENGAGEMENT_ENABLED
+        value: 'true'
+      - key: ALLOWED_DASHBOARD_ORIGINS
+        sync: false
+      - key: QA_DASHBOARD_ORIGIN
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false

@@ -7,6 +7,8 @@
     "start-all": "concurrently \"cross-env NODE_ENV=development node server/index.cjs\" \"npm run dev\"",
     "dev": "cross-env NODE_ENV=development vite",
     "build": "vite build && npm run build:extension",
+    "build:vercel": "node scripts/build-vercel-output.cjs",
+    "verify:qa-isolation": "node scripts/verify-qa-isolation.cjs",
     "build:extension": "node scripts/build-extension.cjs",
     "preview": "vite preview",
     "test": "npm run test:validation && npm run test:sync && npm run test:performance",
@@ -47,7 +49,8 @@
     "test:status-generation": "node -r ./server/tests/loadTestEnv.cjs tests/phase30-status-generation-race.test.cjs",
     "test:phase32": "node -r ./server/tests/loadTestEnv.cjs tests/phase32-deployment-hardening.test.cjs",
     "test:identity-binding": "node -r ./server/tests/loadTestEnv.cjs tests/phase33-identity-binding.test.cjs",
-    "test:log-redaction": "node tests/phase35-log-redaction.test.cjs"
+    "test:log-redaction": "node tests/phase35-log-redaction.test.cjs",
+    "test:qa-isolation": "node tests/phase40-qa-isolation.test.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

@@ -11,6 +11,7 @@ const { Server } = require('socket.io');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const { parseOrigins } = require('./lib/environmentIsolation.cjs');
 
 // --- HEBREW SYMBOL DICTIONARY FOR AUTO-SPIN ---
 const HEBREW_SYNONYMS = {
@@ -156,17 +157,23 @@ const upload = multer({
     limits: { fileSize: UPLOAD_MAX_MB * 1024 * 1024 }
 });
 
-const ALLOWED_ORIGINS = [
+const LOCAL_ORIGINS = process.env.NODE_ENV === 'production' ? [] : [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
     'http://0.0.0.0:5173',
     'http://localhost:3001',
     'http://127.0.0.1:3001',
     'http://0.0.0.0:3001',
-    'https://safepost-backup.vercel.app',
-    'https://safepost-backup.onrender.com',
+];
+const FACEBOOK_ORIGINS = [
     'https://www.facebook.com',
     'https://web.facebook.com'
+];
+const CONFIGURED_DASHBOARD_ORIGINS = parseOrigins(process.env.ALLOWED_DASHBOARD_ORIGINS);
+const ALLOWED_ORIGINS = [
+    ...LOCAL_ORIGINS,
+    ...FACEBOOK_ORIGINS,
+    ...CONFIGURED_DASHBOARD_ORIGINS,
 ];
 
 function isLocalOrigin(origin) {
@@ -190,7 +197,7 @@ function isAllowedOrigin(origin) {
     return !!origin && (
         ALLOWED_ORIGINS.includes(origin) ||
         origin.startsWith('chrome-extension://') ||
-        isLocalOrigin(origin)
+        (process.env.NODE_ENV !== 'production' && isLocalOrigin(origin))
     );
 }
 
@@ -338,7 +345,8 @@ const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
         origin: function(origin, callback) {
-            callback(null, true); // Allow all origins for WebSocket
+            if (!origin || isAllowedOrigin(origin) || process.env.NODE_ENV === 'development') callback(null, true);
+            else callback(new Error('Not allowed by Socket.IO CORS'), false);
         },
         methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         credentials: true,
